@@ -1,18 +1,15 @@
 package main
 
 import (
-    "fmt"
-    "github.com/spf13/cobra"
+	"fmt"
+	"os"
+
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/root"
 )
 
 func main() {
-    rootCmd := &cobra.Command{
-        Use:   "hatch",
-        Short: "Hatch CLI - Developer tools for Hatch",
-        Run: func(cmd *cobra.Command, args []string) {
-            fmt.Println("Hatch CLI")
-        },
-    }
-    
-    rootCmd.Execute()
+	if err := root.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }

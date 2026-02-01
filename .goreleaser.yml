@@ -1,0 +1,44 @@
+version: 2
+
+builds:
+  - main: ./cmd/hatch
+    binary: hatch
+    ldflags:
+      - -s -w
+      - -X github.com/EscapeVelocityOperations/hatch-cli/cmd/root.version={{.Version}}
+      - -X github.com/EscapeVelocityOperations/hatch-cli/cmd/root.commit={{.Commit}}
+      - -X github.com/EscapeVelocityOperations/hatch-cli/cmd/root.date={{.Date}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+
+brews:
+  - repository:
+      owner: EscapeVelocityOperations
+      name: homebrew-tap
+    homepage: https://hatch.dev
+    description: Hatch CLI for developers
+    install: |
+      bin.install "hatch"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
