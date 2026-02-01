@@ -4,9 +4,15 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/apps"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/deploy"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/destroy"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/env"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/login"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/logout"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/logs"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/open"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/restart"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -35,9 +41,16 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(apps.NewCmd())
+	rootCmd.AddCommand(apps.NewInfoCmd())
 	rootCmd.AddCommand(deploy.NewCmd())
+	rootCmd.AddCommand(destroy.NewCmd())
+	rootCmd.AddCommand(env.NewCmd())
 	rootCmd.AddCommand(login.NewCmd())
 	rootCmd.AddCommand(logout.NewCmd())
+	rootCmd.AddCommand(logs.NewCmd())
+	rootCmd.AddCommand(open.NewCmd())
+	rootCmd.AddCommand(restart.NewCmd())
 }
 
 func initConfig() {
