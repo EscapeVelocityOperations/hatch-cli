@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/login"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/logout"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -32,6 +34,8 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(login.NewCmd())
+	rootCmd.AddCommand(logout.NewCmd())
 }
 
 func initConfig() {

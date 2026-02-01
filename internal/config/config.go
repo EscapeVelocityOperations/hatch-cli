@@ -21,7 +21,8 @@ func Dir() (string, error) {
 	return filepath.Join(home, ".hatch"), nil
 }
 
-func configPath() (string, error) {
+// Path returns the full path to the config file.
+func Path() (string, error) {
 	dir, err := Dir()
 	if err != nil {
 		return "", err
@@ -31,7 +32,7 @@ func configPath() (string, error) {
 
 // Load reads the config from ~/.hatch/config.json.
 func Load() (*Config, error) {
-	path, err := configPath()
+	path, err := Path()
 	if err != nil {
 		return nil, err
 	}
@@ -71,9 +72,19 @@ func Save(cfg *Config) error {
 	return os.WriteFile(path, data, 0600)
 }
 
-// Clear removes the config file (used for logout).
+// ClearToken removes the token from config.
+func ClearToken() error {
+	cfg, err := Load()
+	if err != nil {
+		return err
+	}
+	cfg.Token = ""
+	return Save(cfg)
+}
+
+// Clear removes the config file entirely (used for logout).
 func Clear() error {
-	path, err := configPath()
+	path, err := Path()
 	if err != nil {
 		return err
 	}
