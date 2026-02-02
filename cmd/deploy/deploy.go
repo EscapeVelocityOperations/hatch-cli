@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/git"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
@@ -13,8 +14,7 @@ import (
 )
 
 const (
-	gitHost    = "git.gethatch.eu"
-	deployPath = "/deploy"
+	gitHost = "git.gethatch.eu"
 )
 
 // Deps holds injectable dependencies for testing.
@@ -53,6 +53,7 @@ func defaultDeps() *Deps {
 var deps = defaultDeps()
 
 var appName string
+var domainName string
 
 func NewCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -62,6 +63,7 @@ func NewCmd() *cobra.Command {
 		RunE:  runDeploy,
 	}
 	cmd.Flags().StringVarP(&appName, "name", "n", "", "custom app name (defaults to directory name)")
+	cmd.Flags().StringVarP(&domainName, "domain", "d", "", "custom domain (e.g. example.com)")
 	return cmd
 }
 
@@ -105,8 +107,8 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		name = filepath.Base(cwd)
 	}
 
-	// 5. Build remote URL
-	remoteURL := fmt.Sprintf("https://%s@%s%s/%s.git", token, gitHost, deployPath, name)
+	// 5. Build remote URL (token as password for Basic Auth)
+	remoteURL := fmt.Sprintf("https://x:%s@%s/%s.git", token, gitHost, name)
 
 	// 6. Setup/update hatch remote
 	if deps.HasRemote("hatch") {
@@ -141,6 +143,23 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	appURL := parseAppURL(output)
 	fmt.Println()
 	ui.Success("Deployed to Hatch!")
+
+	// 9. Set custom domain if specified
+	if domainName != "" {
+		ui.Info(fmt.Sprintf("Configuring custom domain: %s", domainName))
+		client := api.NewClient(token)
+		domain, err := client.AddDomain(name, domainName)
+		if err != nil {
+			ui.Warn(fmt.Sprintf("Domain configuration failed: %v", err))
+			ui.Info("You can configure it later with: hatch domain add " + domainName)
+		} else {
+			ui.Success(fmt.Sprintf("Domain %s configured", domainName))
+			if domain.CNAME != "" {
+				ui.Info(fmt.Sprintf("CNAME target: %s", domain.CNAME))
+			}
+		}
+	}
+
 	if appURL != "" {
 		ui.Info(fmt.Sprintf("App URL: %s", appURL))
 	} else {

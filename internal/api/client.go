@@ -2,9 +2,11 @@ package api
 
 import (
 	"bufio"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -12,6 +14,7 @@ import (
 
 const (
 	DefaultHost = "https://api.gethatch.eu"
+	apiPath     = "/v1"
 	timeout     = 30 * time.Second
 )
 
@@ -24,18 +27,33 @@ type Client struct {
 
 // NewClient creates an API client with Bearer token auth.
 func NewClient(token string) *Client {
+	// Create transport with HTTP/2 disabled to avoid timeout issues
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          10,
+		IdleConnTimeout:       30 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		TLSNextProto: make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),
+	}
+
 	return &Client{
 		host:  DefaultHost,
 		token: token,
 		httpClient: &http.Client{
-			Timeout: timeout,
+			Timeout:   timeout,
+			Transport: transport,
 		},
 	}
 }
 
 // do executes an HTTP request with Bearer auth and returns the response.
 func (c *Client) do(method, path string, body io.Reader) (*http.Response, error) {
-	url := c.host + path
+	url := c.host + apiPath + path
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
 		return nil, err

@@ -95,8 +95,8 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	// Commit (ignore error if nothing to commit)
 	_ = runGit(dir, "commit", "-m", "Deploy via hatch")
 
-	// Set up hatch remote
-	remoteURL := fmt.Sprintf("https://%s@git.gethatch.eu/deploy/%s.git", token, name)
+	// Set up hatch remote (token as password for Basic Auth)
+	remoteURL := fmt.Sprintf("https://x:%s@git.gethatch.eu/%s.git", token, name)
 	if err := runGit(dir, "remote", "get-url", "hatch"); err != nil {
 		_ = runGit(dir, "remote", "add", "hatch", remoteURL)
 	} else {
