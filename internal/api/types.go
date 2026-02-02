@@ -32,3 +32,17 @@ type LogEntry struct {
 	Timestamp string `json:"timestamp"`
 	Message   string `json:"message"`
 }
+
+// Addon represents a provisioned addon (database, storage, etc).
+type Addon struct {
+	Type   string `json:"type"`
+	Status string `json:"status"`
+	URL    string `json:"url,omitempty"`
+}
+
+// Domain represents a custom domain configuration.
+type Domain struct {
+	Domain string `json:"domain"`
+	Status string `json:"status"`
+	CNAME  string `json:"cname,omitempty"`
+}

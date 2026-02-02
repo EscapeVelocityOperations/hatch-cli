@@ -177,3 +177,55 @@ func (c *Client) DeleteApp(slug string) error {
 	resp.Body.Close()
 	return nil
 }
+
+// AddAddon provisions an addon (e.g. "postgresql", "s3") for an app.
+func (c *Client) AddAddon(slug, addonType string) (*Addon, error) {
+	body := fmt.Sprintf(`{"type":%q}`, addonType)
+	resp, err := c.do("POST", "/apps/"+slug+"/addons", strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var addon Addon
+	if err := json.NewDecoder(resp.Body).Decode(&addon); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return &addon, nil
+}
+
+// AddDomain configures a custom domain for an app.
+func (c *Client) AddDomain(slug, domain string) (*Domain, error) {
+	body := fmt.Sprintf(`{"domain":%q}`, domain)
+	resp, err := c.do("POST", "/apps/"+slug+"/domains", strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var d Domain
+	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return &d, nil
+}
+
+// GetLogs returns recent log lines (non-streaming).
+func (c *Client) GetLogs(slug string, tail int) ([]string, error) {
+	path := fmt.Sprintf("/apps/%s/logs?tail=%d&follow=false", slug, tail)
+	resp, err := c.do("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if data, ok := strings.CutPrefix(line, "data: "); ok {
+			lines = append(lines, data)
+		}
+	}
+	return lines, scanner.Err()
+}
