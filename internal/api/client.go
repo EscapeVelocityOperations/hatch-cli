@@ -88,8 +88,12 @@ func (c *Client) GetApp(slug string) (*App, error) {
 
 // StreamLogs opens an SSE connection to stream app logs.
 // It calls the handler for each log line. The caller should cancel via context or close.
-func (c *Client) StreamLogs(slug string, tail int, follow bool, handler func(line string)) error {
+// logType can be "" for runtime logs or "build" for build logs.
+func (c *Client) StreamLogs(slug string, tail int, follow bool, logType string, handler func(line string)) error {
 	path := fmt.Sprintf("/apps/%s/logs?tail=%d&follow=%t", slug, tail, follow)
+	if logType != "" {
+		path += "&type=" + logType
+	}
 
 	req, err := http.NewRequest("GET", c.host+path, nil)
 	if err != nil {
@@ -211,8 +215,11 @@ func (c *Client) AddDomain(slug, domain string) (*Domain, error) {
 }
 
 // GetLogs returns recent log lines (non-streaming).
-func (c *Client) GetLogs(slug string, tail int) ([]string, error) {
+func (c *Client) GetLogs(slug string, tail int, logType string) ([]string, error) {
 	path := fmt.Sprintf("/apps/%s/logs?tail=%d&follow=false", slug, tail)
+	if logType != "" {
+		path += "&type=" + logType
+	}
 	resp, err := c.do("GET", path, nil)
 	if err != nil {
 		return nil, err

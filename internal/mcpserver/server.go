@@ -220,7 +220,7 @@ func viewLogsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	logLines, err := client.GetLogs(slug, lines)
+	logLines, err := client.GetLogs(slug, lines, "")
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to get logs: %v", err)), nil
 	}

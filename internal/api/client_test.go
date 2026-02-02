@@ -233,7 +233,7 @@ func TestStreamLogs(t *testing.T) {
 	c.host = server.URL
 
 	var lines []string
-	err := c.StreamLogs("myapp", 50, false, func(line string) {
+	err := c.StreamLogs("myapp", 50, false, "", func(line string) {
 		lines = append(lines, line)
 	})
 	if err != nil {
@@ -244,5 +244,30 @@ func TestStreamLogs(t *testing.T) {
 	}
 	if lines[0] != "line one" {
 		t.Fatalf("expected 'line one', got %q", lines[0])
+	}
+}
+
+func TestStreamLogs_BuildLogs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("type") != "build" {
+			t.Fatalf("expected type=build, got %s", r.URL.Query().Get("type"))
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: build output\n"))
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+
+	var lines []string
+	err := c.StreamLogs("myapp", 100, true, "build", func(line string) {
+		lines = append(lines, line)
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
 }

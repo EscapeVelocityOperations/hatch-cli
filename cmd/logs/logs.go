@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	tail   int
+	lines  int
 	follow bool
+	build  bool
 )
 
 // Deps holds injectable dependencies for testing.
@@ -20,7 +21,7 @@ type Deps struct {
 	GetToken     func() (string, error)
 	HasRemote    func(name string) bool
 	GetRemoteURL func(name string) (string, error)
-	StreamLogs   func(token, slug string, tail int, follow bool, handler func(string)) error
+	StreamLogs   func(token, slug string, lines int, follow bool, logType string, handler func(string)) error
 }
 
 func defaultDeps() *Deps {
@@ -28,8 +29,8 @@ func defaultDeps() *Deps {
 		GetToken:     auth.GetToken,
 		HasRemote:    git.HasRemote,
 		GetRemoteURL: git.GetRemoteURL,
-		StreamLogs: func(token, slug string, tail int, follow bool, handler func(string)) error {
-			return api.NewClient(token).StreamLogs(slug, tail, follow, handler)
+		StreamLogs: func(token, slug string, lines int, follow bool, logType string, handler func(string)) error {
+			return api.NewClient(token).StreamLogs(slug, lines, follow, logType, handler)
 		},
 	}
 }
@@ -45,8 +46,9 @@ func NewCmd() *cobra.Command {
 		Args:  cobra.MaximumNArgs(1),
 		RunE:  runLogs,
 	}
-	cmd.Flags().IntVar(&tail, "tail", 100, "number of recent log lines to show")
-	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "follow log output")
+	cmd.Flags().IntVarP(&lines, "lines", "n", 100, "number of recent log lines to show")
+	cmd.Flags().BoolVarP(&follow, "follow", "f", true, "follow log output (live tail)")
+	cmd.Flags().BoolVar(&build, "build", false, "show build logs instead of runtime logs")
 	return cmd
 }
 
@@ -64,10 +66,16 @@ func runLogs(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	ui.Info(fmt.Sprintf("Streaming logs for %s...", ui.Bold(slug)))
+	logType := ""
+	if build {
+		logType = "build"
+		ui.Info(fmt.Sprintf("Streaming build logs for %s...", ui.Bold(slug)))
+	} else {
+		ui.Info(fmt.Sprintf("Streaming logs for %s...", ui.Bold(slug)))
+	}
 	fmt.Println()
 
-	return deps.StreamLogs(token, slug, tail, follow, func(line string) {
+	return deps.StreamLogs(token, slug, lines, follow, logType, func(line string) {
 		fmt.Println(line)
 	})
 }
