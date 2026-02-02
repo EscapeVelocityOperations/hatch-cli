@@ -14,14 +14,16 @@ import (
 	mcpcmd "github.com/EscapeVelocityOperations/hatch-cli/cmd/mcp"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/open"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/restart"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
 var (
-	cfgFile string
-	verbose bool
+	cfgFile  string
+	verbose  bool
+	tokenFlag string
 )
 
 var rootCmd = &cobra.Command{
@@ -40,6 +42,13 @@ func init() {
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is ~/.hatch/config.json)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
+	rootCmd.PersistentFlags().StringVar(&tokenFlag, "token", "", "API token (overrides HATCH_TOKEN and config file)")
+
+	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		if tokenFlag != "" {
+			auth.SetTokenFlag(tokenFlag)
+		}
+	}
 
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(apps.NewCmd())

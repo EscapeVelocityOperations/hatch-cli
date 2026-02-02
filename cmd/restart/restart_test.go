@@ -30,7 +30,7 @@ func TestRunRestart_NotLoggedIn(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if err.Error() != "not logged in. Run 'hatch login' first" {
+	if err.Error() != "not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token" {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

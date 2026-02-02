@@ -41,7 +41,7 @@ func newClient() (*api.Client, error) {
 		return nil, fmt.Errorf("reading auth token: %w", err)
 	}
 	if token == "" {
-		return nil, fmt.Errorf("not logged in - run 'hatch login' first")
+		return nil, fmt.Errorf("not logged in - run 'hatch login', set HATCH_TOKEN, or use --token")
 	}
 	return api.NewClient(token), nil
 }
@@ -74,7 +74,7 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 
 	token, err := auth.GetToken()
 	if err != nil || token == "" {
-		return mcp.NewToolResultError("Not logged in. Run 'hatch login' first."), nil
+		return mcp.NewToolResultError("Not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token."), nil
 	}
 
 	// Ensure directory exists

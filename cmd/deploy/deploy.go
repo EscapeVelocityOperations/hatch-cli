@@ -72,7 +72,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("checking auth: %w", err)
 	}
 	if token == "" {
-		return fmt.Errorf("not logged in. Run 'hatch login' first")
+		return fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
 	}
 
 	// 2. Check/init git repo

@@ -59,7 +59,7 @@ func runList(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("checking auth: %w", err)
 	}
 	if token == "" {
-		return fmt.Errorf("not logged in. Run 'hatch login' first")
+		return fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
 	}
 
 	sp := ui.NewSpinner("Fetching apps...")
@@ -90,7 +90,7 @@ func runInfo(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("checking auth: %w", err)
 	}
 	if token == "" {
-		return fmt.Errorf("not logged in. Run 'hatch login' first")
+		return fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
 	}
 
 	slug := args[0]
