@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/apps"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/db"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/deploy"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/destroy"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/env"
@@ -53,6 +54,7 @@ func init() {
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(apps.NewCmd())
 	rootCmd.AddCommand(apps.NewInfoCmd())
+	rootCmd.AddCommand(db.NewCmd())
 	rootCmd.AddCommand(deploy.NewCmd())
 	rootCmd.AddCommand(destroy.NewCmd())
 	rootCmd.AddCommand(env.NewCmd())
