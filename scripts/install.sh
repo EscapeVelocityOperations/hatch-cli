@@ -1,40 +1,54 @@
 #!/bin/sh
 set -e
 
-REPO="EscapeVelocityOperations/hatch-cli"
-BINARY="hatch"
+DOWNLOAD_BASE="https://gethatch.eu/downloads"
 INSTALL_DIR="/usr/local/bin"
+BINARY_NAME="hatch"
 
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-ARCH=$(uname -m)
+main() {
+    OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+    ARCH=$(uname -m)
 
-case "$ARCH" in
-    x86_64|amd64) ARCH="amd64" ;;
-    aarch64|arm64) ARCH="arm64" ;;
-    *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
-esac
+    case "$OS" in
+        linux)  OS="linux" ;;
+        darwin) OS="darwin" ;;
+        *)      echo "Error: unsupported OS: $OS" >&2; exit 1 ;;
+    esac
 
-case "$OS" in
-    linux|darwin) ;;
-    *) echo "Unsupported OS: $OS"; exit 1 ;;
-esac
+    case "$ARCH" in
+        x86_64|amd64)  ARCH="amd64" ;;
+        aarch64|arm64) ARCH="arm64" ;;
+        *)             echo "Error: unsupported architecture: $ARCH" >&2; exit 1 ;;
+    esac
 
-LATEST=$(curl -sL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | sed -E 's/.*"v?([^"]+)".*/\1/')
+    FILENAME="${BINARY_NAME}-${OS}-${ARCH}"
+    URL="${DOWNLOAD_BASE}/${FILENAME}"
 
-if [ -z "$LATEST" ]; then
-    echo "Error: Could not determine latest version"
-    exit 1
-fi
+    echo "Downloading ${BINARY_NAME} for ${OS}/${ARCH}..."
 
-URL="https://github.com/${REPO}/releases/download/v${LATEST}/${BINARY}_${OS}_${ARCH}.tar.gz"
+    TMPDIR=$(mktemp -d)
+    trap 'rm -rf "$TMPDIR"' EXIT
 
-TMPDIR=$(mktemp -d)
-trap "rm -rf $TMPDIR" EXIT
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL -o "${TMPDIR}/${BINARY_NAME}" "$URL"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "${TMPDIR}/${BINARY_NAME}" "$URL"
+    else
+        echo "Error: curl or wget required" >&2
+        exit 1
+    fi
 
-echo "Downloading hatch v${LATEST} for ${OS}/${ARCH}..."
-curl -sL "$URL" | tar xz -C "$TMPDIR"
+    chmod +x "${TMPDIR}/${BINARY_NAME}"
 
-echo "Installing to ${INSTALL_DIR}/${BINARY}..."
-sudo install -m 755 "${TMPDIR}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
+    if [ -w "$INSTALL_DIR" ]; then
+        mv "${TMPDIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+    else
+        echo "Installing to ${INSTALL_DIR} (requires sudo)..."
+        sudo mv "${TMPDIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+    fi
 
-echo "hatch v${LATEST} installed successfully"
+    echo "Installed ${BINARY_NAME} to ${INSTALL_DIR}/${BINARY_NAME}"
+    "${INSTALL_DIR}/${BINARY_NAME}" version
+}
+
+main
