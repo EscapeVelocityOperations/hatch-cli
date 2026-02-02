@@ -2,8 +2,8 @@
 set -e
 
 DOWNLOAD_BASE="https://gethatch.eu/downloads"
-INSTALL_DIR="/usr/local/bin"
 BINARY_NAME="hatch"
+INSTALL_DIR="${HATCH_INSTALL_DIR:-/usr/local/bin}"
 
 main() {
     OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -41,10 +41,10 @@ main() {
     chmod +x "${TMPDIR}/${BINARY_NAME}"
 
     if [ -w "$INSTALL_DIR" ]; then
-        mv "${TMPDIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+        install -m 755 "${TMPDIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
     else
-        echo "Installing to ${INSTALL_DIR} (requires sudo)..."
-        sudo mv "${TMPDIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+        echo "Installing to ${INSTALL_DIR}/${BINARY_NAME} (requires sudo)..."
+        sudo install -m 755 "${TMPDIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
     fi
 
     echo "Installed ${BINARY_NAME} to ${INSTALL_DIR}/${BINARY_NAME}"

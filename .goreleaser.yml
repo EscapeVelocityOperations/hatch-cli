@@ -17,11 +17,13 @@ builds:
       - arm64
 
 archives:
-  - format: tar.gz
-    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+  - name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
     format_overrides:
       - goos: windows
-        format: zip
+        formats:
+          - zip
 
 brews:
   - repository:
@@ -41,4 +43,5 @@ changelog:
     exclude:
       - "^docs:"
       - "^test:"
+      - "^ci:"
       - "^chore:"

@@ -214,6 +214,29 @@ hatch open myapp
 hatch open             # auto-detect from git remote
 ```
 
+### AI Integration
+
+#### `hatch mcp`
+
+Start a Model Context Protocol (MCP) server over stdio. This exposes Hatch CLI tools for use by AI assistants like Claude.
+
+```sh
+hatch mcp
+```
+
+Add to your AI assistant's MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "hatch": {
+      "command": "hatch",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
 ### Utility
 
 #### `hatch version`
@@ -243,7 +266,7 @@ Hatch stores configuration in `~/.hatch/config.json`. This file contains your au
 
 ## Stack
 
-- Go 1.22+
+- Go 1.25+
 - [Cobra](https://github.com/spf13/cobra) - CLI framework
 - [Viper](https://github.com/spf13/viper) - Configuration management
 - [goreleaser](https://goreleaser.com) - Cross-platform builds and releases
