@@ -23,7 +23,7 @@ func TestListApps(t *testing.T) {
 		{Slug: "myapp", Name: "myapp", Status: "running", URL: "https://myapp.gethatch.eu"},
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/apps" {
+		if r.URL.Path != "/v1/apps" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		if r.Header.Get("Authorization") != "Bearer tok123" {
@@ -58,7 +58,7 @@ func TestGetApp(t *testing.T) {
 		CreatedAt: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/apps/myapp" {
+		if r.URL.Path != "/v1/apps/myapp" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		json.NewEncoder(w).Encode(app)
@@ -105,7 +105,7 @@ func TestRestartApp(t *testing.T) {
 		if r.Method != "POST" {
 			t.Fatalf("expected POST, got %s", r.Method)
 		}
-		if r.URL.Path != "/apps/myapp/restart" {
+		if r.URL.Path != "/v1/apps/myapp/restart" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		called = true
@@ -130,7 +130,7 @@ func TestDeleteApp(t *testing.T) {
 		if r.Method != "DELETE" {
 			t.Fatalf("expected DELETE, got %s", r.Method)
 		}
-		if r.URL.Path != "/apps/myapp" {
+		if r.URL.Path != "/v1/apps/myapp" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		w.WriteHeader(http.StatusOK)
@@ -149,7 +149,7 @@ func TestDeleteApp(t *testing.T) {
 func TestGetEnvVars(t *testing.T) {
 	vars := []EnvVar{{Key: "PORT", Value: "8080"}, {Key: "DB_URL", Value: "postgres://..."}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/apps/myapp/env" {
+		if r.URL.Path != "/v1/apps/myapp/env" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		json.NewEncoder(w).Encode(vars)
@@ -176,7 +176,7 @@ func TestSetEnvVar(t *testing.T) {
 		if r.Method != "PATCH" {
 			t.Fatalf("expected PATCH, got %s", r.Method)
 		}
-		if r.URL.Path != "/apps/myapp/env" {
+		if r.URL.Path != "/v1/apps/myapp/env" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		w.WriteHeader(http.StatusOK)
@@ -197,7 +197,7 @@ func TestUnsetEnvVar(t *testing.T) {
 		if r.Method != "DELETE" {
 			t.Fatalf("expected DELETE, got %s", r.Method)
 		}
-		if r.URL.Path != "/apps/myapp/env/PORT" {
+		if r.URL.Path != "/v1/apps/myapp/env/PORT" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		w.WriteHeader(http.StatusOK)

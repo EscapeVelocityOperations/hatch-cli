@@ -137,7 +137,7 @@ func TestRunDeploy_AddsRemoteWhenMissing(t *testing.T) {
 	if addedRemote != "hatch" {
 		t.Fatalf("expected remote name 'hatch', got %q", addedRemote)
 	}
-	expected := "https://tok123@git.gethatch.eu/deploy/myapp.git"
+	expected := "https://x:tok123@git.gethatch.eu/myapp.git"
 	if addedURL != expected {
 		t.Fatalf("expected URL %q, got %q", expected, addedURL)
 	}
@@ -167,7 +167,7 @@ func TestRunDeploy_UpdatesExistingRemote(t *testing.T) {
 		}
 	})
 
-	expected := "https://tok123@git.gethatch.eu/deploy/myapp.git"
+	expected := "https://x:tok123@git.gethatch.eu/myapp.git"
 	if updatedURL != expected {
 		t.Fatalf("expected URL %q, got %q", expected, updatedURL)
 	}
@@ -234,7 +234,7 @@ func TestRunDeploy_CustomName(t *testing.T) {
 		}
 	})
 
-	expected := "https://tok123@git.gethatch.eu/deploy/custom-app.git"
+	expected := "https://x:tok123@git.gethatch.eu/custom-app.git"
 	if addedURL != expected {
 		t.Fatalf("expected URL %q, got %q", expected, addedURL)
 	}
