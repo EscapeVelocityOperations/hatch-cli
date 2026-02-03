@@ -216,6 +216,21 @@ func (c *Client) AddAddon(slug, addonType string) (*Addon, error) {
 	return &addon, nil
 }
 
+// ListDomains returns custom domains for an app.
+func (c *Client) ListDomains(slug string) ([]Domain, error) {
+	resp, err := c.do("GET", "/apps/"+slug+"/domains", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var domains []Domain
+	if err := json.NewDecoder(resp.Body).Decode(&domains); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return domains, nil
+}
+
 // AddDomain configures a custom domain for an app.
 func (c *Client) AddDomain(slug, domain string) (*Domain, error) {
 	body := fmt.Sprintf(`{"domain":%q}`, domain)
@@ -230,6 +245,16 @@ func (c *Client) AddDomain(slug, domain string) (*Domain, error) {
 		return nil, fmt.Errorf("decoding response: %w", err)
 	}
 	return &d, nil
+}
+
+// RemoveDomain removes a custom domain from an app.
+func (c *Client) RemoveDomain(slug, domain string) error {
+	resp, err := c.do("DELETE", "/apps/"+slug+"/domains/"+domain, nil)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
 }
 
 // GetLogs returns recent log lines (non-streaming).

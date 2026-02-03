@@ -8,6 +8,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/db"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/deploy"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/destroy"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/domain"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/env"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/login"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/logout"
@@ -57,6 +58,7 @@ func init() {
 	rootCmd.AddCommand(db.NewCmd())
 	rootCmd.AddCommand(deploy.NewCmd())
 	rootCmd.AddCommand(destroy.NewCmd())
+	rootCmd.AddCommand(domain.NewCmd())
 	rootCmd.AddCommand(env.NewCmd())
 	rootCmd.AddCommand(login.NewCmd())
 	rootCmd.AddCommand(logout.NewCmd())

@@ -1,0 +1,201 @@
+package domain
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
+	"github.com/spf13/cobra"
+)
+
+// Deps holds injectable dependencies for testing.
+type Deps struct {
+	GetToken     func() (string, error)
+	ListDomains  func(token, slug string) ([]api.Domain, error)
+	AddDomain    func(token, slug, domain string) (*api.Domain, error)
+	RemoveDomain func(token, slug, domain string) error
+}
+
+func defaultDeps() *Deps {
+	return &Deps{
+		GetToken: auth.GetToken,
+		ListDomains: func(token, slug string) ([]api.Domain, error) {
+			return api.NewClient(token).ListDomains(slug)
+		},
+		AddDomain: func(token, slug, domain string) (*api.Domain, error) {
+			return api.NewClient(token).AddDomain(slug, domain)
+		},
+		RemoveDomain: func(token, slug, domain string) error {
+			return api.NewClient(token).RemoveDomain(slug, domain)
+		},
+	}
+}
+
+var deps = defaultDeps()
+
+// NewCmd returns the domain command with subcommands.
+func NewCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "domain",
+		Short: "Manage custom domains for your applications",
+		Long:  "Add, list, and remove custom domains for Hatch applications.",
+	}
+
+	cmd.AddCommand(newListCmd())
+	cmd.AddCommand(newAddCmd())
+	cmd.AddCommand(newRemoveCmd())
+
+	return cmd
+}
+
+func newListCmd() *cobra.Command {
+	var appSlug string
+
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List custom domains",
+		Long:  "List all custom domains for an application.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runList(appSlug)
+		},
+	}
+
+	cmd.Flags().StringVarP(&appSlug, "app", "a", "", "Application slug (required)")
+	cmd.MarkFlagRequired("app")
+
+	return cmd
+}
+
+func newAddCmd() *cobra.Command {
+	var appSlug string
+
+	cmd := &cobra.Command{
+		Use:   "add <domain>",
+		Short: "Add a custom domain",
+		Long:  "Add a custom domain to an application.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAdd(appSlug, args[0])
+		},
+	}
+
+	cmd.Flags().StringVarP(&appSlug, "app", "a", "", "Application slug (required)")
+	cmd.MarkFlagRequired("app")
+
+	return cmd
+}
+
+func newRemoveCmd() *cobra.Command {
+	var appSlug string
+
+	cmd := &cobra.Command{
+		Use:   "remove <domain>",
+		Short: "Remove a custom domain",
+		Long:  "Remove a custom domain from an application.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runRemove(appSlug, args[0])
+		},
+	}
+
+	cmd.Flags().StringVarP(&appSlug, "app", "a", "", "Application slug (required)")
+	cmd.MarkFlagRequired("app")
+
+	return cmd
+}
+
+func runList(appSlug string) error {
+	token, err := deps.GetToken()
+	if err != nil {
+		return fmt.Errorf("checking auth: %w", err)
+	}
+	if token == "" {
+		return fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
+	}
+
+	sp := ui.NewSpinner("Fetching domains...")
+	sp.Start()
+	domains, err := deps.ListDomains(token, appSlug)
+	sp.Stop()
+
+	if err != nil {
+		return fmt.Errorf("fetching domains: %w", err)
+	}
+
+	if len(domains) == 0 {
+		ui.Info(fmt.Sprintf("No custom domains configured for '%s'.", appSlug))
+		return nil
+	}
+
+	table := ui.NewTable(os.Stdout, "DOMAIN", "STATUS", "CNAME")
+	for _, d := range domains {
+		table.AddRow(d.Domain, statusColor(d.Status), d.CNAME)
+	}
+	table.Render()
+	return nil
+}
+
+func runAdd(appSlug, domain string) error {
+	token, err := deps.GetToken()
+	if err != nil {
+		return fmt.Errorf("checking auth: %w", err)
+	}
+	if token == "" {
+		return fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
+	}
+
+	sp := ui.NewSpinner("Adding domain...")
+	sp.Start()
+	d, err := deps.AddDomain(token, appSlug, domain)
+	sp.Stop()
+
+	if err != nil {
+		return fmt.Errorf("adding domain: %w", err)
+	}
+
+	fmt.Println()
+	ui.Success(fmt.Sprintf("Domain '%s' added to '%s'", d.Domain, appSlug))
+	if d.CNAME != "" {
+		fmt.Printf("  %s Create a CNAME record pointing to: %s\n", ui.Dim("→"), ui.Bold(d.CNAME))
+	}
+	fmt.Println()
+
+	return nil
+}
+
+func runRemove(appSlug, domain string) error {
+	token, err := deps.GetToken()
+	if err != nil {
+		return fmt.Errorf("checking auth: %w", err)
+	}
+	if token == "" {
+		return fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
+	}
+
+	sp := ui.NewSpinner("Removing domain...")
+	sp.Start()
+	err = deps.RemoveDomain(token, appSlug, domain)
+	sp.Stop()
+
+	if err != nil {
+		return fmt.Errorf("removing domain: %w", err)
+	}
+
+	ui.Success(fmt.Sprintf("Domain '%s' removed from '%s'", domain, appSlug))
+	return nil
+}
+
+func statusColor(status string) string {
+	switch status {
+	case "active", "verified":
+		return ui.Green(status)
+	case "pending":
+		return ui.Yellow(status)
+	case "error", "failed":
+		return ui.Red(status)
+	default:
+		return status
+	}
+}
