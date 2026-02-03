@@ -104,23 +104,6 @@ func (c *Client) GetApp(slug string) (*App, error) {
 	return &app, nil
 }
 
-// CreateApp creates a new app with the given name.
-// The server generates a unique slug (name + random suffix).
-func (c *Client) CreateApp(name string) (*App, error) {
-	body := fmt.Sprintf(`{"name":%q}`, name)
-	resp, err := c.do("POST", "/apps", strings.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var app App
-	if err := json.NewDecoder(resp.Body).Decode(&app); err != nil {
-		return nil, fmt.Errorf("decoding response: %w", err)
-	}
-	return &app, nil
-}
-
 // StreamLogs opens an SSE connection to stream app logs.
 // It calls the handler for each log line. The caller should cancel via context or close.
 // logType can be "" for runtime logs or "build" for build logs.

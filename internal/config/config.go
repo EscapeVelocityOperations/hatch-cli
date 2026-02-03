@@ -8,8 +8,9 @@ import (
 )
 
 type Config struct {
-	Token   string `json:"token,omitempty"`
-	APIHost string `json:"api_host,omitempty"`
+	Token    string `json:"token,omitempty"`
+	APIHost  string `json:"api_host,omitempty"`
+	AppDomain string `json:"app_domain,omitempty"`
 }
 
 // Dir returns the hatch config directory (~/.hatch).

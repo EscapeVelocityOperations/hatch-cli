@@ -6,29 +6,7 @@ import (
 	"io"
 	"os"
 	"testing"
-
-	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 )
-
-// mockAPIClient implements the APIClient interface for testing.
-type mockAPIClient struct {
-	createAppFn func(name string) (*api.App, error)
-}
-
-func (m *mockAPIClient) CreateApp(name string) (*api.App, error) {
-	if m.createAppFn != nil {
-		return m.createAppFn(name)
-	}
-	// Default: return app with slug = name + "-abc1"
-	return &api.App{Slug: name + "-abc1", Name: name}, nil
-}
-
-// newMockAPIClient returns a factory function that returns the mock.
-func newMockAPIClient(mock *mockAPIClient) func(token string) APIClient {
-	return func(token string) APIClient {
-		return mock
-	}
-}
 
 func captureOutput(fn func()) string {
 	old := os.Stdout
@@ -85,10 +63,9 @@ func TestRunDeploy_InitGitIfNeeded(t *testing.T) {
 		AddRemote: func(name, url string) error { return nil },
 		CurrentBranch: func() (string, error) { return "main", nil },
 		Push: func(remote, branch string) (string, error) {
-			return "remote: https://myapp-abc1.gethatch.eu\n", nil
+			return "remote: https://myapp.gethatch.eu\n", nil
 		},
-		GetCwd:       func() (string, error) { return "/tmp/myapp", nil },
-		NewAPIClient: newMockAPIClient(&mockAPIClient{}),
+		GetCwd: func() (string, error) { return "/tmp/myapp", nil },
 	}
 	defer func() { deps = defaultDeps() }()
 
@@ -114,9 +91,8 @@ func TestRunDeploy_CommitsChanges(t *testing.T) {
 		HasRemote: func(name string) bool { return false },
 		AddRemote: func(name, url string) error { return nil },
 		CurrentBranch: func() (string, error) { return "main", nil },
-		Push:         func(remote, branch string) (string, error) { return "", nil },
-		GetCwd:       func() (string, error) { return "/tmp/myapp", nil },
-		NewAPIClient: newMockAPIClient(&mockAPIClient{}),
+		Push: func(remote, branch string) (string, error) { return "", nil },
+		GetCwd: func() (string, error) { return "/tmp/myapp", nil },
 	}
 	defer func() { deps = defaultDeps() }()
 
@@ -146,9 +122,8 @@ func TestRunDeploy_AddsRemoteWhenMissing(t *testing.T) {
 			return nil
 		},
 		CurrentBranch: func() (string, error) { return "main", nil },
-		Push:         func(remote, branch string) (string, error) { return "", nil },
-		GetCwd:       func() (string, error) { return "/tmp/myapp", nil },
-		NewAPIClient: newMockAPIClient(&mockAPIClient{}),
+		Push: func(remote, branch string) (string, error) { return "", nil },
+		GetCwd: func() (string, error) { return "/tmp/myapp", nil },
 	}
 	defer func() { deps = defaultDeps() }()
 
@@ -162,8 +137,7 @@ func TestRunDeploy_AddsRemoteWhenMissing(t *testing.T) {
 	if addedRemote != "hatch" {
 		t.Fatalf("expected remote name 'hatch', got %q", addedRemote)
 	}
-	// URL now uses /deploy/ path and slug (name + "-abc1" from mock)
-	expected := "https://x:tok123@git.gethatch.eu/deploy/myapp-abc1.git"
+	expected := "https://x:tok123@git.gethatch.eu/myapp.git"
 	if addedURL != expected {
 		t.Fatalf("expected URL %q, got %q", expected, addedURL)
 	}
@@ -181,9 +155,8 @@ func TestRunDeploy_UpdatesExistingRemote(t *testing.T) {
 			return nil
 		},
 		CurrentBranch: func() (string, error) { return "main", nil },
-		Push:         func(remote, branch string) (string, error) { return "", nil },
-		GetCwd:       func() (string, error) { return "/tmp/myapp", nil },
-		NewAPIClient: newMockAPIClient(&mockAPIClient{}),
+		Push: func(remote, branch string) (string, error) { return "", nil },
+		GetCwd: func() (string, error) { return "/tmp/myapp", nil },
 	}
 	defer func() { deps = defaultDeps() }()
 
@@ -194,8 +167,7 @@ func TestRunDeploy_UpdatesExistingRemote(t *testing.T) {
 		}
 	})
 
-	// URL now uses /deploy/ path and slug (name + "-abc1" from mock)
-	expected := "https://x:tok123@git.gethatch.eu/deploy/myapp-abc1.git"
+	expected := "https://x:tok123@git.gethatch.eu/myapp.git"
 	if updatedURL != expected {
 		t.Fatalf("expected URL %q, got %q", expected, updatedURL)
 	}
@@ -216,8 +188,7 @@ func TestRunDeploy_PushesBranchAsMain(t *testing.T) {
 			pushedBranch = branch
 			return "", nil
 		},
-		GetCwd:       func() (string, error) { return "/tmp/myapp", nil },
-		NewAPIClient: newMockAPIClient(&mockAPIClient{}),
+		GetCwd: func() (string, error) { return "/tmp/myapp", nil },
 	}
 	defer func() { deps = defaultDeps() }()
 
@@ -251,9 +222,8 @@ func TestRunDeploy_CustomName(t *testing.T) {
 			return nil
 		},
 		CurrentBranch: func() (string, error) { return "main", nil },
-		Push:         func(remote, branch string) (string, error) { return "", nil },
-		GetCwd:       func() (string, error) { return "/tmp/myapp", nil },
-		NewAPIClient: newMockAPIClient(&mockAPIClient{}),
+		Push: func(remote, branch string) (string, error) { return "", nil },
+		GetCwd: func() (string, error) { return "/tmp/myapp", nil },
 	}
 	defer func() { deps = defaultDeps() }()
 
@@ -264,8 +234,7 @@ func TestRunDeploy_CustomName(t *testing.T) {
 		}
 	})
 
-	// URL now uses /deploy/ path and slug (custom-app + "-abc1" from mock)
-	expected := "https://x:tok123@git.gethatch.eu/deploy/custom-app-abc1.git"
+	expected := "https://x:tok123@git.gethatch.eu/custom-app.git"
 	if addedURL != expected {
 		t.Fatalf("expected URL %q, got %q", expected, addedURL)
 	}
@@ -282,8 +251,7 @@ func TestRunDeploy_PushFailure(t *testing.T) {
 		Push: func(remote, branch string) (string, error) {
 			return "fatal: repository not found", fmt.Errorf("exit status 128")
 		},
-		GetCwd:       func() (string, error) { return "/tmp/myapp", nil },
-		NewAPIClient: newMockAPIClient(&mockAPIClient{}),
+		GetCwd: func() (string, error) { return "/tmp/myapp", nil },
 	}
 	defer func() { deps = defaultDeps() }()
 
@@ -293,31 +261,6 @@ func TestRunDeploy_PushFailure(t *testing.T) {
 			t.Fatal("expected error on push failure")
 		}
 		if err.Error() != "push failed: fatal: repository not found" {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
-}
-
-func TestRunDeploy_CreateAppFailure(t *testing.T) {
-	deps = &Deps{
-		GetToken:   func() (string, error) { return "tok123", nil },
-		IsGitRepo:  func() bool { return true },
-		HasChanges: func() (bool, error) { return false, nil },
-		GetCwd:     func() (string, error) { return "/tmp/myapp", nil },
-		NewAPIClient: newMockAPIClient(&mockAPIClient{
-			createAppFn: func(name string) (*api.App, error) {
-				return nil, fmt.Errorf("API error 500: internal server error")
-			},
-		}),
-	}
-	defer func() { deps = defaultDeps() }()
-
-	captureOutput(func() {
-		err := runDeploy(nil, nil)
-		if err == nil {
-			t.Fatal("expected error on API failure")
-		}
-		if err.Error() != "creating app: API error 500: internal server error" {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -364,10 +307,9 @@ func TestRunDeploy_SuccessOutput(t *testing.T) {
 		AddRemote: func(name, url string) error { return nil },
 		CurrentBranch: func() (string, error) { return "main", nil },
 		Push: func(remote, branch string) (string, error) {
-			return "remote: https://coolapp-abc1.gethatch.eu\n", nil
+			return "remote: https://coolapp.gethatch.eu\n", nil
 		},
-		GetCwd:       func() (string, error) { return "/tmp/coolapp", nil },
-		NewAPIClient: newMockAPIClient(&mockAPIClient{}),
+		GetCwd: func() (string, error) { return "/tmp/coolapp", nil },
 	}
 	defer func() { deps = defaultDeps() }()
 
@@ -381,7 +323,7 @@ func TestRunDeploy_SuccessOutput(t *testing.T) {
 	if !contains(output, "Deployed to Hatch!") {
 		t.Errorf("expected success message in output, got: %s", output)
 	}
-	if !contains(output, "https://coolapp-abc1.gethatch.eu") {
+	if !contains(output, "https://coolapp.gethatch.eu") {
 		t.Errorf("expected app URL in output, got: %s", output)
 	}
 }
