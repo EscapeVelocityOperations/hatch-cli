@@ -3,7 +3,6 @@ package deploy
 import (
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
@@ -166,8 +165,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("push failed: %s", strings.TrimSpace(output))
 	}
 
-	// 9. Parse output for app URL and show success
-	appURL := parseAppURL(output)
+	// 9. Show success with hosted subdomain URL
 	fmt.Println()
 	ui.Success("Deployed to Hatch!")
 
@@ -187,11 +185,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if appURL != "" {
-		ui.Info(fmt.Sprintf("App URL: %s", appURL))
-	} else {
-		ui.Info(fmt.Sprintf("App URL: https://%s.hosted.gethatch.eu", slug))
-	}
+	ui.Info(fmt.Sprintf("App URL: https://%s.hosted.gethatch.eu", slug))
 	fmt.Println()
 	fmt.Println("Next steps:")
 	fmt.Println("  hatch info     - View app details")
@@ -199,14 +193,6 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	fmt.Println("  hatch open     - Open app in browser")
 
 	return nil
-}
-
-// parseAppURL extracts the app URL from git push output.
-var urlPattern = regexp.MustCompile(`https?://[^\s]+\.gethatch\.eu[^\s]*`)
-
-func parseAppURL(output string) string {
-	match := urlPattern.FindString(output)
-	return match
 }
 
 func getCwd() (string, error) {
