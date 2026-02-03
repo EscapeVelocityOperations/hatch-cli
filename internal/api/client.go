@@ -279,3 +279,18 @@ func (c *Client) GetLogs(slug string, tail int, logType string) ([]string, error
 	}
 	return lines, scanner.Err()
 }
+
+// ListKeys returns API keys for the authenticated user.
+func (c *Client) ListKeys() ([]APIKey, error) {
+	resp, err := c.do("GET", "/keys", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var keys []APIKey
+	if err := json.NewDecoder(resp.Body).Decode(&keys); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return keys, nil
+}

@@ -46,3 +46,12 @@ type Domain struct {
 	Status string `json:"status"`
 	CNAME  string `json:"cname,omitempty"`
 }
+
+// APIKey represents an API key for the user.
+type APIKey struct {
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Prefix     string    `json:"prefix"`
+	CreatedAt  time.Time `json:"created_at"`
+	LastUsedAt time.Time `json:"last_used_at,omitempty"`
+}
