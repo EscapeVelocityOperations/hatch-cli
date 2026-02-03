@@ -17,6 +17,11 @@ const (
 	gitHost = "git.gethatch.eu"
 )
 
+// APIClient is the interface for the Hatch API.
+type APIClient interface {
+	CreateApp(name string) (*api.App, error)
+}
+
 // Deps holds injectable dependencies for testing.
 type Deps struct {
 	GetToken      func() (string, error)
@@ -31,6 +36,16 @@ type Deps struct {
 	Push          func(remote, branch string) (string, error)
 	CurrentBranch func() (string, error)
 	GetCwd        func() (string, error)
+	NewAPIClient  func(token string) APIClient
+}
+
+// apiClientWrapper wraps api.Client to implement APIClient interface.
+type apiClientWrapper struct {
+	*api.Client
+}
+
+func (w *apiClientWrapper) CreateApp(name string) (*api.App, error) {
+	return w.Client.CreateApp(name)
 }
 
 func defaultDeps() *Deps {
@@ -47,6 +62,9 @@ func defaultDeps() *Deps {
 		Push:          git.Push,
 		CurrentBranch: git.CurrentBranch,
 		GetCwd:        getCwd,
+		NewAPIClient: func(token string) APIClient {
+			return &apiClientWrapper{api.NewClient(token)}
+		},
 	}
 }
 
@@ -107,10 +125,19 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		name = filepath.Base(cwd)
 	}
 
-	// 5. Build remote URL (token as password for Basic Auth)
-	remoteURL := fmt.Sprintf("https://x:%s@%s/%s.git", token, gitHost, name)
+	// 5. Create app via API to get the slug
+	ui.Info("Creating app...")
+	client := deps.NewAPIClient(token)
+	app, err := client.CreateApp(name)
+	if err != nil {
+		return fmt.Errorf("creating app: %w", err)
+	}
+	slug := app.Slug
 
-	// 6. Setup/update hatch remote
+	// 6. Build remote URL with slug (token as password for Basic Auth)
+	remoteURL := fmt.Sprintf("https://x:%s@%s/deploy/%s.git", token, gitHost, slug)
+
+	// 7. Setup/update hatch remote
 	if deps.HasRemote("hatch") {
 		if err := deps.SetRemoteURL("hatch", remoteURL); err != nil {
 			return fmt.Errorf("updating hatch remote: %w", err)
@@ -121,7 +148,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 7. Get current branch and push
+	// 8. Get current branch and push
 	branch, err := deps.CurrentBranch()
 	if err != nil {
 		return fmt.Errorf("getting current branch: %w", err)
@@ -139,16 +166,16 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("push failed: %s", strings.TrimSpace(output))
 	}
 
-	// 8. Parse output for app URL and show success
+	// 9. Parse output for app URL and show success
 	appURL := parseAppURL(output)
 	fmt.Println()
 	ui.Success("Deployed to Hatch!")
 
-	// 9. Set custom domain if specified
+	// 10. Set custom domain if specified
 	if domainName != "" {
 		ui.Info(fmt.Sprintf("Configuring custom domain: %s", domainName))
-		client := api.NewClient(token)
-		domain, err := client.AddDomain(name, domainName)
+		domainClient := api.NewClient(token)
+		domain, err := domainClient.AddDomain(slug, domainName)
 		if err != nil {
 			ui.Warn(fmt.Sprintf("Domain configuration failed: %v", err))
 			ui.Info("You can configure it later with: hatch domain add " + domainName)
@@ -163,7 +190,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	if appURL != "" {
 		ui.Info(fmt.Sprintf("App URL: %s", appURL))
 	} else {
-		ui.Info(fmt.Sprintf("App URL: https://%s.gethatch.eu", name))
+		ui.Info(fmt.Sprintf("App URL: https://%s.gethatch.eu", slug))
 	}
 	fmt.Println()
 	fmt.Println("Next steps:")

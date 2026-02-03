@@ -271,3 +271,35 @@ func TestStreamLogs_BuildLogs(t *testing.T) {
 		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
 }
+
+func TestCreateApp(t *testing.T) {
+	app := App{
+		Slug:   "myapp-j9ou",
+		Name:   "myapp",
+		Status: "building",
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		if r.URL.Path != "/v1/apps" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(app)
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+
+	result, err := c.CreateApp("myapp")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Slug != "myapp-j9ou" {
+		t.Fatalf("expected slug 'myapp-j9ou', got %q", result.Slug)
+	}
+	if result.Name != "myapp" {
+		t.Fatalf("expected name 'myapp', got %q", result.Name)
+	}
+}
