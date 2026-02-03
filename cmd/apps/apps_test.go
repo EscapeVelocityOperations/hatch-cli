@@ -76,8 +76,8 @@ func TestRunList_ShowsApps(t *testing.T) {
 		GetToken: func() (string, error) { return "tok123", nil },
 		ListApps: func(token string) ([]api.App, error) {
 			return []api.App{
-				{Name: "myapp", Status: "running", URL: "https://myapp.gethatch.eu"},
-				{Name: "other", Status: "stopped", URL: "https://other.gethatch.eu"},
+				{Slug: "myapp", Name: "My App", Status: "running", URL: "https://myapp.gethatch.eu"},
+				{Slug: "other", Name: "Other App", Status: "stopped", URL: "https://other.gethatch.eu"},
 			}, nil
 		},
 	}
@@ -90,10 +90,35 @@ func TestRunList_ShowsApps(t *testing.T) {
 		}
 	})
 	if !contains(output, "myapp") {
-		t.Fatalf("expected 'myapp' in output, got: %s", output)
+		t.Fatalf("expected 'myapp' slug in output, got: %s", output)
+	}
+	if !contains(output, "My App") {
+		t.Fatalf("expected 'My App' name in output, got: %s", output)
 	}
 	if !contains(output, "other") {
-		t.Fatalf("expected 'other' in output, got: %s", output)
+		t.Fatalf("expected 'other' slug in output, got: %s", output)
+	}
+}
+
+func TestRunList_GeneratesURLFromSlug(t *testing.T) {
+	deps = &Deps{
+		GetToken: func() (string, error) { return "tok123", nil },
+		ListApps: func(token string) ([]api.App, error) {
+			return []api.App{
+				{Slug: "nourl-app", Name: "No URL App", Status: "running", URL: ""},
+			}, nil
+		},
+	}
+	defer func() { deps = defaultDeps() }()
+
+	output := captureOutput(func() {
+		err := runList(nil, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+	if !contains(output, "https://nourl-app.gethatch.eu") {
+		t.Fatalf("expected generated URL in output, got: %s", output)
 	}
 }
 

@@ -76,9 +76,13 @@ func runList(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	table := ui.NewTable(os.Stdout, "NAME", "STATUS", "URL")
+	table := ui.NewTable(os.Stdout, "SLUG", "NAME", "STATUS", "URL")
 	for _, a := range appList {
-		table.AddRow(a.Name, a.Status, a.URL)
+		url := a.URL
+		if url == "" {
+			url = "https://" + a.Slug + ".gethatch.eu"
+		}
+		table.AddRow(a.Slug, a.Name, statusColor(a.Status), url)
 	}
 	table.Render()
 	return nil
