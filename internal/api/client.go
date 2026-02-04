@@ -179,7 +179,7 @@ func (c *Client) GetEnvVars(slug string) ([]EnvVar, error) {
 // SetEnvVar sets an environment variable on an app.
 func (c *Client) SetEnvVar(slug, key, value string) error {
 	body := fmt.Sprintf(`{"key":%q,"value":%q}`, key, value)
-	resp, err := c.do("PATCH", "/apps/"+slug+"/env", strings.NewReader(body))
+	resp, err := c.do("POST", "/apps/"+slug+"/env", strings.NewReader(body))
 	if err != nil {
 		return err
 	}
