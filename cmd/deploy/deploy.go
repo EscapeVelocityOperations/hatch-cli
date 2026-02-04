@@ -3,6 +3,7 @@ package deploy
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
@@ -134,7 +135,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	slug := app.Slug
 
 	// 6. Build remote URL with slug (token as password for Basic Auth)
-	remoteURL := fmt.Sprintf("https://x:%s@%s/%s.git", token, gitHost, slug)
+	remoteURL := fmt.Sprintf("https://x:%s@%s/deploy/%s.git", token, gitHost, slug)
 
 	// 7. Setup/update hatch remote
 	if deps.HasRemote("hatch") {
@@ -165,7 +166,8 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("push failed: %s", strings.TrimSpace(output))
 	}
 
-	// 9. Show success with hosted subdomain URL
+	// 9. Parse output for app URL and show success
+	appURL := parseAppURL(output)
 	fmt.Println()
 	ui.Success("Deployed to Hatch!")
 
@@ -185,7 +187,11 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	ui.Info(fmt.Sprintf("App URL: https://%s.hosted.gethatch.eu", slug))
+	if appURL != "" {
+		ui.Info(fmt.Sprintf("App URL: %s", appURL))
+	} else {
+		ui.Info(fmt.Sprintf("App URL: https://%s.gethatch.eu", slug))
+	}
 	fmt.Println()
 	fmt.Println("Next steps:")
 	fmt.Println("  hatch info     - View app details")
@@ -193,6 +199,14 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	fmt.Println("  hatch open     - Open app in browser")
 
 	return nil
+}
+
+// parseAppURL extracts the app URL from git push output.
+var urlPattern = regexp.MustCompile(`https?://[^\s]+\.gethatch\.eu[^\s]*`)
+
+func parseAppURL(output string) string {
+	match := urlPattern.FindString(output)
+	return match
 }
 
 func getCwd() (string, error) {
