@@ -163,8 +163,25 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		if appName != "" && appName != hatchConfig.Name {
 			ui.Warn("App name in .hatch.toml differs from --name flag, using .hatch.toml")
 		}
-	} else {
-		// No config found - create new app
+	} else if deps.HasRemote("hatch") {
+		// No .hatch.toml, but hatch remote exists - detect from remote URL
+		remoteURL, err := deps.GetRemoteURL("hatch")
+		if err != nil {
+			return fmt.Errorf("reading hatch remote: %w", err)
+		}
+		// Extract slug from URL like https://x:token@git.gethatch.eu/slug.git
+		parts := strings.Split(remoteURL, "/")
+		if len(parts) > 0 {
+			lastPart := strings.TrimSuffix(parts[len(parts)-1], ".git")
+			if lastPart != "" && lastPart != "hatch" {
+				slug = lastPart
+				ui.Info(fmt.Sprintf("Detected existing app from remote: %s", slug))
+			}
+		}
+	}
+
+	if slug == "" {
+		// No config or remote found - create new app
 		// 4. Determine app name
 		name := appName
 		if name == "" {
