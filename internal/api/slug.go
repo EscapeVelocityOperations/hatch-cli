@@ -6,8 +6,9 @@ import (
 	"strings"
 )
 
-// slugPattern matches: https://<token>@git.gethatch.eu/deploy/<slug>.git
-var slugPattern = regexp.MustCompile(`git\.gethatch\.eu/deploy/([^/.]+)`)
+// slugPattern matches: https://<token>@git.gethatch.eu/<slug>.git
+// Also supports legacy format with /deploy/ prefix: git.gethatch.eu/deploy/<slug>.git
+var slugPattern = regexp.MustCompile(`git\.gethatch\.eu/(?:deploy/)?([^/.]+)`)
 
 // SlugFromRemote extracts the app slug from a hatch git remote URL.
 func SlugFromRemote(remoteURL string) (string, error) {
