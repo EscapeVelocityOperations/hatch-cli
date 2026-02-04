@@ -16,6 +16,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/logs"
 	mcpcmd "github.com/EscapeVelocityOperations/hatch-cli/cmd/mcp"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/open"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/rebuild"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/restart"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/config"
@@ -67,6 +68,7 @@ func init() {
 	rootCmd.AddCommand(logs.NewCmd())
 	rootCmd.AddCommand(mcpcmd.NewCmd())
 	rootCmd.AddCommand(open.NewCmd())
+	rootCmd.AddCommand(rebuild.NewCmd())
 	rootCmd.AddCommand(restart.NewCmd())
 }
 
