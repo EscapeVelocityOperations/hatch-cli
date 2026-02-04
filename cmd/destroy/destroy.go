@@ -35,16 +35,19 @@ func defaultDeps() *Deps {
 }
 
 var deps = defaultDeps()
+var yesFlag bool
 
 // NewCmd returns the destroy command.
 func NewCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "destroy [slug]",
 		Short: "Permanently delete an application",
-		Long:  "Permanently delete a Hatch application. This action cannot be undone. Requires typing the app name to confirm.",
+		Long:  "Permanently delete a Hatch application. This action cannot be undone. Requires typing the app name to confirm (unless --yes is provided).",
 		Args:  cobra.MaximumNArgs(1),
 		RunE:  runDestroy,
 	}
+	cmd.Flags().BoolVarP(&yesFlag, "yes", "y", false, "Skip confirmation prompt")
+	return cmd
 }
 
 func runDestroy(cmd *cobra.Command, args []string) error {
@@ -61,17 +64,19 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Double confirmation: first warning, then type app name
-	ui.Warn(fmt.Sprintf("This will permanently delete %s and all its data.", ui.Bold(slug)))
-	fmt.Println()
+	// Confirmation: either type app name or use --yes flag
+	if !yesFlag {
+		ui.Warn(fmt.Sprintf("This will permanently delete %s and all its data.", ui.Bold(slug)))
+		fmt.Println()
 
-	answer, err := deps.ReadInput(fmt.Sprintf("Type %q to confirm: ", slug))
-	if err != nil {
-		return fmt.Errorf("reading input: %w", err)
-	}
-	if strings.TrimSpace(answer) != slug {
-		ui.Info("Cancelled. App name did not match.")
-		return nil
+		answer, err := deps.ReadInput(fmt.Sprintf("Type %q to confirm: ", slug))
+		if err != nil {
+			return fmt.Errorf("reading input: %w", err)
+		}
+		if strings.TrimSpace(answer) != slug {
+			ui.Info("Cancelled. App name did not match.")
+			return nil
+		}
 	}
 
 	sp := ui.NewSpinner(fmt.Sprintf("Destroying %s...", slug))
