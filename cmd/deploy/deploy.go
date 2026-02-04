@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -151,38 +152,25 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	// 4. Check for .hatch.toml config to identify existing app
 	ui.Info("Checking for .hatch.toml...")
 	var slug string
+	var isNewApp bool
 	hatchConfig, err := readHatchConfig()
 	if err != nil {
 		return fmt.Errorf("reading .hatch.toml: %w", err)
 	}
 
+	client := deps.NewAPIClient(token)
+
 	if hatchConfig != nil {
 		// Found existing app config - use it
 		ui.Info(fmt.Sprintf("Found existing app: %s (%s)", hatchConfig.Slug, hatchConfig.Name))
 		slug = hatchConfig.Slug
+		isNewApp = false
 		if appName != "" && appName != hatchConfig.Name {
 			ui.Warn("App name in .hatch.toml differs from --name flag, using .hatch.toml")
 		}
-	} else if deps.HasRemote("hatch") {
-		// No .hatch.toml, but hatch remote exists - detect from remote URL
-		remoteURL, err := deps.GetRemoteURL("hatch")
-		if err != nil {
-			return fmt.Errorf("reading hatch remote: %w", err)
-		}
-		// Extract slug from URL like https://x:token@git.gethatch.eu/slug.git
-		parts := strings.Split(remoteURL, "/")
-		if len(parts) > 0 {
-			lastPart := strings.TrimSuffix(parts[len(parts)-1], ".git")
-			if lastPart != "" && lastPart != "hatch" {
-				slug = lastPart
-				ui.Info(fmt.Sprintf("Detected existing app from remote: %s", slug))
-			}
-		}
-	}
-
-	if slug == "" {
-		// No config or remote found - create new app
-		// 4. Determine app name
+	} else {
+		// No config found - create new app
+		// 4a. Determine app name
 		name := appName
 		if name == "" {
 			cwd, err := deps.GetCwd()
@@ -194,16 +182,16 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 
 		// 5. Create app via API to get the slug
 		ui.Info("Creating new app...")
-		client := deps.NewAPIClient(token)
 		app, err := client.CreateApp(name)
 		if err != nil {
 			return fmt.Errorf("creating app: %w", err)
 		}
 		slug = app.Slug
+		isNewApp = true
 	}
 
-	// 6. Build remote URL with slug (token as password for Basic Auth)
-	remoteURL := fmt.Sprintf("https://x:%s@%s/%s.git", token, gitHost, slug)
+	// 6. Build remote URL with slug (token as username for Basic Auth)
+	remoteURL := fmt.Sprintf("https://%s:x@%s/%s.git", token, gitHost, slug)
 
 	// 7. Setup/update hatch remote
 	if deps.HasRemote("hatch") {
@@ -236,26 +224,24 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 
 	// 9. Trigger build/restart on the control plane
 	ui.Info("Triggering build...")
-	client := deps.NewAPIClient(token)
-	if hatchConfig != nil {
-		// Existing app: just restart to trigger rebuild
+	if !isNewApp {
+		// Existing app: trigger restart to rebuild
 		if err := client.RestartApp(slug); err != nil {
 			return fmt.Errorf("triggering rebuild: %w", err)
 		}
-	} else {
-		// New app: config was already created during app creation
-		// Nothing extra needed
 	}
+	// For new apps, the build is triggered automatically by the git handler
 
-	// 10. Show success with hosted subdomain URL
+	// 10. Show success message
+	appURL := parseAppURL(output)
 	fmt.Println()
-	if hatchConfig != nil {
+	if !isNewApp {
 		ui.Success("Updated existing app!")
 	} else {
 		ui.Success("Deployed to Hatch!")
 	}
 
-	// 10. Set custom domain if specified
+	// 11. Set custom domain if specified
 	if domainName != "" {
 		ui.Info(fmt.Sprintf("Configuring custom domain: %s", domainName))
 		domainClient := api.NewClient(token)
@@ -271,7 +257,11 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	ui.Info(fmt.Sprintf("App URL: https://%s.hosted.gethatch.eu", slug))
+	if appURL != "" {
+		ui.Info(fmt.Sprintf("App URL: %s", appURL))
+	} else {
+		ui.Info(fmt.Sprintf("App URL: https://%s.hosted.gethatch.eu", slug))
+	}
 	fmt.Println()
 	fmt.Println("Next steps:")
 	fmt.Println("  hatch info     - View app details")
@@ -279,6 +269,14 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	fmt.Println("  hatch open     - Open app in browser")
 
 	return nil
+}
+
+// parseAppURL extracts the app URL from git push output.
+var urlPattern = regexp.MustCompile(`https?://[^\s]+\.gethatch\.eu[^\s]*`)
+
+func parseAppURL(output string) string {
+	match := urlPattern.FindString(output)
+	return match
 }
 
 func getCwd() (string, error) {

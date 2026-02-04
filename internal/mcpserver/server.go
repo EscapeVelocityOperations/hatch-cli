@@ -95,8 +95,8 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	// Commit (ignore error if nothing to commit)
 	_ = runGit(dir, "commit", "-m", "Deploy via hatch")
 
-	// Set up hatch remote (token as password for Basic Auth)
-	remoteURL := fmt.Sprintf("https://x:%s@git.gethatch.eu/%s.git", token, name)
+	// Set up hatch remote (token as username for Basic Auth)
+	remoteURL := fmt.Sprintf("https://%s:x@git.gethatch.eu/%s.git", token, name)
 	if err := runGit(dir, "remote", "get-url", "hatch"); err != nil {
 		_ = runGit(dir, "remote", "add", "hatch", remoteURL)
 	} else {
@@ -115,7 +115,7 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		return mcp.NewToolResultError(fmt.Sprintf("Deploy failed: %s", output)), nil
 	}
 
-	appURL := fmt.Sprintf("https://%s.hosted.gethatch.eu", name)
+	appURL := fmt.Sprintf("https://%s.gethatch.eu", name)
 	return mcp.NewToolResultText(fmt.Sprintf("Deployed successfully!\nApp URL: %s\nApp name: %s", appURL, name)), nil
 }
 
@@ -352,7 +352,7 @@ func connectDomainHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 
 	cname := d.CNAME
 	if cname == "" {
-		cname = slug + ".hosted.gethatch.eu"
+		cname = slug + ".gethatch.eu"
 	}
 
 	result := fmt.Sprintf("Domain %s configured for %s.\nStatus: %s\n\nDNS Setup:\nAdd a CNAME record pointing %s to %s",

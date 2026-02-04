@@ -80,7 +80,7 @@ func runList(cmd *cobra.Command, args []string) error {
 	for _, a := range appList {
 		url := a.URL
 		if url == "" {
-			url = "https://" + a.Slug + ".hosted.gethatch.eu"
+			url = "https://" + a.Slug + ".gethatch.eu"
 		}
 		table.AddRow(a.Slug, a.Name, statusColor(a.Status), url)
 	}
@@ -112,11 +112,7 @@ func runInfo(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  %s\n", ui.Bold(app.Name))
 	fmt.Printf("  %s %s\n", ui.Dim("Slug:"), app.Slug)
 	fmt.Printf("  %s %s\n", ui.Dim("Status:"), statusColor(app.Status))
-	url := app.URL
-	if url == "" {
-		url = "https://" + app.Slug + ".hosted.gethatch.eu"
-	}
-	fmt.Printf("  %s %s\n", ui.Dim("URL:"), url)
+	fmt.Printf("  %s %s\n", ui.Dim("URL:"), app.URL)
 	fmt.Printf("  %s %s\n", ui.Dim("Region:"), app.Region)
 	fmt.Printf("  %s %s\n", ui.Dim("Created:"), app.CreatedAt.Format("2006-01-02 15:04:05"))
 	fmt.Printf("  %s %s\n", ui.Dim("Updated:"), app.UpdatedAt.Format("2006-01-02 15:04:05"))
