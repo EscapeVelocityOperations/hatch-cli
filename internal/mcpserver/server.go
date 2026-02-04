@@ -115,7 +115,7 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		return mcp.NewToolResultError(fmt.Sprintf("Deploy failed: %s", output)), nil
 	}
 
-	appURL := fmt.Sprintf("https://%s.gethatch.eu", name)
+	appURL := fmt.Sprintf("https://%s.hosted.gethatch.eu", name)
 	return mcp.NewToolResultText(fmt.Sprintf("Deployed successfully!\nApp URL: %s\nApp name: %s", appURL, name)), nil
 }
 
@@ -352,7 +352,7 @@ func connectDomainHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 
 	cname := d.CNAME
 	if cname == "" {
-		cname = slug + ".gethatch.eu"
+		cname = slug + ".hosted.gethatch.eu"
 	}
 
 	result := fmt.Sprintf("Domain %s configured for %s.\nStatus: %s\n\nDNS Setup:\nAdd a CNAME record pointing %s to %s",

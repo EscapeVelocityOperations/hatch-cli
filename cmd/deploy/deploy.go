@@ -2,10 +2,11 @@ package deploy
 
 import (
 	"fmt"
+	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 
+	"github.com/BurntSushi/toml"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/git"
@@ -17,9 +18,37 @@ const (
 	gitHost = "git.gethatch.eu"
 )
 
+// HatchConfig represents the .hatch.toml config file.
+type HatchConfig struct {
+	Slug      string `toml:"slug"`
+	Name      string `toml:"name"`
+	CreatedAt string `toml:"created_at"`
+}
+
+// readHatchConfig reads .hatch.toml from the local git repo if it exists.
+func readHatchConfig() (*HatchConfig, error) {
+	cmd := exec.Command("git", "show", "hatch:.hatch.toml")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, nil // Not an error, just doesn't exist
+	}
+
+	var config HatchConfig
+	if err := toml.Unmarshal(output, &config); err != nil {
+		return nil, fmt.Errorf("parsing .hatch.toml: %w", err)
+	}
+
+	if config.Slug == "" {
+		return nil, fmt.Errorf("invalid .hatch.toml: missing slug")
+	}
+
+	return &config, nil
+}
+
 // APIClient is the interface for the Hatch API.
 type APIClient interface {
 	CreateApp(name string) (*api.App, error)
+	RestartApp(slug string) error
 }
 
 // Deps holds injectable dependencies for testing.
@@ -46,6 +75,10 @@ type apiClientWrapper struct {
 
 func (w *apiClientWrapper) CreateApp(name string) (*api.App, error) {
 	return w.Client.CreateApp(name)
+}
+
+func (w *apiClientWrapper) RestartApp(slug string) error {
+	return w.Client.RestartApp(slug)
 }
 
 func defaultDeps() *Deps {
@@ -115,27 +148,45 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// 4. Determine app name
-	name := appName
-	if name == "" {
-		cwd, err := deps.GetCwd()
-		if err != nil {
-			return fmt.Errorf("getting current directory: %w", err)
-		}
-		name = filepath.Base(cwd)
+	// 4. Check for .hatch.toml config to identify existing app
+	ui.Info("Checking for .hatch.toml...")
+	var slug string
+	hatchConfig, err := readHatchConfig()
+	if err != nil {
+		return fmt.Errorf("reading .hatch.toml: %w", err)
 	}
 
-	// 5. Create app via API to get the slug
-	ui.Info("Creating app...")
-	client := deps.NewAPIClient(token)
-	app, err := client.CreateApp(name)
-	if err != nil {
-		return fmt.Errorf("creating app: %w", err)
+	if hatchConfig != nil {
+		// Found existing app config - use it
+		ui.Info(fmt.Sprintf("Found existing app: %s (%s)", hatchConfig.Slug, hatchConfig.Name))
+		slug = hatchConfig.Slug
+		if appName != "" && appName != hatchConfig.Name {
+			ui.Warn("App name in .hatch.toml differs from --name flag, using .hatch.toml")
+		}
+	} else {
+		// No config found - create new app
+		// 4. Determine app name
+		name := appName
+		if name == "" {
+			cwd, err := deps.GetCwd()
+			if err != nil {
+				return fmt.Errorf("getting current directory: %w", err)
+			}
+			name = filepath.Base(cwd)
+		}
+
+		// 5. Create app via API to get the slug
+		ui.Info("Creating new app...")
+		client := deps.NewAPIClient(token)
+		app, err := client.CreateApp(name)
+		if err != nil {
+			return fmt.Errorf("creating app: %w", err)
+		}
+		slug = app.Slug
 	}
-	slug := app.Slug
 
 	// 6. Build remote URL with slug (token as password for Basic Auth)
-	remoteURL := fmt.Sprintf("https://x:%s@%s/deploy/%s.git", token, gitHost, slug)
+	remoteURL := fmt.Sprintf("https://x:%s@%s/%s.git", token, gitHost, slug)
 
 	// 7. Setup/update hatch remote
 	if deps.HasRemote("hatch") {
@@ -157,7 +208,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	// Push current branch as main to hatch remote
 	pushRef := branch + ":main"
 
-	sp := ui.NewSpinner("Deploying to Hatch...")
+	sp := ui.NewSpinner("Pushing to Hatch...")
 	sp.Start()
 	output, pushErr := deps.Push("hatch", pushRef)
 	sp.Stop()
@@ -166,10 +217,26 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("push failed: %s", strings.TrimSpace(output))
 	}
 
-	// 9. Parse output for app URL and show success
-	appURL := parseAppURL(output)
+	// 9. Trigger build/restart on the control plane
+	ui.Info("Triggering build...")
+	client := deps.NewAPIClient(token)
+	if hatchConfig != nil {
+		// Existing app: just restart to trigger rebuild
+		if err := client.RestartApp(slug); err != nil {
+			return fmt.Errorf("triggering rebuild: %w", err)
+		}
+	} else {
+		// New app: config was already created during app creation
+		// Nothing extra needed
+	}
+
+	// 10. Show success with hosted subdomain URL
 	fmt.Println()
-	ui.Success("Deployed to Hatch!")
+	if hatchConfig != nil {
+		ui.Success("Updated existing app!")
+	} else {
+		ui.Success("Deployed to Hatch!")
+	}
 
 	// 10. Set custom domain if specified
 	if domainName != "" {
@@ -187,11 +254,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if appURL != "" {
-		ui.Info(fmt.Sprintf("App URL: %s", appURL))
-	} else {
-		ui.Info(fmt.Sprintf("App URL: https://%s.gethatch.eu", slug))
-	}
+	ui.Info(fmt.Sprintf("App URL: https://%s.hosted.gethatch.eu", slug))
 	fmt.Println()
 	fmt.Println("Next steps:")
 	fmt.Println("  hatch info     - View app details")
@@ -199,14 +262,6 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	fmt.Println("  hatch open     - Open app in browser")
 
 	return nil
-}
-
-// parseAppURL extracts the app URL from git push output.
-var urlPattern = regexp.MustCompile(`https?://[^\s]+\.gethatch\.eu[^\s]*`)
-
-func parseAppURL(output string) string {
-	match := urlPattern.FindString(output)
-	return match
 }
 
 func getCwd() (string, error) {

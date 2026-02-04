@@ -36,15 +36,19 @@ func defaultDeps() *Deps {
 
 var deps = defaultDeps()
 
+var yesFlag bool
+
 // NewCmd returns the restart command.
 func NewCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "restart [slug]",
 		Short: "Restart an application",
 		Long:  "Restart a Hatch application. Requires confirmation unless --yes is provided.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE:  runRestart,
 	}
+	cmd.Flags().BoolVarP(&yesFlag, "yes", "y", false, "Skip confirmation prompt")
+	return cmd
 }
 
 func runRestart(cmd *cobra.Command, args []string) error {
@@ -61,7 +65,7 @@ func runRestart(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if !deps.Confirm(fmt.Sprintf("Restart %s?", slug)) {
+	if !yesFlag && !deps.Confirm(fmt.Sprintf("Restart %s?", slug)) {
 		ui.Info("Cancelled.")
 		return nil
 	}

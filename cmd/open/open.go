@@ -54,7 +54,7 @@ func runOpen(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	appURL := fmt.Sprintf("https://%s.gethatch.eu", slug)
+	appURL := fmt.Sprintf("https://%s.hosted.gethatch.eu", slug)
 	ui.Info(fmt.Sprintf("Opening %s...", appURL))
 
 	if err := deps.OpenBrowser(appURL); err != nil {
