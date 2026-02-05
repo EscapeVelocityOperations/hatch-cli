@@ -8,8 +8,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -121,44 +124,55 @@ func (c *Client) CreateApp(name string) (*App, error) {
 	return &app, nil
 }
 
-// StreamLogs opens an SSE connection to stream app logs.
+// StreamLogs opens a WebSocket connection to stream app logs.
 // It calls the handler for each log line. The caller should cancel via context or close.
 // logType can be "" for runtime logs or "build" for build logs.
 func (c *Client) StreamLogs(slug string, tail int, follow bool, logType string, handler func(line string)) error {
-	path := fmt.Sprintf("/apps/%s/logs?tail=%d&follow=%t", slug, tail, follow)
+	// Build WebSocket URL from HTTP host
+	wsURL, err := url.Parse(c.host)
+	if err != nil {
+		return fmt.Errorf("parsing host: %w", err)
+	}
+	if wsURL.Scheme == "https" {
+		wsURL.Scheme = "wss"
+	} else {
+		wsURL.Scheme = "ws"
+	}
+	wsURL.Path = apiPath + fmt.Sprintf("/apps/%s/logs", slug)
+
+	query := url.Values{}
+	query.Set("lines", fmt.Sprintf("%d", tail))
+	query.Set("follow", fmt.Sprintf("%t", follow))
 	if logType != "" {
-		path += "&type=" + logType
+		query.Set("type", logType)
 	}
+	wsURL.RawQuery = query.Encode()
 
-	req, err := http.NewRequest("GET", c.host+path, nil)
+	// Connect with auth header
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+c.token)
+
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL.String(), header)
 	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Accept", "text/event-stream")
-
-	// Use a client without timeout for streaming
-	streamClient := &http.Client{}
-	resp, err := streamClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		data, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
-	}
-
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		line := scanner.Text()
-		// SSE format: "data: <payload>"
-		if data, ok := strings.CutPrefix(line, "data: "); ok {
-			handler(data)
+		if resp != nil && resp.StatusCode >= 400 {
+			data, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("API error %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
 		}
+		return fmt.Errorf("connecting to log stream: %w", err)
 	}
-	return scanner.Err()
+	defer conn.Close()
+
+	// Read messages until connection closes
+	for {
+		_, message, err := conn.ReadMessage()
+		if err != nil {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				return nil
+			}
+			return err
+		}
+		handler(string(message))
+	}
 }
 
 // GetEnvVars returns environment variables for an app.
