@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/analyze"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/apps"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/authcmd"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/db"
@@ -54,6 +55,7 @@ func init() {
 	}
 
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(analyze.NewCmd())
 	rootCmd.AddCommand(apps.NewCmd())
 	rootCmd.AddCommand(apps.NewInfoCmd())
 	rootCmd.AddCommand(authcmd.NewCmd())
