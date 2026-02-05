@@ -134,16 +134,18 @@ func createTarGz(dir string, analysis *analyze.Analysis) ([]byte, error) {
 			return err
 		}
 
-		// Skip node_modules in the output (they should be bundled)
 		rel, _ := filepath.Rel(dir, path)
-		if strings.Contains(rel, "node_modules") && !strings.HasPrefix(rel, ".output") {
-			if info.IsDir() {
-				return filepath.SkipDir
+
+		// Handle symlinks
+		link := ""
+		if info.Mode()&os.ModeSymlink != 0 {
+			link, err = os.Readlink(path)
+			if err != nil {
+				return err
 			}
-			return nil
 		}
 
-		header, err := tar.FileInfoHeader(info, "")
+		header, err := tar.FileInfoHeader(info, link)
 		if err != nil {
 			return err
 		}
@@ -157,7 +159,8 @@ func createTarGz(dir string, analysis *analyze.Analysis) ([]byte, error) {
 			return err
 		}
 
-		if !info.IsDir() {
+		// Only copy content for regular files (not dirs or symlinks)
+		if info.Mode().IsRegular() {
 			f, err := os.Open(path)
 			if err != nil {
 				return err
