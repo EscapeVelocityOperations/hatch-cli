@@ -12,7 +12,8 @@ import (
 
 // mockAPIClient implements the APIClient interface for testing.
 type mockAPIClient struct {
-	createAppFn func(name string) (*api.App, error)
+	createAppFn  func(name string) (*api.App, error)
+	restartAppFn func(slug string) error
 }
 
 func (m *mockAPIClient) CreateApp(name string) (*api.App, error) {
@@ -21,6 +22,13 @@ func (m *mockAPIClient) CreateApp(name string) (*api.App, error) {
 	}
 	// Default: return app with slug = name + "-abc1"
 	return &api.App{Slug: name + "-abc1", Name: name}, nil
+}
+
+func (m *mockAPIClient) RestartApp(slug string) error {
+	if m.restartAppFn != nil {
+		return m.restartAppFn(slug)
+	}
+	return nil
 }
 
 // newMockAPIClient returns a factory function that returns the mock.
@@ -163,7 +171,8 @@ func TestRunDeploy_AddsRemoteWhenMissing(t *testing.T) {
 		t.Fatalf("expected remote name 'hatch', got %q", addedRemote)
 	}
 	// URL now uses /deploy/ path and slug (name + "-abc1" from mock)
-	expected := "https://x:tok123@git.gethatch.eu/deploy/myapp-abc1.git"
+	// Token is username for Basic Auth (server reads username field)
+	expected := "https://tok123:x@git.gethatch.eu/deploy/myapp-abc1.git"
 	if addedURL != expected {
 		t.Fatalf("expected URL %q, got %q", expected, addedURL)
 	}
@@ -195,7 +204,8 @@ func TestRunDeploy_UpdatesExistingRemote(t *testing.T) {
 	})
 
 	// URL now uses /deploy/ path and slug (name + "-abc1" from mock)
-	expected := "https://x:tok123@git.gethatch.eu/deploy/myapp-abc1.git"
+	// Token is username for Basic Auth (server reads username field)
+	expected := "https://tok123:x@git.gethatch.eu/deploy/myapp-abc1.git"
 	if updatedURL != expected {
 		t.Fatalf("expected URL %q, got %q", expected, updatedURL)
 	}
@@ -265,7 +275,8 @@ func TestRunDeploy_CustomName(t *testing.T) {
 	})
 
 	// URL now uses /deploy/ path and slug (custom-app + "-abc1" from mock)
-	expected := "https://x:tok123@git.gethatch.eu/deploy/custom-app-abc1.git"
+	// Token is username for Basic Auth (server reads username field)
+	expected := "https://tok123:x@git.gethatch.eu/deploy/custom-app-abc1.git"
 	if addedURL != expected {
 		t.Fatalf("expected URL %q, got %q", expected, addedURL)
 	}

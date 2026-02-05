@@ -26,17 +26,35 @@ type HatchConfig struct {
 	CreatedAt string `toml:"created_at"`
 }
 
-// readHatchConfig reads .hatch.toml from the local git repo if it exists.
+// readHatchConfig reads .hatch.toml from the local filesystem or git HEAD if it exists.
 func readHatchConfig() (*HatchConfig, error) {
-	cmd := exec.Command("git", "show", "hatch:.hatch.toml")
-	output, err := cmd.Output()
+	var output []byte
+	var err error
+
+	// First, try to read from filesystem (handles uncommitted files)
+	output, err = exec.Command("cat", ".hatch.toml").Output()
 	if err != nil {
-		return nil, nil // Not an error, just doesn't exist
+		// Fall back to reading from git HEAD (committed but maybe not staged)
+		output, err = exec.Command("git", "show", "HEAD:.hatch.toml").Output()
+		if err != nil {
+			return nil, nil // Not an error, just doesn't exist
+		}
 	}
 
 	var config HatchConfig
 	if err := toml.Unmarshal(output, &config); err != nil {
 		return nil, fmt.Errorf("parsing .hatch.toml: %w", err)
+	}
+
+	// Support both [app] section format and flat format
+	if config.Slug == "" {
+		// Try parsing as [app] section
+		var appConfig struct {
+			App HatchConfig `toml:"app"`
+		}
+		if err := toml.Unmarshal(output, &appConfig); err == nil && appConfig.App.Slug != "" {
+			config = appConfig.App
+		}
 	}
 
 	if config.Slug == "" {
