@@ -124,16 +124,18 @@ var deps = defaultDeps()
 
 var appName string
 var domainName string
+var localBuild bool
 
 func NewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "deploy",
 		Short: "Deploy your application to Hatch",
-		Long:  "Deploy the current directory as a Hatch application. Initializes git if needed, commits changes, and pushes to the Hatch platform.",
+		Long:  "Deploy the current directory as a Hatch application. Use --local for faster builds that run locally.",
 		RunE:  runDeploy,
 	}
 	cmd.Flags().StringVarP(&appName, "name", "n", "", "custom app name (defaults to directory name)")
 	cmd.Flags().StringVarP(&domainName, "domain", "d", "", "custom domain (e.g. example.com)")
+	cmd.Flags().BoolVar(&localBuild, "local", false, "build locally and upload artifact (faster, no git push)")
 	return cmd
 }
 
@@ -145,6 +147,15 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 	if token == "" {
 		return fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
+	}
+
+	// Handle local build mode
+	if localBuild {
+		return RunLocalDeploy(LocalDeployConfig{
+			Token:   token,
+			AppName: appName,
+			Domain:  domainName,
+		})
 	}
 
 	// 2. Check/init git repo
