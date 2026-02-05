@@ -191,7 +191,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	}
 
 	// 6. Build remote URL with slug (token as username for Basic Auth)
-	remoteURL := fmt.Sprintf("https://%s:x@%s/%s.git", token, gitHost, slug)
+	remoteURL := fmt.Sprintf("https://%s:x@%s/deploy/%s.git", token, gitHost, slug)
 
 	// 7. Setup/update hatch remote
 	if deps.HasRemote("hatch") {
