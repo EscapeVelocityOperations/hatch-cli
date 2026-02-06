@@ -57,12 +57,22 @@ func NewServer() *server.MCPServer {
 	s.AddTool(getEnvTool(), getEnvHandler)
 	s.AddTool(getDatabaseURLTool(), getDatabaseURLHandler)
 
-	// Write operations (deploy_*, add_*, set_*)
+	// Write operations (deploy_*, add_*, set_*, delete_*, remove_*, restart_*)
 	s.AddTool(deployAppTool(), deployAppHandler)
 	s.AddTool(addDatabaseTool(), addDatabaseHandler)
 	s.AddTool(addStorageTool(), addStorageHandler)
 	s.AddTool(setEnvTool(), setEnvHandler)
+	s.AddTool(deleteEnvTool(), deleteEnvHandler)
 	s.AddTool(addDomainTool(), addDomainHandler)
+	s.AddTool(listDomainsTool(), listDomainsHandler)
+	s.AddTool(removeDomainTool(), removeDomainHandler)
+	s.AddTool(restartAppTool(), restartAppHandler)
+	s.AddTool(getBuildLogsTool(), getBuildLogsHandler)
+
+	// CRUD operations
+	s.AddTool(createAppTool(), createAppHandler)
+	s.AddTool(deleteAppTool(), deleteAppHandler)
+	s.AddTool(checkAuthTool(), checkAuthHandler)
 
 	// Resources
 	s.AddResource(
@@ -746,4 +756,296 @@ func getDatabaseURLHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	}
 
 	return mcp.NewToolResultError("No DATABASE_URL found. Add a database first with add_database."), nil
+}
+
+// --- restart_app ---
+
+func restartAppTool() mcp.Tool {
+	return mcp.NewTool("restart_app",
+		mcp.WithDescription("Restart an app. Use after changing environment variables."),
+		mcp.WithString("app",
+			mcp.Required(),
+			mcp.Description("App slug (name) to restart"),
+		),
+	)
+}
+
+func restartAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	slug, err := req.RequireString("app")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	if err := client.RestartApp(slug); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to restart app: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("App '%s' restarted successfully", slug)), nil
+}
+
+// --- delete_env ---
+
+func deleteEnvTool() mcp.Tool {
+	return mcp.NewTool("delete_env",
+		mcp.WithDescription("Remove an environment variable from an app"),
+		mcp.WithString("app",
+			mcp.Required(),
+			mcp.Description("App slug (name) to remove the variable from"),
+		),
+		mcp.WithString("key",
+			mcp.Required(),
+			mcp.Description("Environment variable name to remove"),
+		),
+	)
+}
+
+func deleteEnvHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	slug, err := req.RequireString("app")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	key, err := req.RequireString("key")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	if err := client.UnsetEnvVar(slug, key); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to remove env var: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("Environment variable '%s' removed from '%s'", key, slug)), nil
+}
+
+// --- list_domains ---
+
+func listDomainsTool() mcp.Tool {
+	return mcp.NewTool("list_domains",
+		mcp.WithDescription("List custom domains configured for an app"),
+		mcp.WithString("app",
+			mcp.Required(),
+			mcp.Description("App slug (name) to list domains for"),
+		),
+	)
+}
+
+func listDomainsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	slug, err := req.RequireString("app")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	domains, err := client.ListDomains(slug)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to list domains: %v", err)), nil
+	}
+
+	if len(domains) == 0 {
+		return mcp.NewToolResultText("No custom domains configured."), nil
+	}
+
+	data, _ := json.MarshalIndent(domains, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// --- remove_domain ---
+
+func removeDomainTool() mcp.Tool {
+	return mcp.NewTool("remove_domain",
+		mcp.WithDescription("Remove a custom domain from an app"),
+		mcp.WithString("app",
+			mcp.Required(),
+			mcp.Description("App slug (name) to remove the domain from"),
+		),
+		mcp.WithString("domain",
+			mcp.Required(),
+			mcp.Description("Custom domain name to remove"),
+		),
+	)
+}
+
+func removeDomainHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	slug, err := req.RequireString("app")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	domain, err := req.RequireString("domain")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	if err := client.RemoveDomain(slug, domain); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to remove domain: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("Domain '%s' removed from '%s'", domain, slug)), nil
+}
+
+// --- get_build_logs ---
+
+func getBuildLogsTool() mcp.Tool {
+	return mcp.NewTool("get_build_logs",
+		mcp.WithDescription("Get build logs for an app. Use to diagnose deploy failures."),
+		mcp.WithString("app",
+			mcp.Required(),
+			mcp.Description("App slug (name) to get build logs for"),
+		),
+		mcp.WithNumber("lines",
+			mcp.Description("Number of recent build log lines to return (default 100)"),
+		),
+	)
+}
+
+func getBuildLogsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	slug, err := req.RequireString("app")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	lines := int(req.GetFloat("lines", 100))
+	if lines <= 0 {
+		lines = 100
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	logLines, err := client.GetLogs(slug, lines, "build")
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to get build logs: %v", err)), nil
+	}
+
+	if len(logLines) == 0 {
+		return mcp.NewToolResultText("No build logs found"), nil
+	}
+
+	return mcp.NewToolResultText(strings.Join(logLines, "\n")), nil
+}
+
+// --- create_app ---
+
+func createAppTool() mcp.Tool {
+	return mcp.NewTool("create_app",
+		mcp.WithDescription("Create a new app without deploying. Returns the app slug and URL. Use when you need to configure env vars before first deploy."),
+		mcp.WithString("name",
+			mcp.Required(),
+			mcp.Description("App name"),
+		),
+	)
+}
+
+func createAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, err := req.RequireString("name")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	app, err := client.CreateApp(name)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to create app: %v", err)), nil
+	}
+
+	result := map[string]string{
+		"slug": app.Slug,
+		"name": app.Name,
+		"url":  fmt.Sprintf("https://%s.hosted.gethatch.eu", app.Slug),
+	}
+
+	data, _ := json.MarshalIndent(result, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// --- delete_app ---
+
+func deleteAppTool() mcp.Tool {
+	return mcp.NewTool("delete_app",
+		mcp.WithDescription("Permanently delete an app and all its resources. This action cannot be undone."),
+		mcp.WithString("app",
+			mcp.Required(),
+			mcp.Description("App slug to delete"),
+		),
+		mcp.WithBoolean("confirm",
+			mcp.Required(),
+			mcp.Description("Must be true to confirm deletion"),
+		),
+	)
+}
+
+func deleteAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	slug, err := req.RequireString("app")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	confirm := req.GetBool("confirm", false)
+	if !confirm {
+		return mcp.NewToolResultError("You must set confirm=true to delete an app"), nil
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	if err := client.DeleteApp(slug); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to delete app: %v", err)), nil
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("App '%s' has been permanently deleted", slug)), nil
+}
+
+// --- check_auth ---
+
+func checkAuthTool() mcp.Tool {
+	return mcp.NewTool("check_auth",
+		mcp.WithDescription("Check if authentication is configured. Use before other operations to verify credentials."),
+	)
+}
+
+func checkAuthHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	token, err := auth.GetToken()
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Error checking auth: %v", err)), nil
+	}
+
+	if token == "" {
+		return mcp.NewToolResultError("Not authenticated. Options: 1) Run 'hatch login' for browser OAuth, 2) Set HATCH_TOKEN environment variable, 3) Use --token flag"), nil
+	}
+
+	// Determine token source
+	var source string
+	if os.Getenv("HATCH_TOKEN") != "" {
+		source = "HATCH_TOKEN env"
+	} else {
+		// Check if it's from flag (we can't easily check this, so assume config file)
+		source = "config file"
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("Authenticated. Token source: %s", source)), nil
 }

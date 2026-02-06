@@ -1,18 +1,13 @@
 package deploy
 
 import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
+	"context"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 
-	"github.com/EscapeVelocityOperations/hatch-cli/cmd/analyze"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/deployer"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
 )
 
@@ -101,100 +96,84 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 	return nil
 }
 
-// allowedBuildCommands lists package managers and build tools we expect.
-var allowedBuildCommands = map[string]bool{
-	"npm": true, "npx": true, "pnpm": true, "yarn": true, "bun": true,
-	"make": true, "go": true, "cargo": true, "bundle": true,
-	"hugo": true, "jekyll": true,
+// apiClientAdapter adapts the deploy.APIClient interface to deployer.APIClient.
+type apiClientAdapter struct {
+	client APIClient
 }
 
-// isAllowedBuildCommand checks if the command is a known build tool.
-func isAllowedBuildCommand(cmd string) bool {
-	return allowedBuildCommands[cmd]
+func (a *apiClientAdapter) CreateApp(name string) (string, error) {
+	app, err := a.client.CreateApp(name)
+	if err != nil {
+		return "", err
+	}
+	return app.Slug, nil
+}
+
+func (a *apiClientAdapter) UploadArtifact(slug string, artifact []byte, framework, startCommand string) error {
+	return a.client.UploadArtifact(slug, artifact, framework, startCommand)
 }
 
 // RunLocalDeploy performs auto-mode: analyze, build, upload.
 func RunLocalDeploy(cfg LocalDeployConfig) error {
-	// 1. Analyze the project
-	ui.Info("Analyzing project...")
-	analysis, err := analyze.AnalyzeProject(".")
-	if err != nil {
-		return fmt.Errorf("analyzing project: %w", err)
-	}
+	// Create deployer with progress callback for UI updates
+	d := deployer.NewDeployer(
+		func() (string, error) { return cfg.Token, nil },
+		func(token string) deployer.APIClient {
+			return &apiClientAdapter{client: deps.NewAPIClient(token)}
+		},
+	)
 
-	if analysis.HasNativeModules {
-		ui.Warn("Project has native modules - local build may not work on different architecture")
-		ui.Info("Native modules: " + strings.Join(analysis.NativeModules, ", "))
-	}
-
-	ui.Info(fmt.Sprintf("Framework: %s", analysis.Framework))
-	ui.Info(fmt.Sprintf("Build command: %s", analysis.BuildCommand))
-	ui.Info(fmt.Sprintf("Output directory: %s", analysis.OutputDir))
-
-	// 2. Run the build command (skip for static sites)
-	buildCmd := strings.Fields(analysis.BuildCommand)
-	if len(buildCmd) == 0 {
-		ui.Info("Static site detected — no build step needed")
-	} else {
-		// Validate build command
-		if !isAllowedBuildCommand(buildCmd[0]) {
-			ui.Warn(fmt.Sprintf("Unusual build command: %s — verify your project configuration", buildCmd[0]))
+	// Set up progress callback to show UI updates
+	var currentSpinner *ui.Spinner
+	d.Progress = func(stage, message string) {
+		// Stop any running spinner
+		if currentSpinner != nil {
+			currentSpinner.Stop()
+			currentSpinner = nil
 		}
 
-		ui.Info("Building locally...")
-		cmd := exec.Command(buildCmd[0], buildCmd[1:]...)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		cmd.Env = append(os.Environ(), "NODE_ENV=production")
-
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("build failed: %w", err)
+		// Show info messages for most stages
+		if stage == "uploading" {
+			currentSpinner = ui.NewSpinner(message)
+			currentSpinner.Start()
+		} else {
+			ui.Info(message)
 		}
 	}
 
-	// 3. Determine output directory
-	outputDir := analysis.OutputDir
-	if cfg.OutputDir != "" {
-		outputDir = cfg.OutputDir
+	// Deploy using the deployer package
+	opts := deployer.DeployOptions{
+		Directory: ".",
+		Name:      cfg.AppName,
+		OutputDir: cfg.OutputDir,
 	}
 
-	if _, err := os.Stat(outputDir); os.IsNotExist(err) {
-		return fmt.Errorf("output directory %s does not exist after build", outputDir)
+	result, err := d.Deploy(context.Background(), opts)
+
+	// Stop spinner if still running
+	if currentSpinner != nil {
+		currentSpinner.Stop()
 	}
 
-	// 4. Resolve app
-	client := deps.NewAPIClient(cfg.Token)
-	slug, err := resolveApp(client, "", cfg.AppName, ".")
 	if err != nil {
 		return err
 	}
 
-	// 5. Create tar.gz of output directory
-	ui.Info("Creating artifact...")
-	artifact, err := createTarGz(outputDir)
-	if err != nil {
-		return fmt.Errorf("creating artifact: %w", err)
-	}
-
-	ui.Info(fmt.Sprintf("Artifact size: %.2f MB", float64(len(artifact))/1024/1024))
-
-	// 6. Upload artifact
-	sp := ui.NewSpinner("Uploading artifact...")
-	sp.Start()
-	err = client.UploadArtifact(slug, artifact, analysis.Framework, analysis.StartCommand)
-	sp.Stop()
-
-	if err != nil {
-		return fmt.Errorf("uploading artifact: %w", err)
+	// Show warnings for native modules
+	if result.Analysis.HasNativeModules {
+		ui.Warn("Project has native modules - local build may not work on different architecture")
+		if len(result.Analysis.NativeModules) > 0 {
+			ui.Info("Native modules: " + strings.Join(result.Analysis.NativeModules, ", "))
+		}
 	}
 
 	ui.Success("Deployed successfully!")
-	ui.Info(fmt.Sprintf("Nugget URL: https://%s.hosted.gethatch.eu", slug))
+	ui.Info(fmt.Sprintf("Nugget URL: %s", result.URL))
 
 	// Set custom domain if specified
 	if cfg.Domain != "" {
 		realClient := api.NewClient(cfg.Token)
-		configureDomain(realClient, slug, cfg.Domain)
+		configureDomain(realClient, result.Slug, cfg.Domain)
 	}
 
 	return nil
@@ -213,95 +192,4 @@ func configureDomain(client *api.Client, slug, domainName string) {
 			ui.Info(fmt.Sprintf("CNAME target: %s", domain.CNAME))
 		}
 	}
-}
-
-// createTarGz creates a tar.gz archive of the output directory.
-func createTarGz(dir string) ([]byte, error) {
-	var buf bytes.Buffer
-	gw := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gw)
-
-	absDir, err := filepath.Abs(dir)
-	if err != nil {
-		return nil, fmt.Errorf("resolving directory: %w", err)
-	}
-
-	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		rel, _ := filepath.Rel(dir, path)
-
-		// Handle symlinks
-		link := ""
-		if info.Mode()&os.ModeSymlink != 0 {
-			link, err = os.Readlink(path)
-			if err != nil {
-				return err
-			}
-
-			// Validate symlink doesn't escape output directory
-			target := link
-			if !filepath.IsAbs(target) {
-				target = filepath.Join(filepath.Dir(path), target)
-			}
-			target, err = filepath.Abs(target)
-			if err != nil {
-				return err
-			}
-
-			// Skip symlinks that point outside the output directory
-			if !strings.HasPrefix(target, absDir+string(filepath.Separator)) && target != absDir {
-				ui.Warn(fmt.Sprintf("Skipping symlink that escapes output directory: %s -> %s", rel, link))
-				return nil
-			}
-		}
-
-		header, err := tar.FileInfoHeader(info, link)
-		if err != nil {
-			return err
-		}
-
-		header.Name = rel
-		if info.IsDir() {
-			header.Name += "/"
-		}
-
-		if err := tw.WriteHeader(header); err != nil {
-			return err
-		}
-
-		// Only copy content for regular files (not dirs or symlinks)
-		if info.Mode().IsRegular() {
-			f, err := os.Open(path)
-			if err != nil {
-				return err
-			}
-			defer f.Close()
-			if _, err := io.Copy(tw, f); err != nil {
-				return err
-			}
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	if err := tw.Close(); err != nil {
-		return nil, err
-	}
-	if err := gw.Close(); err != nil {
-		return nil, err
-	}
-
-	// Check artifact size
-	if buf.Len() > 500*1024*1024 {
-		return nil, fmt.Errorf("artifact too large (%.0f MB, max 500 MB)", float64(buf.Len())/1024/1024)
-	}
-
-	return buf.Bytes(), nil
 }
