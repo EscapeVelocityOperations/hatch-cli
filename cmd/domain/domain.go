@@ -185,16 +185,18 @@ func runAdd(appSlug, domain string) error {
 		return fmt.Errorf("adding domain: %w", err)
 	}
 
+	cname := d.CNAME
+	if cname == "" {
+		cname = appSlug + ".hosted.gethatch.eu"
+	}
+
 	fmt.Println()
 	ui.Success(fmt.Sprintf("Domain '%s' added to '%s'", d.Domain, appSlug))
-	if d.CNAME != "" {
-		fmt.Printf("  %s Create a CNAME record pointing to: %s\n", ui.Dim("→"), ui.Bold(d.CNAME))
-		fmt.Printf("  %s SSL will be provisioned automatically once DNS propagates.\n", ui.Dim("→"))
-	}
-	if d.CNAME == "" {
-		fmt.Printf("  %s Create a CNAME record: %s → %s\n", ui.Dim("→"), ui.Bold(domain), ui.Bold(appSlug+".hosted.gethatch.eu"))
-		fmt.Printf("  %s SSL will be provisioned automatically once DNS propagates.\n", ui.Dim("→"))
-	}
+	fmt.Printf("  %s Create a CNAME record pointing to: %s\n", ui.Dim("→"), ui.Bold(cname))
+	fmt.Printf("  %s For apex domains, use ALIAS/ANAME if your provider supports it.\n", ui.Dim("→"))
+	fmt.Printf("  %s SSL will be provisioned automatically once DNS propagates.\n", ui.Dim("→"))
+	fmt.Println()
+	fmt.Printf("  %s Verify DNS with: %s\n", ui.Dim("→"), ui.Bold(fmt.Sprintf("dig +short CNAME %s", domain)))
 	fmt.Println()
 
 	return nil

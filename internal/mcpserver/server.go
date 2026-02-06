@@ -691,9 +691,22 @@ Add a CNAME record pointing %s to %s
   CNAME  @       %s
   CNAME  www     %s
 
-For apex domains, use ALIAS/ANAME if your provider supports it.
-SSL is provisioned automatically via Let's Encrypt once DNS propagates.`,
-		domain, slug, d.Status, domain, cname, cname, cname)
+For apex domains (e.g. example.com without www), CNAME records are not
+allowed by the DNS spec. Use ALIAS or ANAME if your provider supports it
+(Cloudflare, Route 53, DNSimple). Otherwise use a www subdomain.
+
+SSL is provisioned automatically via Let's Encrypt once DNS propagates.
+
+To verify DNS is configured correctly, run:
+  dig +short CNAME %s
+Expected: %s (or similar)
+Or for apex domains with A records:
+  dig +short A %s
+The A record should resolve to the Hatch server IP.
+
+Tell the user to configure DNS, then re-run the dig command to confirm.`,
+		domain, slug, d.Status, domain, cname, cname, cname,
+		domain, cname, domain)
 
 	return mcp.NewToolResultText(result), nil
 }
