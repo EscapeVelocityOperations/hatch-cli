@@ -16,26 +16,54 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-// NewServer creates the Hatch MCP server with all tools registered.
+// NewServer creates the Hatch MCP server with all tools and resources registered.
 func NewServer() *server.MCPServer {
 	s := server.NewMCPServer(
 		"hatch",
 		"1.0.0",
 		server.WithToolCapabilities(false),
+		server.WithResourceCapabilities(true, false),
 	)
 
-	s.AddTool(deployRequirementsTool(), deployRequirementsHandler)
+	// Read operations (get_*)
+	s.AddTool(getPlatformInfoTool(), getPlatformInfoHandler)
 	s.AddTool(analyzeProjectTool(), analyzeProjectHandler)
-	s.AddTool(uploadArtifactTool(), uploadArtifactHandler)
-	s.AddTool(addDatabaseTool(), addDatabaseHandler)
-	s.AddTool(addStorageTool(), addStorageHandler)
-	s.AddTool(viewLogsTool(), viewLogsHandler)
-	s.AddTool(checkStatusTool(), checkStatusHandler)
-	s.AddTool(setSecretTool(), setSecretHandler)
-	s.AddTool(connectDomainTool(), connectDomainHandler)
+	s.AddTool(listAppsTool(), listAppsHandler)
+	s.AddTool(getStatusTool(), getStatusHandler)
+	s.AddTool(getLogsTool(), getLogsHandler)
+	s.AddTool(getEnvTool(), getEnvHandler)
 	s.AddTool(getDatabaseURLTool(), getDatabaseURLHandler)
 
+	// Write operations (deploy_*, add_*, set_*)
+	s.AddTool(deployAppTool(), deployAppHandler)
+	s.AddTool(addDatabaseTool(), addDatabaseHandler)
+	s.AddTool(addStorageTool(), addStorageHandler)
+	s.AddTool(setEnvTool(), setEnvHandler)
+	s.AddTool(addDomainTool(), addDomainHandler)
+
+	// Resources
+	s.AddResource(
+		mcp.NewResource(
+			"hatch://skill",
+			"Hatch Platform Technical Reference",
+			mcp.WithResourceDescription("Deploy flow, runtime detection, environment variables, and common issues for the Hatch PaaS"),
+			mcp.WithMIMEType("text/markdown"),
+		),
+		skillResourceHandler,
+	)
+
 	return s
+}
+
+// skillResourceHandler returns the embedded SKILL.md content.
+func skillResourceHandler(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	return []mcp.ResourceContents{
+		mcp.TextResourceContents{
+			URI:      "hatch://skill",
+			MIMEType: "text/markdown",
+			Text:     SkillMD,
+		},
+	}, nil
 }
 
 // newClient creates an authenticated API client or returns an error result.
@@ -50,22 +78,22 @@ func newClient() (*api.Client, error) {
 	return api.NewClient(token), nil
 }
 
-// --- deploy_requirements ---
+// --- get_platform_info ---
 
 // FrameworkSpec describes platform requirements for a framework.
 type FrameworkSpec struct {
-	BaseImage          string `json:"base_image"`
-	NeedsStartCommand  bool   `json:"needs_start_command"`
+	BaseImage           string `json:"base_image"`
+	NeedsStartCommand   bool   `json:"needs_start_command"`
 	DefaultStartCommand string `json:"default_start_command,omitempty"`
-	ExtractionPath     string `json:"extraction_path,omitempty"`
-	Description        string `json:"description"`
+	ExtractionPath      string `json:"extraction_path,omitempty"`
+	Description         string `json:"description"`
 }
 
 // DeployRequirements is the platform contract returned to agents.
 type DeployRequirements struct {
-	Platform   PlatformSpec              `json:"platform"`
-	Artifact   ArtifactSpec              `json:"artifact"`
-	Frameworks map[string]FrameworkSpec   `json:"frameworks"`
+	Platform   PlatformSpec            `json:"platform"`
+	Artifact   ArtifactSpec            `json:"artifact"`
+	Frameworks map[string]FrameworkSpec `json:"frameworks"`
 }
 
 type PlatformSpec struct {
@@ -79,13 +107,13 @@ type ArtifactSpec struct {
 	Contents string `json:"contents"`
 }
 
-func deployRequirementsTool() mcp.Tool {
-	return mcp.NewTool("deploy_requirements",
+func getPlatformInfoTool() mcp.Tool {
+	return mcp.NewTool("get_platform_info",
 		mcp.WithDescription("Returns the platform contract: supported frameworks, artifact format, and deployment requirements. Call this first to understand what the platform needs before preparing a deployment."),
 	)
 }
 
-func deployRequirementsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func getPlatformInfoHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	reqs := DeployRequirements{
 		Platform: PlatformSpec{
 			Arch:              "linux/amd64",
@@ -113,32 +141,32 @@ func deployRequirementsHandler(ctx context.Context, req mcp.CallToolRequest) (*m
 				Description:       "Pre-built Hugo site",
 			},
 			"nuxt": {
-				BaseImage:          "node:20-alpine",
-				NeedsStartCommand:  true,
+				BaseImage:           "node:20-alpine",
+				NeedsStartCommand:   true,
 				DefaultStartCommand: "node .output/server/index.mjs",
-				ExtractionPath:     ".output",
-				Description:        "Nuxt 3 application (SSR or static)",
+				ExtractionPath:      ".output",
+				Description:         "Nuxt 3 application (SSR or static)",
 			},
 			"next": {
-				BaseImage:          "node:20-alpine",
-				NeedsStartCommand:  true,
+				BaseImage:           "node:20-alpine",
+				NeedsStartCommand:   true,
 				DefaultStartCommand: "pnpm start",
-				ExtractionPath:     ".next",
-				Description:        "Next.js application",
+				ExtractionPath:      ".next",
+				Description:         "Next.js application",
 			},
 			"node": {
-				BaseImage:          "node:20-alpine",
-				NeedsStartCommand:  true,
+				BaseImage:           "node:20-alpine",
+				NeedsStartCommand:   true,
 				DefaultStartCommand: "node index.js",
-				ExtractionPath:     ".",
-				Description:        "Generic Node.js application",
+				ExtractionPath:      ".",
+				Description:         "Generic Node.js application",
 			},
 			"express": {
-				BaseImage:          "node:20-alpine",
-				NeedsStartCommand:  true,
+				BaseImage:           "node:20-alpine",
+				NeedsStartCommand:   true,
 				DefaultStartCommand: "node index.js",
-				ExtractionPath:     ".",
-				Description:        "Express.js application",
+				ExtractionPath:      ".",
+				Description:         "Express.js application",
 			},
 		},
 	}
@@ -179,11 +207,38 @@ func analyzeProjectHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	return mcp.NewToolResultText(string(data)), nil
 }
 
-// --- upload_artifact ---
+// --- list_apps ---
 
-func uploadArtifactTool() mcp.Tool {
-	return mcp.NewTool("upload_artifact",
-		mcp.WithDescription("Upload a pre-built tar.gz artifact to deploy an application. The agent should have already prepared the artifact using deploy_requirements to understand the format. Creates a new app if no slug is provided and no .hatch.toml exists."),
+func listAppsTool() mcp.Tool {
+	return mcp.NewTool("list_apps",
+		mcp.WithDescription("List all your deployed apps with their slugs, status, and URLs."),
+	)
+}
+
+func listAppsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	client, err := newClient()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	apps, err := client.ListApps()
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to list apps: %v", err)), nil
+	}
+
+	if len(apps) == 0 {
+		return mcp.NewToolResultText("No apps found."), nil
+	}
+
+	data, _ := json.MarshalIndent(apps, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// --- deploy_app ---
+
+func deployAppTool() mcp.Tool {
+	return mcp.NewTool("deploy_app",
+		mcp.WithDescription("Upload a pre-built tar.gz artifact to deploy an application. The agent should have already prepared the artifact using get_platform_info to understand the format. Creates a new app if no slug is provided and no .hatch.toml exists."),
 		mcp.WithString("artifact_path",
 			mcp.Required(),
 			mcp.Description("Absolute path to the tar.gz artifact file"),
@@ -207,7 +262,7 @@ func uploadArtifactTool() mcp.Tool {
 	)
 }
 
-func uploadArtifactHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	artifactPath, err := req.RequireString("artifact_path")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -387,14 +442,14 @@ func addStorageHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 	return mcp.NewToolResultText(result), nil
 }
 
-// --- view_logs ---
+// --- get_logs ---
 
-func viewLogsTool() mcp.Tool {
-	return mcp.NewTool("view_logs",
-		mcp.WithDescription("View recent application logs."),
+func getLogsTool() mcp.Tool {
+	return mcp.NewTool("get_logs",
+		mcp.WithDescription("Get recent application logs."),
 		mcp.WithString("app",
 			mcp.Required(),
-			mcp.Description("App slug (name) to view logs for"),
+			mcp.Description("App slug (name) to get logs for"),
 		),
 		mcp.WithNumber("lines",
 			mcp.Description("Number of recent log lines to return (default 50)"),
@@ -402,7 +457,7 @@ func viewLogsTool() mcp.Tool {
 	)
 }
 
-func viewLogsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func getLogsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -430,10 +485,10 @@ func viewLogsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 	return mcp.NewToolResultText(strings.Join(logLines, "\n")), nil
 }
 
-// --- check_status ---
+// --- get_status ---
 
-func checkStatusTool() mcp.Tool {
-	return mcp.NewTool("check_status",
+func getStatusTool() mcp.Tool {
+	return mcp.NewTool("get_status",
 		mcp.WithDescription("Check if an app is running, its URL, and current status."),
 		mcp.WithString("app",
 			mcp.Required(),
@@ -442,7 +497,7 @@ func checkStatusTool() mcp.Tool {
 	)
 }
 
-func checkStatusHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func getStatusHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -466,14 +521,14 @@ func checkStatusHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Call
 	return mcp.NewToolResultText(result), nil
 }
 
-// --- set_secret ---
+// --- set_env ---
 
-func setSecretTool() mcp.Tool {
-	return mcp.NewTool("set_secret",
-		mcp.WithDescription("Set an environment variable (secret) on a deployed app."),
+func setEnvTool() mcp.Tool {
+	return mcp.NewTool("set_env",
+		mcp.WithDescription("Set an environment variable on a deployed app."),
 		mcp.WithString("app",
 			mcp.Required(),
-			mcp.Description("App slug (name) to set the secret on"),
+			mcp.Description("App slug (name) to set the variable on"),
 		),
 		mcp.WithString("key",
 			mcp.Required(),
@@ -486,7 +541,7 @@ func setSecretTool() mcp.Tool {
 	)
 }
 
-func setSecretHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func setEnvHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -506,20 +561,56 @@ func setSecretHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	}
 
 	if err := client.SetEnvVar(slug, key, value); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to set secret: %v", err)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to set env var: %v", err)), nil
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf("Set %s on %s.", key, slug)), nil
 }
 
-// --- connect_domain ---
+// --- get_env ---
 
-func connectDomainTool() mcp.Tool {
-	return mcp.NewTool("connect_domain",
-		mcp.WithDescription("Connect a custom domain to an app. Returns DNS instructions."),
+func getEnvTool() mcp.Tool {
+	return mcp.NewTool("get_env",
+		mcp.WithDescription("List all environment variables for an app."),
 		mcp.WithString("app",
 			mcp.Required(),
-			mcp.Description("App slug (name) to connect the domain to"),
+			mcp.Description("App slug (name) to list env vars for"),
+		),
+	)
+}
+
+func getEnvHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	slug, err := req.RequireString("app")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	vars, err := client.GetEnvVars(slug)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to get env vars: %v", err)), nil
+	}
+
+	if len(vars) == 0 {
+		return mcp.NewToolResultText("No environment variables set."), nil
+	}
+
+	data, _ := json.MarshalIndent(vars, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// --- add_domain ---
+
+func addDomainTool() mcp.Tool {
+	return mcp.NewTool("add_domain",
+		mcp.WithDescription("Add a custom domain to an app. Returns DNS instructions."),
+		mcp.WithString("app",
+			mcp.Required(),
+			mcp.Description("App slug (name) to add the domain to"),
 		),
 		mcp.WithString("domain",
 			mcp.Required(),
@@ -528,7 +619,7 @@ func connectDomainTool() mcp.Tool {
 	)
 }
 
-func connectDomainHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func addDomainHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -545,7 +636,7 @@ func connectDomainHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 
 	d, err := client.AddDomain(slug, domain)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to connect domain: %v", err)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to add domain: %v", err)), nil
 	}
 
 	cname := d.CNAME

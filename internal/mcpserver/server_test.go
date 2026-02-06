@@ -14,9 +14,9 @@ func TestNewServer(t *testing.T) {
 	}
 }
 
-func TestDeployRequirementsHandler(t *testing.T) {
+func TestGetPlatformInfoHandler(t *testing.T) {
 	req := mcp.CallToolRequest{}
-	result, err := deployRequirementsHandler(context.Background(), req)
+	result, err := getPlatformInfoHandler(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -53,11 +53,11 @@ func TestAnalyzeProjectHandler_NonexistentDirectory(t *testing.T) {
 	}
 }
 
-func TestUploadArtifactHandler_MissingParams(t *testing.T) {
+func TestDeployAppHandler_MissingParams(t *testing.T) {
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
-	result, err := uploadArtifactHandler(context.Background(), req)
+	result, err := deployAppHandler(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -66,11 +66,11 @@ func TestUploadArtifactHandler_MissingParams(t *testing.T) {
 	}
 }
 
-func TestCheckStatusHandler_MissingApp(t *testing.T) {
+func TestGetStatusHandler_MissingApp(t *testing.T) {
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
-	result, err := checkStatusHandler(context.Background(), req)
+	result, err := getStatusHandler(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -79,11 +79,11 @@ func TestCheckStatusHandler_MissingApp(t *testing.T) {
 	}
 }
 
-func TestSetSecretHandler_MissingParams(t *testing.T) {
+func TestSetEnvHandler_MissingParams(t *testing.T) {
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
-	result, err := setSecretHandler(context.Background(), req)
+	result, err := setEnvHandler(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -92,11 +92,11 @@ func TestSetSecretHandler_MissingParams(t *testing.T) {
 	}
 }
 
-func TestViewLogsHandler_MissingApp(t *testing.T) {
+func TestGetEnvHandler_MissingApp(t *testing.T) {
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
-	result, err := viewLogsHandler(context.Background(), req)
+	result, err := getEnvHandler(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -105,11 +105,24 @@ func TestViewLogsHandler_MissingApp(t *testing.T) {
 	}
 }
 
-func TestConnectDomainHandler_MissingParams(t *testing.T) {
+func TestGetLogsHandler_MissingApp(t *testing.T) {
 	req := mcp.CallToolRequest{}
 	req.Params.Arguments = map[string]interface{}{}
 
-	result, err := connectDomainHandler(context.Background(), req)
+	result, err := getLogsHandler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("expected error result for missing app")
+	}
+}
+
+func TestAddDomainHandler_MissingParams(t *testing.T) {
+	req := mcp.CallToolRequest{}
+	req.Params.Arguments = map[string]interface{}{}
+
+	result, err := addDomainHandler(context.Background(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -154,5 +167,26 @@ func TestAddStorageHandler_MissingApp(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Fatal("expected error result for missing app")
+	}
+}
+
+func TestSkillResourceHandler(t *testing.T) {
+	req := mcp.ReadResourceRequest{}
+	contents, err := skillResourceHandler(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(contents) != 1 {
+		t.Fatalf("expected 1 resource content, got %d", len(contents))
+	}
+	text, ok := contents[0].(mcp.TextResourceContents)
+	if !ok {
+		t.Fatal("expected TextResourceContents")
+	}
+	if text.URI != "hatch://skill" {
+		t.Fatalf("expected URI hatch://skill, got %s", text.URI)
+	}
+	if text.Text == "" {
+		t.Fatal("expected non-empty skill content")
 	}
 }
