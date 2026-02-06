@@ -101,6 +101,18 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 	return nil
 }
 
+// allowedBuildCommands lists package managers and build tools we expect.
+var allowedBuildCommands = map[string]bool{
+	"npm": true, "npx": true, "pnpm": true, "yarn": true, "bun": true,
+	"make": true, "go": true, "cargo": true, "bundle": true,
+	"hugo": true, "jekyll": true,
+}
+
+// isAllowedBuildCommand checks if the command is a known build tool.
+func isAllowedBuildCommand(cmd string) bool {
+	return allowedBuildCommands[cmd]
+}
+
 // RunLocalDeploy performs auto-mode: analyze, build, upload.
 func RunLocalDeploy(cfg LocalDeployConfig) error {
 	// 1. Analyze the project
@@ -124,6 +136,11 @@ func RunLocalDeploy(cfg LocalDeployConfig) error {
 	if len(buildCmd) == 0 {
 		ui.Info("Static site detected — no build step needed")
 	} else {
+		// Validate build command
+		if !isAllowedBuildCommand(buildCmd[0]) {
+			ui.Warn(fmt.Sprintf("Unusual build command: %s — verify your project configuration", buildCmd[0]))
+		}
+
 		ui.Info("Building locally...")
 		cmd := exec.Command(buildCmd[0], buildCmd[1:]...)
 		cmd.Stdout = os.Stdout
@@ -204,7 +221,12 @@ func createTarGz(dir string) ([]byte, error) {
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
 
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, fmt.Errorf("resolving directory: %w", err)
+	}
+
+	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -217,6 +239,22 @@ func createTarGz(dir string) ([]byte, error) {
 			link, err = os.Readlink(path)
 			if err != nil {
 				return err
+			}
+
+			// Validate symlink doesn't escape output directory
+			target := link
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(path), target)
+			}
+			target, err = filepath.Abs(target)
+			if err != nil {
+				return err
+			}
+
+			// Skip symlinks that point outside the output directory
+			if !strings.HasPrefix(target, absDir+string(filepath.Separator)) && target != absDir {
+				ui.Warn(fmt.Sprintf("Skipping symlink that escapes output directory: %s -> %s", rel, link))
+				return nil
 			}
 		}
 
@@ -258,6 +296,11 @@ func createTarGz(dir string) ([]byte, error) {
 	}
 	if err := gw.Close(); err != nil {
 		return nil, err
+	}
+
+	// Check artifact size
+	if buf.Len() > 500*1024*1024 {
+		return nil, fmt.Errorf("artifact too large (%.0f MB, max 500 MB)", float64(buf.Len())/1024/1024)
 	}
 
 	return buf.Bytes(), nil
