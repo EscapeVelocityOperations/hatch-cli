@@ -320,10 +320,20 @@ func (c *Client) UploadArtifact(slug string, artifact io.Reader, framework, star
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/gzip")
-	req.Header.Set("X-Framework", framework)
-	if startCommand != "" {
-		req.Header.Set("X-Start-Command", startCommand)
+
+	// hatch-api expects metadata as a single JSON header
+	metadata := struct {
+		Framework    string `json:"framework"`
+		StartCommand string `json:"startCommand"`
+	}{
+		Framework:    framework,
+		StartCommand: startCommand,
 	}
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return fmt.Errorf("marshaling metadata: %w", err)
+	}
+	req.Header.Set("X-Artifact-Metadata", string(metadataJSON))
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
