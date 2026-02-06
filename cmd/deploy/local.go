@@ -4,10 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
-	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,7 +16,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
 )
 
-// LocalDeployConfig holds configuration for local deployment.
+// LocalDeployConfig holds configuration for auto-mode deployment (analyze+build+upload).
 type LocalDeployConfig struct {
 	Token     string
 	AppName   string
@@ -26,7 +24,84 @@ type LocalDeployConfig struct {
 	OutputDir string // Override output directory
 }
 
-// RunLocalDeploy performs a local build and uploads the artifact.
+// ArtifactDeployConfig holds configuration for agent-mode deployment (pre-built artifact).
+type ArtifactDeployConfig struct {
+	Token        string
+	AppName      string
+	Domain       string
+	ArtifactPath string
+	Framework    string
+	StartCommand string
+	AppSlug      string // Explicit slug (optional, reads .hatch.toml if empty)
+	Directory    string // Project dir for .hatch.toml lookup
+}
+
+// validFrameworks lists accepted framework values.
+var validFrameworks = map[string]bool{
+	"static": true, "jekyll": true, "hugo": true,
+	"nuxt": true, "next": true, "node": true, "express": true,
+}
+
+// staticFrameworks don't need a start command.
+var staticFrameworks = map[string]bool{
+	"static": true, "jekyll": true, "hugo": true,
+}
+
+// RunArtifactDeploy deploys a pre-built artifact (agent mode).
+func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
+	// Validate framework
+	if cfg.Framework == "" {
+		return fmt.Errorf("--framework is required when using --artifact")
+	}
+	if !validFrameworks[cfg.Framework] {
+		return fmt.Errorf("unknown framework %q (valid: static, jekyll, hugo, nuxt, next, node, express)", cfg.Framework)
+	}
+
+	// Validate start command for non-static
+	if !staticFrameworks[cfg.Framework] && cfg.StartCommand == "" {
+		return fmt.Errorf("--start-command is required for framework %q", cfg.Framework)
+	}
+
+	// Read artifact
+	artifact, err := os.ReadFile(cfg.ArtifactPath)
+	if err != nil {
+		return fmt.Errorf("reading artifact: %w", err)
+	}
+	ui.Info(fmt.Sprintf("Artifact size: %.2f MB", float64(len(artifact))/1024/1024))
+
+	// Resolve app
+	client := deps.NewAPIClient(cfg.Token)
+	dir := cfg.Directory
+	if dir == "" {
+		dir = "."
+	}
+	slug, err := resolveApp(client, cfg.AppSlug, cfg.AppName, dir)
+	if err != nil {
+		return err
+	}
+
+	// Upload
+	sp := ui.NewSpinner("Uploading artifact...")
+	sp.Start()
+	err = client.UploadArtifact(slug, artifact, cfg.Framework, cfg.StartCommand)
+	sp.Stop()
+	if err != nil {
+		return fmt.Errorf("uploading artifact: %w", err)
+	}
+
+	ui.Success("Deployed successfully!")
+	ui.Info(fmt.Sprintf("App URL: https://%s.hosted.gethatch.eu", slug))
+
+	// Set custom domain if specified
+	if cfg.Domain != "" {
+		realClient := api.NewClient(cfg.Token)
+		configureDomain(realClient, slug, cfg.Domain)
+	}
+
+	return nil
+}
+
+// RunLocalDeploy performs auto-mode: analyze, build, upload.
 func RunLocalDeploy(cfg LocalDeployConfig) error {
 	// 1. Analyze the project
 	ui.Info("Analyzing project...")
@@ -44,20 +119,20 @@ func RunLocalDeploy(cfg LocalDeployConfig) error {
 	ui.Info(fmt.Sprintf("Build command: %s", analysis.BuildCommand))
 	ui.Info(fmt.Sprintf("Output directory: %s", analysis.OutputDir))
 
-	// 2. Run the build command
-	ui.Info("Building locally...")
+	// 2. Run the build command (skip for static sites)
 	buildCmd := strings.Fields(analysis.BuildCommand)
 	if len(buildCmd) == 0 {
-		return fmt.Errorf("no build command detected")
-	}
+		ui.Info("Static site detected — no build step needed")
+	} else {
+		ui.Info("Building locally...")
+		cmd := exec.Command(buildCmd[0], buildCmd[1:]...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Env = append(os.Environ(), "NODE_ENV=production")
 
-	cmd := exec.Command(buildCmd[0], buildCmd[1:]...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(), "NODE_ENV=production")
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("build failed: %w", err)
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("build failed: %w", err)
+		}
 	}
 
 	// 3. Determine output directory
@@ -70,41 +145,16 @@ func RunLocalDeploy(cfg LocalDeployConfig) error {
 		return fmt.Errorf("output directory %s does not exist after build", outputDir)
 	}
 
-	// 4. Check/create app
-	client := api.NewClient(cfg.Token)
-
-	var slug string
-	hatchConfig, err := readHatchConfig()
+	// 4. Resolve app
+	client := deps.NewAPIClient(cfg.Token)
+	slug, err := resolveApp(client, "", cfg.AppName, ".")
 	if err != nil {
-		return fmt.Errorf("reading .hatch.toml: %w", err)
-	}
-
-	if hatchConfig != nil {
-		slug = hatchConfig.Slug
-		ui.Info(fmt.Sprintf("Deploying to existing app: %s", slug))
-	} else {
-		// Create new app
-		name := cfg.AppName
-		if name == "" {
-			cwd, _ := os.Getwd()
-			name = filepath.Base(cwd)
-		}
-		ui.Info(fmt.Sprintf("Creating new app: %s", name))
-		app, err := client.CreateApp(name)
-		if err != nil {
-			return fmt.Errorf("creating app: %w", err)
-		}
-		slug = app.Slug
-		ui.Success(fmt.Sprintf("Created app: %s", slug))
-		// Persist app config for future deploys
-		if err := writeHatchConfig(slug, name); err != nil {
-			ui.Warn(fmt.Sprintf("Could not write .hatch.toml: %v", err))
-		}
+		return err
 	}
 
 	// 5. Create tar.gz of output directory
 	ui.Info("Creating artifact...")
-	artifact, err := createTarGz(outputDir, analysis)
+	artifact, err := createTarGz(outputDir)
 	if err != nil {
 		return fmt.Errorf("creating artifact: %w", err)
 	}
@@ -114,7 +164,7 @@ func RunLocalDeploy(cfg LocalDeployConfig) error {
 	// 6. Upload artifact
 	sp := ui.NewSpinner("Uploading artifact...")
 	sp.Start()
-	err = uploadArtifact(cfg.Token, slug, artifact, analysis)
+	err = client.UploadArtifact(slug, artifact, analysis.Framework, analysis.StartCommand)
 	sp.Stop()
 
 	if err != nil {
@@ -124,11 +174,32 @@ func RunLocalDeploy(cfg LocalDeployConfig) error {
 	ui.Success("Deployed successfully!")
 	ui.Info(fmt.Sprintf("App URL: https://%s.hosted.gethatch.eu", slug))
 
+	// Set custom domain if specified
+	if cfg.Domain != "" {
+		realClient := api.NewClient(cfg.Token)
+		configureDomain(realClient, slug, cfg.Domain)
+	}
+
 	return nil
 }
 
+// configureDomain adds a custom domain to an app.
+func configureDomain(client *api.Client, slug, domainName string) {
+	ui.Info(fmt.Sprintf("Configuring custom domain: %s", domainName))
+	domain, err := client.AddDomain(slug, domainName)
+	if err != nil {
+		ui.Warn(fmt.Sprintf("Domain configuration failed: %v", err))
+		ui.Info("You can configure it later with: hatch domain add " + domainName)
+	} else {
+		ui.Success(fmt.Sprintf("Domain %s configured", domainName))
+		if domain.CNAME != "" {
+			ui.Info(fmt.Sprintf("CNAME target: %s", domain.CNAME))
+		}
+	}
+}
+
 // createTarGz creates a tar.gz archive of the output directory.
-func createTarGz(dir string, analysis *analyze.Analysis) ([]byte, error) {
+func createTarGz(dir string) ([]byte, error) {
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
@@ -190,53 +261,4 @@ func createTarGz(dir string, analysis *analyze.Analysis) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
-}
-
-// ArtifactMetadata contains metadata about the uploaded artifact.
-type ArtifactMetadata struct {
-	Framework    string `json:"framework"`
-	BuildCommand string `json:"buildCommand"`
-	StartCommand string `json:"startCommand"`
-	OutputDir    string `json:"outputDir"`
-}
-
-// uploadArtifact uploads the artifact to the Hatch API.
-func uploadArtifact(token, slug string, artifact []byte, analysis *analyze.Analysis) error {
-	// Build multipart request with artifact and metadata
-	url := api.DefaultHost + "/v1/apps/" + slug + "/artifact"
-
-	metadata := ArtifactMetadata{
-		Framework:    analysis.Framework,
-		BuildCommand: analysis.BuildCommand,
-		StartCommand: analysis.StartCommand,
-		OutputDir:    analysis.OutputDir,
-	}
-
-	metadataJSON, err := json.Marshal(metadata)
-	if err != nil {
-		return err
-	}
-
-	// Create request with artifact body
-	req, err := http.NewRequest("POST", url, bytes.NewReader(artifact))
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/gzip")
-	req.Header.Set("X-Artifact-Metadata", string(metadataJSON))
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("upload failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-
-	return nil
 }

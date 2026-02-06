@@ -40,7 +40,8 @@ type Analysis struct {
 	HasNativeModules    bool     `json:"hasNativeModules"`
 	NativeModules       []string `json:"nativeModules"`
 	RecommendedStrategy string   `json:"recommendedStrategy"` // "local" or "remote"
-	Framework           string   `json:"framework"`           // "nuxt", "next", "node", "unknown"
+	Framework           string   `json:"framework"`           // "nuxt", "next", "node", "static", "jekyll", "hugo", "unknown"
+	IsStaticSite        bool     `json:"isStaticSite"`
 	BuildCommand        string   `json:"buildCommand"`
 	OutputDir           string   `json:"outputDir"`
 	StartCommand        string   `json:"startCommand"`
@@ -54,7 +55,7 @@ func NewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "analyze",
 		Short: "Analyze project for build strategy",
-		Long:  "Analyze the current directory to detect native modules and recommend local vs remote build strategy.",
+		Long:  "Analyze the current directory to detect framework, build command, output directory, and native modules.",
 		RunE:  runAnalyze,
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "output as JSON")
@@ -84,10 +85,12 @@ func runAnalyze(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Native modules:       %s\n", strings.Join(analysis.NativeModules, ", "))
 	}
 	fmt.Printf("Recommended strategy: %s\n", analysis.RecommendedStrategy)
-	if analysis.RecommendedStrategy == "local" {
-		fmt.Println("\n→ Use 'hatch deploy --local' for faster builds")
+	if analysis.IsStaticSite {
+		fmt.Println("\n→ Static site detected. Use 'hatch deploy' to upload directly.")
+	} else if analysis.RecommendedStrategy == "local" {
+		fmt.Println("\n→ Use 'hatch deploy' to build locally and upload")
 	} else {
-		fmt.Println("\n→ Use 'hatch deploy' (remote build required for native modules)")
+		fmt.Println("\n→ Has native modules — build may need matching architecture")
 	}
 
 	return nil
@@ -111,6 +114,9 @@ func AnalyzeProject(dir string) (*Analysis, error) {
 		if err := analyzeNodeProject(dir, analysis); err != nil {
 			return nil, err
 		}
+	} else {
+		// No package.json — check for static site
+		analyzeStaticSite(dir, analysis)
 	}
 
 	// Determine recommended strategy
@@ -257,6 +263,44 @@ func scanForNativeModules(nodeModulesDir string) []string {
 	})
 
 	return natives
+}
+
+// analyzeStaticSite detects static sites (HTML, Jekyll, Hugo, etc.)
+func analyzeStaticSite(dir string, analysis *Analysis) {
+	// Jekyll: _config.yml present
+	if _, err := os.Stat(filepath.Join(dir, "_config.yml")); err == nil {
+		analysis.Framework = "jekyll"
+		analysis.IsStaticSite = true
+		// If _site/ exists, it's a pre-built Jekyll site
+		if _, err := os.Stat(filepath.Join(dir, "_site")); err == nil {
+			analysis.OutputDir = "_site"
+		} else {
+			analysis.OutputDir = "."
+		}
+		return
+	}
+
+	// Hugo: config.toml or hugo.toml present
+	for _, cfg := range []string{"hugo.toml", "hugo.yaml", "config.toml"} {
+		if _, err := os.Stat(filepath.Join(dir, cfg)); err == nil {
+			analysis.Framework = "hugo"
+			analysis.IsStaticSite = true
+			if _, err := os.Stat(filepath.Join(dir, "public")); err == nil {
+				analysis.OutputDir = "public"
+			} else {
+				analysis.OutputDir = "."
+			}
+			return
+		}
+	}
+
+	// Generic static site: index.html in root
+	if _, err := os.Stat(filepath.Join(dir, "index.html")); err == nil {
+		analysis.Framework = "static"
+		analysis.IsStaticSite = true
+		analysis.OutputDir = "."
+		return
+	}
 }
 
 func extractModuleName(nodeModulesDir, path string) string {

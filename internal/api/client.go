@@ -311,6 +311,33 @@ func (c *Client) GetLogs(slug string, tail int, logType string) ([]string, error
 	return lines, scanner.Err()
 }
 
+// UploadArtifact uploads a pre-built tar.gz artifact for deployment.
+func (c *Client) UploadArtifact(slug string, artifact io.Reader, framework, startCommand string) error {
+	url := c.host + apiPath + "/apps/" + slug + "/artifact"
+	req, err := http.NewRequest("POST", url, artifact)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/gzip")
+	req.Header.Set("X-Framework", framework)
+	if startCommand != "" {
+		req.Header.Set("X-Start-Command", startCommand)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("upload failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	return nil
+}
+
 // ListKeys returns API keys for the authenticated user.
 func (c *Client) ListKeys() ([]APIKey, error) {
 	resp, err := c.do("GET", "/keys", nil)

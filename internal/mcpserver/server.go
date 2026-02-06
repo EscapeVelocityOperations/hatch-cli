@@ -1,13 +1,15 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/analyze"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -22,7 +24,9 @@ func NewServer() *server.MCPServer {
 		server.WithToolCapabilities(false),
 	)
 
-	s.AddTool(deployAppTool(), deployAppHandler)
+	s.AddTool(deployRequirementsTool(), deployRequirementsHandler)
+	s.AddTool(analyzeProjectTool(), analyzeProjectHandler)
+	s.AddTool(uploadArtifactTool(), uploadArtifactHandler)
 	s.AddTool(addDatabaseTool(), addDatabaseHandler)
 	s.AddTool(addStorageTool(), addStorageHandler)
 	s.AddTool(viewLogsTool(), viewLogsHandler)
@@ -46,77 +50,271 @@ func newClient() (*api.Client, error) {
 	return api.NewClient(token), nil
 }
 
-// --- deploy_app ---
+// --- deploy_requirements ---
 
-func deployAppTool() mcp.Tool {
-	return mcp.NewTool("deploy_app",
-		mcp.WithDescription("Deploy an application directory to Hatch. Initializes git if needed, commits changes, and pushes to Hatch. Returns the live URL."),
+// FrameworkSpec describes platform requirements for a framework.
+type FrameworkSpec struct {
+	BaseImage          string `json:"base_image"`
+	NeedsStartCommand  bool   `json:"needs_start_command"`
+	DefaultStartCommand string `json:"default_start_command,omitempty"`
+	ExtractionPath     string `json:"extraction_path,omitempty"`
+	Description        string `json:"description"`
+}
+
+// DeployRequirements is the platform contract returned to agents.
+type DeployRequirements struct {
+	Platform   PlatformSpec              `json:"platform"`
+	Artifact   ArtifactSpec              `json:"artifact"`
+	Frameworks map[string]FrameworkSpec   `json:"frameworks"`
+}
+
+type PlatformSpec struct {
+	Arch              string `json:"arch"`
+	Port              int    `json:"port"`
+	MaxArtifactSizeMB int    `json:"max_artifact_size_mb"`
+}
+
+type ArtifactSpec struct {
+	Format   string `json:"format"`
+	Contents string `json:"contents"`
+}
+
+func deployRequirementsTool() mcp.Tool {
+	return mcp.NewTool("deploy_requirements",
+		mcp.WithDescription("Returns the platform contract: supported frameworks, artifact format, and deployment requirements. Call this first to understand what the platform needs before preparing a deployment."),
+	)
+}
+
+func deployRequirementsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	reqs := DeployRequirements{
+		Platform: PlatformSpec{
+			Arch:              "linux/amd64",
+			Port:              8080,
+			MaxArtifactSizeMB: 500,
+		},
+		Artifact: ArtifactSpec{
+			Format:   "tar.gz",
+			Contents: "Output directory contents only, no wrapping folder",
+		},
+		Frameworks: map[string]FrameworkSpec{
+			"static": {
+				BaseImage:         "nginx:alpine",
+				NeedsStartCommand: false,
+				Description:       "Static HTML/CSS/JS served by nginx",
+			},
+			"jekyll": {
+				BaseImage:         "nginx:alpine",
+				NeedsStartCommand: false,
+				Description:       "Pre-built Jekyll site",
+			},
+			"hugo": {
+				BaseImage:         "nginx:alpine",
+				NeedsStartCommand: false,
+				Description:       "Pre-built Hugo site",
+			},
+			"nuxt": {
+				BaseImage:          "node:20-alpine",
+				NeedsStartCommand:  true,
+				DefaultStartCommand: "node .output/server/index.mjs",
+				ExtractionPath:     ".output",
+				Description:        "Nuxt 3 application (SSR or static)",
+			},
+			"next": {
+				BaseImage:          "node:20-alpine",
+				NeedsStartCommand:  true,
+				DefaultStartCommand: "pnpm start",
+				ExtractionPath:     ".next",
+				Description:        "Next.js application",
+			},
+			"node": {
+				BaseImage:          "node:20-alpine",
+				NeedsStartCommand:  true,
+				DefaultStartCommand: "node index.js",
+				ExtractionPath:     ".",
+				Description:        "Generic Node.js application",
+			},
+			"express": {
+				BaseImage:          "node:20-alpine",
+				NeedsStartCommand:  true,
+				DefaultStartCommand: "node index.js",
+				ExtractionPath:     ".",
+				Description:        "Express.js application",
+			},
+		},
+	}
+
+	data, _ := json.MarshalIndent(reqs, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// --- analyze_project ---
+
+func analyzeProjectTool() mcp.Tool {
+	return mcp.NewTool("analyze_project",
+		mcp.WithDescription("Analyze a project directory to detect framework, build command, output directory, and native modules. Use this to understand a project before deploying."),
 		mcp.WithString("directory",
 			mcp.Required(),
-			mcp.Description("Absolute path to the application directory to deploy"),
-		),
-		mcp.WithString("name",
-			mcp.Description("Custom app name (defaults to directory name)"),
+			mcp.Description("Absolute path to the project directory to analyze"),
 		),
 	)
 }
 
-func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func analyzeProjectHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	dir, err := req.RequireString("directory")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	name := req.GetString("name", "")
-	if name == "" {
-		name = filepath.Base(dir)
-	}
-
-	token, err := auth.GetToken()
-	if err != nil || token == "" {
-		return mcp.NewToolResultError("Not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token."), nil
-	}
-
-	// Ensure directory exists
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {
 		return mcp.NewToolResultError(fmt.Sprintf("Directory not found: %s", dir)), nil
 	}
 
-	// Initialize git if needed
-	if err := runGit(dir, "rev-parse", "--git-dir"); err != nil {
-		if err := runGit(dir, "init"); err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("git init failed: %v", err)), nil
+	analysis, err := analyze.AnalyzeProject(dir)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Analysis failed: %v", err)), nil
+	}
+
+	data, _ := json.MarshalIndent(analysis, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// --- upload_artifact ---
+
+func uploadArtifactTool() mcp.Tool {
+	return mcp.NewTool("upload_artifact",
+		mcp.WithDescription("Upload a pre-built tar.gz artifact to deploy an application. The agent should have already prepared the artifact using deploy_requirements to understand the format. Creates a new app if no slug is provided and no .hatch.toml exists."),
+		mcp.WithString("artifact_path",
+			mcp.Required(),
+			mcp.Description("Absolute path to the tar.gz artifact file"),
+		),
+		mcp.WithString("framework",
+			mcp.Required(),
+			mcp.Description("Framework type: static, jekyll, hugo, nuxt, next, node, or express"),
+		),
+		mcp.WithString("start_command",
+			mcp.Description("Start command for the app (required for non-static frameworks)"),
+		),
+		mcp.WithString("app",
+			mcp.Description("App slug to deploy to (reads .hatch.toml or creates new app if omitted)"),
+		),
+		mcp.WithString("name",
+			mcp.Description("Custom app name for new apps (defaults to directory name)"),
+		),
+		mcp.WithString("directory",
+			mcp.Description("Project directory for .hatch.toml lookup (defaults to cwd)"),
+		),
+	)
+}
+
+func uploadArtifactHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	artifactPath, err := req.RequireString("artifact_path")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	fw, err := req.RequireString("framework")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	startCmd := req.GetString("start_command", "")
+	appSlug := req.GetString("app", "")
+	name := req.GetString("name", "")
+	dir := req.GetString("directory", "")
+
+	// Validate framework
+	validFrameworks := map[string]bool{
+		"static": true, "jekyll": true, "hugo": true,
+		"nuxt": true, "next": true, "node": true, "express": true,
+	}
+	if !validFrameworks[fw] {
+		return mcp.NewToolResultError(fmt.Sprintf("Unknown framework %q. Valid: static, jekyll, hugo, nuxt, next, node, express", fw)), nil
+	}
+
+	// Validate start command for non-static
+	staticFrameworks := map[string]bool{"static": true, "jekyll": true, "hugo": true}
+	if !staticFrameworks[fw] && startCmd == "" {
+		return mcp.NewToolResultError(fmt.Sprintf("start_command is required for framework %q", fw)), nil
+	}
+
+	// Read artifact
+	artifact, err := os.ReadFile(artifactPath)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Cannot read artifact: %v", err)), nil
+	}
+
+	// Auth
+	client, err := newClient()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	// Resolve app slug
+	slug := appSlug
+	if slug == "" {
+		// Check .hatch.toml
+		tomlDir := dir
+		if tomlDir == "" {
+			tomlDir = "."
+		}
+		tomlPath := filepath.Join(tomlDir, ".hatch.toml")
+		if data, err := os.ReadFile(tomlPath); err == nil {
+			var cfg struct {
+				App struct {
+					Slug string `json:"slug" toml:"slug"`
+				} `json:"app" toml:"app"`
+			}
+			// Try [app] section format
+			if strings.Contains(string(data), "[app]") {
+				lines := strings.Split(string(data), "\n")
+				for _, line := range lines {
+					line = strings.TrimSpace(line)
+					if strings.HasPrefix(line, "slug") {
+						parts := strings.SplitN(line, "=", 2)
+						if len(parts) == 2 {
+							slug = strings.Trim(strings.TrimSpace(parts[1]), "\"")
+						}
+					}
+				}
+			}
+			_ = cfg // suppress unused
 		}
 	}
 
-	// Stage and commit any changes
-	_ = runGit(dir, "add", "-A")
-	// Commit (ignore error if nothing to commit)
-	_ = runGit(dir, "commit", "-m", "Deploy via hatch")
+	if slug == "" {
+		// Create new app
+		appName := name
+		if appName == "" {
+			if dir != "" {
+				appName = filepath.Base(dir)
+			} else {
+				cwd, _ := os.Getwd()
+				appName = filepath.Base(cwd)
+			}
+		}
 
-	// Set up hatch remote (token as username for Basic Auth)
-	remoteURL := fmt.Sprintf("https://%s:x@git.gethatch.eu/deploy/%s.git", token, name)
-	if err := runGit(dir, "remote", "get-url", "hatch"); err != nil {
-		_ = runGit(dir, "remote", "add", "hatch", remoteURL)
-	} else {
-		_ = runGit(dir, "remote", "set-url", "hatch", remoteURL)
+		app, err := client.CreateApp(appName)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to create app: %v", err)), nil
+		}
+		slug = app.Slug
+
+		// Write .hatch.toml for future deploys
+		if dir != "" {
+			tomlPath := filepath.Join(dir, ".hatch.toml")
+			content := fmt.Sprintf("[app]\nslug = %q\nname = %q\n", slug, appName)
+			_ = os.WriteFile(tomlPath, []byte(content), 0644)
+		}
 	}
 
-	// Get current branch
-	branch, err := gitOutput(dir, "branch", "--show-current")
-	if err != nil || branch == "" {
-		branch = "main"
+	// Upload
+	if err := client.UploadArtifact(slug, bytes.NewReader(artifact), fw, startCmd); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Upload failed: %v", err)), nil
 	}
 
-	// Push
-	output, err := gitOutput(dir, "push", "--force", "hatch", branch+":main")
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Deploy failed: %s", output)), nil
-	}
-
-	appURL := fmt.Sprintf("https://%s.gethatch.eu", name)
-	return mcp.NewToolResultText(fmt.Sprintf("Deployed successfully!\nApp URL: %s\nApp name: %s", appURL, name)), nil
+	appURL := fmt.Sprintf("https://%s.hosted.gethatch.eu", slug)
+	return mcp.NewToolResultText(fmt.Sprintf("Deployed successfully!\nApp: %s\nURL: %s\nFramework: %s", slug, appURL, fw)), nil
 }
 
 // --- add_database ---
@@ -396,21 +594,4 @@ func getDatabaseURLHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	}
 
 	return mcp.NewToolResultError("No DATABASE_URL found. Add a database first with add_database."), nil
-}
-
-// --- git helpers ---
-
-func runGit(dir string, args ...string) error {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	return cmd.Run()
-}
-
-func gitOutput(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	return strings.TrimSpace(string(out)), err
 }
