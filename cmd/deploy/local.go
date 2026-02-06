@@ -96,6 +96,10 @@ func RunLocalDeploy(cfg LocalDeployConfig) error {
 		}
 		slug = app.Slug
 		ui.Success(fmt.Sprintf("Created app: %s", slug))
+		// Persist app config for future deploys
+		if err := writeHatchConfig(slug, name); err != nil {
+			ui.Warn(fmt.Sprintf("Could not write .hatch.toml: %v", err))
+		}
 	}
 
 	// 5. Create tar.gz of output directory

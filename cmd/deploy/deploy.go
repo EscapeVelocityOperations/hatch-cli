@@ -2,10 +2,12 @@ package deploy
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
@@ -217,6 +219,11 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		}
 		slug = app.Slug
 		isNewApp = true
+		// Persist app config for future deploys
+		if err := writeHatchConfig(slug, name); err != nil {
+			ui.Warn(fmt.Sprintf("Could not write .hatch.toml: %v", err))
+		}
+		ui.Success(fmt.Sprintf("Created app: %s", slug))
 	}
 
 	// 6. Build remote URL with slug (token as username for Basic Auth)
@@ -310,4 +317,10 @@ func parseAppURL(output string) string {
 
 func getCwd() (string, error) {
 	return filepath.Abs(".")
+}
+
+// writeHatchConfig writes a .hatch.toml file to persist app identity across deploys.
+func writeHatchConfig(slug, name string) error {
+	content := fmt.Sprintf("[app]\nslug = %q\nname = %q\ncreated_at = %q\n", slug, name, time.Now().Format(time.RFC3339))
+	return os.WriteFile(".hatch.toml", []byte(content), 0644)
 }
