@@ -106,9 +106,11 @@ func (d *Deployer) Deploy(ctx context.Context, opts DeployOptions) (*DeployResul
 	if len(buildCmd) == 0 {
 		d.progress("building", "Static site detected — no build step needed")
 	} else {
-		// Validate build command
+		// Validate build command against allowlist.
+		// This is a security boundary: the build_command parameter comes from MCP tool
+		// input (potentially agent-controlled). Only known-safe build tools are permitted.
 		if d.AllowedBuildCommands != nil && !d.AllowedBuildCommands[buildCmd[0]] {
-			d.progress("building", fmt.Sprintf("Warning: unusual build command: %s", buildCmd[0]))
+			return nil, fmt.Errorf("build command %q is not in the allowed list (permitted: npm, npx, pnpm, yarn, bun, make, go, cargo, bundle, hugo, jekyll)", buildCmd[0])
 		}
 
 		d.progress("building", "Building locally...")

@@ -18,6 +18,24 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
+// Package-level functions for dependency injection (overridden in tests).
+var (
+	getTokenFunc = auth.GetToken
+	newAPIClient = func(token string) *api.Client { return api.NewClient(token) }
+)
+
+// redactError applies token redaction to error messages returned to the MCP client.
+func redactError(msg string) string {
+	return api.RedactToken(msg)
+}
+
+// toolError returns a consistent, redacted error result for MCP tool handlers.
+// All error messages should use the format "failed to {action}: {detail}".
+func toolError(format string, args ...interface{}) (*mcp.CallToolResult, error) {
+	msg := fmt.Sprintf(format, args...)
+	return mcp.NewToolResultError(redactError(msg)), nil
+}
+
 // validateProjectPath ensures directory paths are safe and not in restricted locations.
 func validateProjectPath(dir string) error {
 	abs, err := filepath.Abs(dir)
@@ -25,17 +43,29 @@ func validateProjectPath(dir string) error {
 		return fmt.Errorf("invalid path: %w", err)
 	}
 
-	// Block sensitive directories
-	blocked := []string{"/etc", "/root", "/var", "/usr", "/bin", "/sbin", "/sys", "/proc"}
-	for _, b := range blocked {
-		if strings.HasPrefix(abs, b) {
-			return fmt.Errorf("path %q is in a restricted directory", abs)
-		}
-	}
-
-	// Block path traversal attempts
+	// Block path traversal attempts (check raw input before resolution)
 	if strings.Contains(dir, "..") {
 		return fmt.Errorf("path traversal detected in %q", dir)
+	}
+
+	// Resolve symlinks to prevent blocklist bypass via symlinked paths.
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("resolving path: %w", err)
+		}
+		resolved = abs
+	}
+
+	// Block sensitive directories (check both the absolute and symlink-resolved paths)
+	blocked := []string{"/etc", "/root", "/var", "/usr", "/bin", "/sbin", "/sys", "/proc"}
+	for _, b := range blocked {
+		if strings.HasPrefix(resolved, b+"/") || resolved == b {
+			return fmt.Errorf("path %q resolves to restricted directory %q", dir, b)
+		}
+		if strings.HasPrefix(abs, b+"/") || abs == b {
+			return fmt.Errorf("path %q is in a restricted directory", abs)
+		}
 	}
 
 	return nil
@@ -105,16 +135,16 @@ func skillResourceHandler(ctx context.Context, req mcp.ReadResourceRequest) ([]m
 	}, nil
 }
 
-// newClient creates an authenticated API client or returns an error result.
+// newClient creates an authenticated API client or returns an error.
 func newClient() (*api.Client, error) {
-	token, err := auth.GetToken()
+	token, err := getTokenFunc()
 	if err != nil {
-		return nil, fmt.Errorf("reading auth token: %w", err)
+		return nil, fmt.Errorf("failed to read auth token: %w", err)
 	}
 	if token == "" {
-		return nil, fmt.Errorf("not logged in - run 'hatch login', set HATCH_TOKEN, or use --token")
+		return nil, fmt.Errorf("not authenticated - run 'hatch login', set HATCH_TOKEN, or use --token")
 	}
-	return api.NewClient(token), nil
+	return newAPIClient(token), nil
 }
 
 // --- get_platform_info ---
@@ -271,21 +301,21 @@ func analyzeProjectTool() mcp.Tool {
 func analyzeProjectHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	dir, err := req.RequireString("directory")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to analyze project: missing required parameter 'directory'")
 	}
 
 	if err := validateProjectPath(dir); err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to analyze project: %v", err)
 	}
 
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {
-		return mcp.NewToolResultError(fmt.Sprintf("Directory not found: %s", dir)), nil
+		return toolError("failed to analyze project: directory not found: %s", dir)
 	}
 
 	analysis, err := analyze.AnalyzeProject(dir)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Analysis failed: %v", err)), nil
+		return toolError("failed to analyze project: %v", err)
 	}
 
 	data, _ := json.MarshalIndent(analysis, "", "  ")
@@ -303,12 +333,12 @@ func listAppsTool() mcp.Tool {
 func listAppsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	client, err := newClient()
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to list apps: %v", err)
 	}
 
 	apps, err := client.ListApps()
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to list apps: %v", err)), nil
+		return toolError("failed to list apps: %v", err)
 	}
 
 	if len(apps) == 0 {
@@ -350,16 +380,16 @@ func deployAppTool() mcp.Tool {
 func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	artifactPath, err := req.RequireString("artifact_path")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to deploy app: missing required parameter 'artifact_path'")
 	}
 
 	if err := validateProjectPath(artifactPath); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Invalid artifact path: %v", err)), nil
+		return toolError("failed to deploy app: invalid artifact path: %v", err)
 	}
 
 	fw, err := req.RequireString("framework")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to deploy app: missing required parameter 'framework'")
 	}
 
 	startCmd := req.GetString("start_command", "")
@@ -369,7 +399,7 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 
 	if dir != "" {
 		if err := validateProjectPath(dir); err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Invalid directory: %v", err)), nil
+			return toolError("failed to deploy app: invalid directory: %v", err)
 		}
 	}
 
@@ -380,25 +410,25 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		"go": true, "python": true, "fastapi": true, "django": true, "flask": true, "rust": true,
 	}
 	if !validFrameworks[fw] {
-		return mcp.NewToolResultError(fmt.Sprintf("Unknown framework %q. Valid: static, jekyll, hugo, nuxt, next, node, express, go, python, fastapi, django, flask, rust", fw)), nil
+		return toolError("failed to deploy app: unknown framework %q", fw)
 	}
 
 	// Validate start command for non-static
 	staticFrameworks := map[string]bool{"static": true, "jekyll": true, "hugo": true}
 	if !staticFrameworks[fw] && startCmd == "" {
-		return mcp.NewToolResultError(fmt.Sprintf("start_command is required for framework %q", fw)), nil
+		return toolError("failed to deploy app: start_command is required for framework %q", fw)
 	}
 
 	// Read artifact
 	artifact, err := os.ReadFile(artifactPath)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Cannot read artifact: %v", err)), nil
+		return toolError("failed to deploy app: cannot read artifact: %v", err)
 	}
 
 	// Auth
 	client, err := newClient()
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to deploy app: %v", err)
 	}
 
 	// Resolve app slug
@@ -447,7 +477,7 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 
 		app, err := client.CreateApp(appName)
 		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to create app: %v", err)), nil
+			return toolError("failed to deploy app: %v", err)
 		}
 		slug = app.Slug
 
@@ -461,7 +491,7 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 
 	// Upload
 	if err := client.UploadArtifact(slug, bytes.NewReader(artifact), fw, startCmd); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Upload failed: %v", err)), nil
+		return toolError("failed to deploy app: upload failed: %v", err)
 	}
 
 	appURL := fmt.Sprintf("https://%s.hosted.gethatch.eu", slug)
@@ -483,17 +513,17 @@ func addDatabaseTool() mcp.Tool {
 func addDatabaseHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to add database: missing required parameter 'app'")
 	}
 
 	client, err := newClient()
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to add database: %v", err)
 	}
 
 	addon, err := client.AddAddon(slug, "postgresql")
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to add database: %v", err)), nil
+		return toolError("failed to add database: %v", err)
 	}
 
 	result := fmt.Sprintf("PostgreSQL database provisioned for %s.\nStatus: %s", slug, addon.Status)
@@ -518,17 +548,17 @@ func addStorageTool() mcp.Tool {
 func addStorageHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to add storage: missing required parameter 'app'")
 	}
 
 	client, err := newClient()
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to add storage: %v", err)
 	}
 
 	addon, err := client.AddAddon(slug, "s3")
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to add storage: %v", err)), nil
+		return toolError("failed to add storage: %v", err)
 	}
 
 	result := fmt.Sprintf("S3-compatible storage provisioned for %s.\nStatus: %s", slug, addon.Status)
@@ -556,7 +586,7 @@ func getLogsTool() mcp.Tool {
 func getLogsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to get logs: missing required parameter 'app'")
 	}
 
 	lines := int(req.GetFloat("lines", 50))
@@ -566,12 +596,12 @@ func getLogsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 
 	client, err := newClient()
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to get logs: %v", err)
 	}
 
 	logLines, err := client.GetLogs(slug, lines, "")
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to get logs: %v", err)), nil
+		return toolError("failed to get logs: %v", err)
 	}
 
 	if len(logLines) == 0 {
@@ -596,17 +626,17 @@ func getStatusTool() mcp.Tool {
 func getStatusHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to get app status: missing required parameter 'app'")
 	}
 
 	client, err := newClient()
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to get app status: %v", err)
 	}
 
 	app, err := client.GetApp(slug)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to get app status: %v", err)), nil
+		return toolError("failed to get app status: %v", err)
 	}
 
 	result := fmt.Sprintf("App: %s\nStatus: %s\nURL: %s\nRegion: %s\nCreated: %s\nUpdated: %s",
@@ -640,24 +670,24 @@ func setEnvTool() mcp.Tool {
 func setEnvHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to set env var: missing required parameter 'app'")
 	}
 	key, err := req.RequireString("key")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to set env var: missing required parameter 'key'")
 	}
 	value, err := req.RequireString("value")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to set env var: missing required parameter 'value'")
 	}
 
 	client, err := newClient()
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to set env var: %v", err)
 	}
 
 	if err := client.SetEnvVar(slug, key, value); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to set env var: %v", err)), nil
+		return toolError("failed to set env var: %v", err)
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf("Set %s on %s.", key, slug)), nil
@@ -678,17 +708,17 @@ func getEnvTool() mcp.Tool {
 func getEnvHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to get env vars: missing required parameter 'app'")
 	}
 
 	client, err := newClient()
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to get env vars: %v", err)
 	}
 
 	vars, err := client.GetEnvVars(slug)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to get env vars: %v", err)), nil
+		return toolError("failed to get env vars: %v", err)
 	}
 
 	if len(vars) == 0 {
@@ -718,21 +748,26 @@ func addDomainTool() mcp.Tool {
 func addDomainHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to add domain: missing required parameter 'app'")
 	}
 	domain, err := req.RequireString("domain")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to add domain: missing required parameter 'domain'")
+	}
+
+	// Validate domain format to reject path traversal and injection characters
+	if err := api.ValidateDomain(domain); err != nil {
+		return toolError("failed to add domain: %v", err)
 	}
 
 	client, err := newClient()
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to add domain: %v", err)
 	}
 
 	d, err := client.AddDomain(slug, domain)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to add domain: %v", err)), nil
+		return toolError("failed to add domain: %v", err)
 	}
 
 	cname := d.CNAME
@@ -785,17 +820,17 @@ func getDatabaseURLTool() mcp.Tool {
 func getDatabaseURLHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to get database url: missing required parameter 'app'")
 	}
 
 	client, err := newClient()
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to get database url: %v", err)
 	}
 
 	vars, err := client.GetEnvVars(slug)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to get env vars: %v", err)), nil
+		return toolError("failed to get database url: %v", err)
 	}
 
 	for _, v := range vars {
@@ -804,7 +839,7 @@ func getDatabaseURLHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		}
 	}
 
-	return mcp.NewToolResultError("No DATABASE_URL found. Add a database first with add_database."), nil
+	return toolError("failed to get database url: no DATABASE_URL found, add a database first with add_database")
 }
 
 // --- restart_app ---
@@ -822,16 +857,16 @@ func restartAppTool() mcp.Tool {
 func restartAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to restart app: missing required parameter 'app'")
 	}
 
 	client, err := newClient()
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to restart app: %v", err)
 	}
 
 	if err := client.RestartApp(slug); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to restart app: %v", err)), nil
+		return toolError("failed to restart app: %v", err)
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf("App '%s' restarted successfully", slug)), nil
@@ -856,20 +891,25 @@ func deleteEnvTool() mcp.Tool {
 func deleteEnvHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to delete env var: missing required parameter 'app'")
 	}
 	key, err := req.RequireString("key")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to delete env var: missing required parameter 'key'")
+	}
+
+	// Validate env key to prevent URL path injection
+	if err := api.ValidateEnvKey(key); err != nil {
+		return toolError("failed to delete env var: %v", err)
 	}
 
 	client, err := newClient()
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to delete env var: %v", err)
 	}
 
 	if err := client.UnsetEnvVar(slug, key); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to remove env var: %v", err)), nil
+		return toolError("failed to delete env var: %v", err)
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf("Environment variable '%s' removed from '%s'", key, slug)), nil
@@ -890,17 +930,17 @@ func listDomainsTool() mcp.Tool {
 func listDomainsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to list domains: missing required parameter 'app'")
 	}
 
 	client, err := newClient()
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to list domains: %v", err)
 	}
 
 	domains, err := client.ListDomains(slug)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to list domains: %v", err)), nil
+		return toolError("failed to list domains: %v", err)
 	}
 
 	if len(domains) == 0 {
@@ -930,20 +970,25 @@ func removeDomainTool() mcp.Tool {
 func removeDomainHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to remove domain: missing required parameter 'app'")
 	}
 	domain, err := req.RequireString("domain")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to remove domain: missing required parameter 'domain'")
+	}
+
+	// Validate domain to prevent URL path injection
+	if err := api.ValidateDomain(domain); err != nil {
+		return toolError("failed to remove domain: %v", err)
 	}
 
 	client, err := newClient()
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to remove domain: %v", err)
 	}
 
 	if err := client.RemoveDomain(slug, domain); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to remove domain: %v", err)), nil
+		return toolError("failed to remove domain: %v", err)
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf("Domain '%s' removed from '%s'", domain, slug)), nil
@@ -967,7 +1012,7 @@ func getBuildLogsTool() mcp.Tool {
 func getBuildLogsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to get build logs: missing required parameter 'app'")
 	}
 
 	lines := int(req.GetFloat("lines", 100))
@@ -977,16 +1022,16 @@ func getBuildLogsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 
 	client, err := newClient()
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to get build logs: %v", err)
 	}
 
 	logLines, err := client.GetLogs(slug, lines, "build")
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to get build logs: %v", err)), nil
+		return toolError("failed to get build logs: %v", err)
 	}
 
 	if len(logLines) == 0 {
-		return mcp.NewToolResultText("No build logs found"), nil
+		return mcp.NewToolResultText("No build logs found."), nil
 	}
 
 	return mcp.NewToolResultText(strings.Join(logLines, "\n")), nil
@@ -1007,17 +1052,17 @@ func createAppTool() mcp.Tool {
 func createAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	name, err := req.RequireString("name")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to create app: missing required parameter 'name'")
 	}
 
 	client, err := newClient()
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to create app: %v", err)
 	}
 
 	app, err := client.CreateApp(name)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to create app: %v", err)), nil
+		return toolError("failed to create app: %v", err)
 	}
 
 	result := map[string]string{
@@ -1049,21 +1094,21 @@ func deleteAppTool() mcp.Tool {
 func deleteAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to delete app: missing required parameter 'app'")
 	}
 
 	confirm := req.GetBool("confirm", false)
 	if !confirm {
-		return mcp.NewToolResultError("You must set confirm=true to delete an app"), nil
+		return toolError("failed to delete app: confirm must be set to true")
 	}
 
 	client, err := newClient()
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to delete app: %v", err)
 	}
 
 	if err := client.DeleteApp(slug); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to delete app: %v", err)), nil
+		return toolError("failed to delete app: %v", err)
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf("App '%s' has been permanently deleted", slug)), nil
@@ -1078,13 +1123,13 @@ func checkAuthTool() mcp.Tool {
 }
 
 func checkAuthHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	token, err := auth.GetToken()
+	token, err := getTokenFunc()
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Error checking auth: %v", err)), nil
+		return toolError("failed to check auth: %v", err)
 	}
 
 	if token == "" {
-		return mcp.NewToolResultError("Not authenticated. Options: 1) Run 'hatch login' for browser OAuth, 2) Set HATCH_TOKEN environment variable, 3) Use --token flag"), nil
+		return toolError("failed to check auth: not authenticated - run 'hatch login', set HATCH_TOKEN, or use --token")
 	}
 
 	// Determine token source
@@ -1092,7 +1137,6 @@ func checkAuthHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	if os.Getenv("HATCH_TOKEN") != "" {
 		source = "HATCH_TOKEN env"
 	} else {
-		// Check if it's from flag (we can't easily check this, so assume config file)
 		source = "config file"
 	}
 
@@ -1114,17 +1158,17 @@ func getAppDetailsTool() mcp.Tool {
 func getAppDetailsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to get app details: missing required parameter 'app'")
 	}
 
 	client, err := newClient()
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to get app details: %v", err)
 	}
 
 	app, err := client.GetApp(slug)
 	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to get app details: %v", err)), nil
+		return toolError("failed to get app details: %v", err)
 	}
 
 	data, _ := json.MarshalIndent(app, "", "  ")
@@ -1146,7 +1190,12 @@ func healthCheckTool() mcp.Tool {
 func healthCheckHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to health check: missing required parameter 'app'")
+	}
+
+	// Validate slug to prevent SSRF
+	if err := api.ValidateSlug(slug); err != nil {
+		return toolError("failed to health check: %v", err)
 	}
 
 	// Create a separate HTTP client with short timeout for health checks
@@ -1166,7 +1215,7 @@ func healthCheckHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Call
 	if err != nil {
 		result := map[string]interface{}{
 			"url":     url,
-			"error":   err.Error(),
+			"error":   redactError(err.Error()),
 			"healthy": false,
 		}
 		data, _ := json.MarshalIndent(result, "", "  ")
@@ -1200,27 +1249,27 @@ func bulkSetEnvTool() mcp.Tool {
 func bulkSetEnvHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	slug, err := req.RequireString("app")
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to bulk set env vars: missing required parameter 'app'")
 	}
 
 	args := req.GetArguments()
 	varsParam, ok := args["vars"]
 	if !ok {
-		return mcp.NewToolResultError("vars parameter is required"), nil
+		return toolError("failed to bulk set env vars: missing required parameter 'vars'")
 	}
 
 	varsMap, ok := varsParam.(map[string]interface{})
 	if !ok {
-		return mcp.NewToolResultError("vars must be an object with string values"), nil
+		return toolError("failed to bulk set env vars: 'vars' must be an object with string values")
 	}
 
 	if len(varsMap) == 0 {
-		return mcp.NewToolResultError("vars cannot be empty"), nil
+		return toolError("failed to bulk set env vars: 'vars' cannot be empty")
 	}
 
 	client, err := newClient()
 	if err != nil {
-		return mcp.NewToolResultError(err.Error()), nil
+		return toolError("failed to bulk set env vars: %v", err)
 	}
 
 	var successKeys []string
@@ -1251,11 +1300,11 @@ func bulkSetEnvHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 		if result.Len() > 0 {
 			result.WriteString("\n\nErrors:\n")
 		}
-		result.WriteString(strings.Join(errors, "\n"))
+		result.WriteString(redactError(strings.Join(errors, "\n")))
 	}
 
 	if len(successKeys) == 0 && len(errors) > 0 {
-		return mcp.NewToolResultError(result.String()), nil
+		return mcp.NewToolResultError(redactError(result.String())), nil
 	}
 
 	return mcp.NewToolResultText(result.String()), nil

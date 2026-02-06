@@ -24,6 +24,16 @@ const (
 
 var slugRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
+// envKeyRegex validates environment variable key names.
+// Allows standard POSIX env var names: start with letter or underscore,
+// followed by alphanumeric or underscore, max 256 chars.
+var envKeyRegex = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]{0,255}$`)
+
+// domainRegex validates domain names. Allows standard domain characters
+// (letters, digits, hyphens, dots) but rejects path separators, query
+// strings, and other URL-manipulation characters.
+var domainRegex = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9.-]{0,253}[a-zA-Z0-9])?$`)
+
 // validateSlug ensures slug values are safe for URL paths.
 func validateSlug(slug string) error {
 	if !slugRegex.MatchString(slug) {
@@ -32,8 +42,41 @@ func validateSlug(slug string) error {
 	return nil
 }
 
-// redactToken removes sensitive tokens from error messages.
-func redactToken(s string) string {
+// ValidateSlug is the exported version of validateSlug for use by MCP handlers.
+func ValidateSlug(slug string) error {
+	return validateSlug(slug)
+}
+
+// ValidateEnvKey ensures environment variable key names are safe for URL paths.
+// This is critical for UnsetEnvVar which places the key directly in the URL path.
+func ValidateEnvKey(key string) error {
+	if !envKeyRegex.MatchString(key) {
+		return fmt.Errorf("invalid env key %q: must match [a-zA-Z_][a-zA-Z0-9_]*, max 256 chars", key)
+	}
+	return nil
+}
+
+// ValidateDomain ensures domain names are safe for URL paths.
+// This is critical for RemoveDomain which places the domain directly in the URL path.
+func ValidateDomain(domain string) error {
+	if domain == "" {
+		return fmt.Errorf("domain cannot be empty")
+	}
+	if len(domain) > 255 {
+		return fmt.Errorf("domain too long (max 255 characters)")
+	}
+	if !domainRegex.MatchString(domain) {
+		return fmt.Errorf("invalid domain %q: must be a valid domain name (letters, digits, hyphens, dots only)", domain)
+	}
+	// Extra safety: reject any path-separator or URL-special characters
+	if strings.ContainsAny(domain, "/?#@:") {
+		return fmt.Errorf("invalid domain %q: contains URL-special characters", domain)
+	}
+	return nil
+}
+
+// RedactToken removes sensitive tokens from error messages.
+func RedactToken(s string) string {
 	re := regexp.MustCompile(`hatch_[a-zA-Z0-9_]+`)
 	return re.ReplaceAllString(s, "hatch_****")
 }
@@ -71,6 +114,13 @@ func NewClient(token string) *Client {
 	}
 }
 
+// NewTestClient creates an API client pointing to a custom host (for testing).
+func NewTestClient(token, host string) *Client {
+	c := NewClient(token)
+	c.host = host
+	return c
+}
+
 // do executes an HTTP request with Bearer auth and returns the response.
 func (c *Client) do(method, path string, body io.Reader) (*http.Response, error) {
 	url := c.host + apiPath + path
@@ -89,7 +139,7 @@ func (c *Client) do(method, path string, body io.Reader) (*http.Response, error)
 	if resp.StatusCode >= 400 {
 		defer resp.Body.Close()
 		data, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, redactToken(strings.TrimSpace(string(data))))
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, RedactToken(strings.TrimSpace(string(data))))
 	}
 	return resp, nil
 }
@@ -179,7 +229,7 @@ func (c *Client) StreamLogs(slug string, tail int, follow bool, logType string, 
 	if err != nil {
 		if resp != nil && resp.StatusCode >= 400 {
 			data, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("API error %d: %s", resp.StatusCode, redactToken(strings.TrimSpace(string(data))))
+			return fmt.Errorf("API error %d: %s", resp.StatusCode, RedactToken(strings.TrimSpace(string(data))))
 		}
 		return fmt.Errorf("connecting to log stream: %w", err)
 	}
@@ -233,6 +283,9 @@ func (c *Client) SetEnvVar(slug, key, value string) error {
 // UnsetEnvVar removes an environment variable from an app.
 func (c *Client) UnsetEnvVar(slug, key string) error {
 	if err := validateSlug(slug); err != nil {
+		return err
+	}
+	if err := ValidateEnvKey(key); err != nil {
 		return err
 	}
 	resp, err := c.do("DELETE", "/apps/"+slug+"/env/"+key, nil)
@@ -330,6 +383,9 @@ func (c *Client) RemoveDomain(slug, domain string) error {
 	if err := validateSlug(slug); err != nil {
 		return err
 	}
+	if err := ValidateDomain(domain); err != nil {
+		return err
+	}
 	resp, err := c.do("DELETE", "/apps/"+slug+"/domains/"+domain, nil)
 	if err != nil {
 		return err
@@ -399,7 +455,7 @@ func (c *Client) UploadArtifact(slug string, artifact io.Reader, framework, star
 
 	if resp.StatusCode >= 400 {
 		data, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("upload failed (%d): %s", resp.StatusCode, redactToken(strings.TrimSpace(string(data))))
+		return fmt.Errorf("upload failed (%d): %s", resp.StatusCode, RedactToken(strings.TrimSpace(string(data))))
 	}
 	return nil
 }
