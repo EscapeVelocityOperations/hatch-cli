@@ -13,6 +13,11 @@ import (
 )
 
 const (
+	// callbackPort is the fixed port for OAuth callback server.
+	// Note: This is a known limitation - if port 8765 is in use, login will fail.
+	// The port must be known before opening the browser since it's included in the
+	// OAuth redirect URL. A future enhancement could implement port fallback by
+	// adding a Port() method to the auth.Server interface.
 	callbackPort = 8765
 	authTimeout  = 5 * time.Minute
 	authBaseURL  = "https://gethatch.eu/cli-auth"

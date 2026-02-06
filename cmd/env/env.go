@@ -103,7 +103,20 @@ func runList(cmd *cobra.Command, args []string) error {
 
 	table := ui.NewTable(os.Stdout, "KEY", "VALUE")
 	for _, v := range vars {
-		table.AddRow(v.Key, v.Value)
+		// Mask sensitive values
+		displayValue := v.Value
+		sensitiveKeys := []string{"PASSWORD", "SECRET", "TOKEN", "KEY", "DSN", "DATABASE_URL", "API_KEY", "PRIVATE"}
+		for _, sk := range sensitiveKeys {
+			if strings.Contains(strings.ToUpper(v.Key), sk) {
+				if len(v.Value) > 8 {
+					displayValue = v.Value[:4] + "****" + v.Value[len(v.Value)-4:]
+				} else {
+					displayValue = "****"
+				}
+				break
+			}
+		}
+		table.AddRow(v.Key, displayValue)
 	}
 	table.Render()
 	return nil

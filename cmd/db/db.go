@@ -1,6 +1,7 @@
 package db
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -36,7 +37,11 @@ type Deps struct {
 }
 
 func defaultDeps() *Deps {
-	dialer := websocket.DefaultDialer
+	dialer := &websocket.Dialer{
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		},
+	}
 	return &Deps{
 		GetToken:     auth.GetToken,
 		HasRemote:    git.HasRemote,
@@ -100,6 +105,11 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("binding %s: %w", addr, err)
 	}
 	defer listener.Close()
+
+	// Warn if binding to non-loopback address
+	if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+		ui.Warn(fmt.Sprintf("Warning: binding to %s exposes the database proxy to the network. Use --host localhost for local-only access.", host))
+	}
 
 	ui.Info(fmt.Sprintf("Database proxy for %s listening on %s", ui.Bold(slug), ui.Bold(addr)))
 	ui.Info("Connect with: psql -h " + host + " -p " + fmt.Sprint(port))
