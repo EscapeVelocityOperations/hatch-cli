@@ -35,8 +35,8 @@ var deps = defaultDeps()
 func NewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "apps",
-		Short: "List your Hatch applications",
-		Long:  "Display a list of all applications deployed to the Hatch platform.",
+		Short: "List your Hatch nuggets",
+		Long:  "Display a list of all nuggets deployed to the Hatch platform.",
 		RunE:  runList,
 	}
 	return cmd
@@ -46,8 +46,8 @@ func NewCmd() *cobra.Command {
 func NewInfoCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "info [slug]",
-		Short: "Show details for an application",
-		Long:  "Display detailed information about a specific Hatch application.",
+		Short: "Show details for a nugget",
+		Long:  "Display detailed information about a specific Hatch nugget.",
 		Args:  cobra.ExactArgs(1),
 		RunE:  runInfo,
 	}
@@ -62,17 +62,17 @@ func runList(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
 	}
 
-	sp := ui.NewSpinner("Fetching apps...")
+	sp := ui.NewSpinner("Fetching nuggets...")
 	sp.Start()
 	appList, err := deps.ListApps(token)
 	sp.Stop()
 
 	if err != nil {
-		return fmt.Errorf("fetching apps: %w", err)
+		return fmt.Errorf("fetching nuggets: %w", err)
 	}
 
 	if len(appList) == 0 {
-		ui.Info("No apps found. Deploy one with 'hatch deploy'.")
+		ui.Info("No nuggets found. Deploy one with 'hatch deploy'.")
 		return nil
 	}
 
@@ -99,13 +99,13 @@ func runInfo(cmd *cobra.Command, args []string) error {
 
 	slug := args[0]
 
-	sp := ui.NewSpinner("Fetching app details...")
+	sp := ui.NewSpinner("Fetching nugget details...")
 	sp.Start()
 	app, err := deps.GetApp(token, slug)
 	sp.Stop()
 
 	if err != nil {
-		return fmt.Errorf("fetching app: %w", err)
+		return fmt.Errorf("fetching nugget: %w", err)
 	}
 
 	fmt.Println()

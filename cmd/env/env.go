@@ -48,15 +48,15 @@ func NewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "env",
 		Short: "Manage environment variables",
-		Long:  "List, set, and unset environment variables for a Hatch application.",
+		Long:  "List, set, and unset environment variables for a Hatch nugget.",
 		RunE:  runList,
 	}
-	cmd.PersistentFlags().StringVarP(&appSlug, "app", "a", "", "app slug (auto-detected from git remote if omitted)")
+	cmd.PersistentFlags().StringVarP(&appSlug, "app", "a", "", "nugget slug (auto-detected from git remote if omitted)")
 
 	setCmd := &cobra.Command{
 		Use:   "set KEY=VALUE [KEY=VALUE...]",
 		Short: "Set environment variables",
-		Long:  "Set one or more environment variables on a Hatch application. Values should be in KEY=VALUE format.",
+		Long:  "Set one or more environment variables on a Hatch nugget. Values should be in KEY=VALUE format.",
 		Args:  cobra.MinimumNArgs(1),
 		RunE:  runSet,
 	}
@@ -64,7 +64,7 @@ func NewCmd() *cobra.Command {
 	unsetCmd := &cobra.Command{
 		Use:   "unset KEY [KEY...]",
 		Short: "Remove environment variables",
-		Long:  "Remove one or more environment variables from a Hatch application.",
+		Long:  "Remove one or more environment variables from a Hatch nugget.",
 		Args:  cobra.MinimumNArgs(1),
 		RunE:  runUnset,
 	}
@@ -166,7 +166,7 @@ func resolveSlug() (string, error) {
 		return appSlug, nil
 	}
 	if !deps.HasRemote("hatch") {
-		return "", fmt.Errorf("no app specified and no hatch git remote found. Use --app <slug>")
+		return "", fmt.Errorf("no nugget specified and no hatch git remote found. Use --app <slug>")
 	}
 	url, err := deps.GetRemoteURL("hatch")
 	if err != nil {

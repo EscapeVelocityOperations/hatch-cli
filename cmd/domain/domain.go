@@ -39,17 +39,17 @@ var deps = defaultDeps()
 func NewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "domain",
-		Short: "Manage custom domains for your applications",
-		Long: `Add, list, and remove custom domains for Hatch applications.
+		Short: "Manage custom domains for your nuggets",
+		Long: `Add, list, and remove custom domains for Hatch nuggets.
 
 After adding a domain, configure your DNS provider with a CNAME record
-pointing to your app's hosted URL:
+pointing to your nugget's hosted URL:
 
   Type   Name   Value
   CNAME  @      <slug>.hosted.gethatch.eu
   CNAME  www    <slug>.hosted.gethatch.eu
 
-Replace <slug> with your app's slug (shown after "hatch domain add").
+Replace <slug> with your nugget's slug (shown after "hatch domain add").
 
 For apex domains (e.g. example.com), use an ALIAS or ANAME record if your
 DNS provider supports it. Otherwise, use a subdomain (www.example.com).
@@ -70,7 +70,7 @@ func newListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List custom domains",
-		Long: `List all custom domains for an application.
+		Long: `List all custom domains for a nugget.
 
 Example:
   hatch domain list --app my-app`,
@@ -79,7 +79,7 @@ Example:
 		},
 	}
 
-	cmd.Flags().StringVarP(&appSlug, "app", "a", "", "Application slug (required)")
+	cmd.Flags().StringVarP(&appSlug, "app", "a", "", "Nugget slug (required)")
 	cmd.MarkFlagRequired("app")
 
 	return cmd
@@ -91,7 +91,7 @@ func newAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add <domain>",
 		Short: "Add a custom domain",
-		Long: `Add a custom domain to an application.
+		Long: `Add a custom domain to a nugget.
 
 After adding the domain, create a CNAME record at your DNS provider:
 
@@ -108,7 +108,7 @@ Example:
 		},
 	}
 
-	cmd.Flags().StringVarP(&appSlug, "app", "a", "", "Application slug (required)")
+	cmd.Flags().StringVarP(&appSlug, "app", "a", "", "Nugget slug (required)")
 	cmd.MarkFlagRequired("app")
 
 	return cmd
@@ -120,7 +120,7 @@ func newRemoveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "remove <domain>",
 		Short: "Remove a custom domain",
-		Long: `Remove a custom domain from an application.
+		Long: `Remove a custom domain from a nugget.
 
 Example:
   hatch domain remove example.com --app my-app`,
@@ -130,7 +130,7 @@ Example:
 		},
 	}
 
-	cmd.Flags().StringVarP(&appSlug, "app", "a", "", "Application slug (required)")
+	cmd.Flags().StringVarP(&appSlug, "app", "a", "", "Nugget slug (required)")
 	cmd.MarkFlagRequired("app")
 
 	return cmd

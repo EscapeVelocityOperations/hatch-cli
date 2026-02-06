@@ -64,8 +64,8 @@ func NewCmd() *cobra.Command {
 func newConnectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "connect [slug]",
-		Short: "Open a local TCP proxy to your app's database",
-		Long: `Opens a WebSocket tunnel to your app's PostgreSQL database and starts a
+		Short: "Open a local TCP proxy to your nugget's database",
+		Long: `Opens a WebSocket tunnel to your nugget's PostgreSQL database and starts a
 local TCP listener. Connect with any PostgreSQL client:
 
   psql -h localhost -p 15432
@@ -209,7 +209,7 @@ func resolveSlug(args []string) (string, error) {
 		return args[0], nil
 	}
 	if !deps.HasRemote("hatch") {
-		return "", fmt.Errorf("no app specified and no hatch git remote found. Usage: hatch db connect <slug>")
+		return "", fmt.Errorf("no nugget specified and no hatch git remote found. Usage: hatch db connect <slug>")
 	}
 	url, err := deps.GetRemoteURL("hatch")
 	if err != nil {

@@ -41,8 +41,8 @@ var deps = defaultDeps()
 func NewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logs [slug]",
-		Short: "View application logs",
-		Long:  "Stream logs from a Hatch application. If no slug is provided, the app is detected from the current git remote.",
+		Short: "View nugget logs",
+		Long:  "Stream logs from a Hatch nugget. If no slug is provided, the nugget is detected from the current git remote.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE:  runLogs,
 	}
@@ -86,7 +86,7 @@ func resolveSlug(args []string) (string, error) {
 	}
 	// Auto-detect from git remote
 	if !deps.HasRemote("hatch") {
-		return "", fmt.Errorf("no app specified and no hatch git remote found. Usage: hatch logs <slug>")
+		return "", fmt.Errorf("no nugget specified and no hatch git remote found. Usage: hatch logs <slug>")
 	}
 	url, err := deps.GetRemoteURL("hatch")
 	if err != nil {

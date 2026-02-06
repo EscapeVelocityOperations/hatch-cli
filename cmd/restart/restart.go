@@ -40,8 +40,8 @@ var deps = defaultDeps()
 func NewCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "restart [slug]",
-		Short: "Restart an application",
-		Long:  "Restart a Hatch application. Requires confirmation unless --yes is provided.",
+		Short: "Restart a nugget",
+		Long:  "Restart a Hatch nugget. Requires confirmation unless --yes is provided.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE:  runRestart,
 	}
@@ -72,7 +72,7 @@ func runRestart(cmd *cobra.Command, args []string) error {
 	sp.Stop()
 
 	if err != nil {
-		return fmt.Errorf("restarting app: %w", err)
+		return fmt.Errorf("restarting nugget: %w", err)
 	}
 
 	ui.Success(fmt.Sprintf("Restarted %s", slug))
@@ -84,7 +84,7 @@ func resolveSlug(args []string) (string, error) {
 		return args[0], nil
 	}
 	if !deps.HasRemote("hatch") {
-		return "", fmt.Errorf("no app specified and no hatch git remote found. Usage: hatch restart <slug>")
+		return "", fmt.Errorf("no nugget specified and no hatch git remote found. Usage: hatch restart <slug>")
 	}
 	url, err := deps.GetRemoteURL("hatch")
 	if err != nil {

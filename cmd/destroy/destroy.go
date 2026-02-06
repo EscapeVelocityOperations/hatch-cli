@@ -40,8 +40,8 @@ var deps = defaultDeps()
 func NewCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "destroy [slug]",
-		Short: "Permanently delete an application",
-		Long:  "Permanently delete a Hatch application. This action cannot be undone. Requires typing the app name to confirm.",
+		Short: "Permanently delete a nugget",
+		Long:  "Permanently delete a Hatch nugget. This action cannot be undone. Requires typing the nugget name to confirm.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE:  runDestroy,
 	}
@@ -70,7 +70,7 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("reading input: %w", err)
 	}
 	if strings.TrimSpace(answer) != slug {
-		ui.Info("Cancelled. App name did not match.")
+		ui.Info("Cancelled. Nugget name did not match.")
 		return nil
 	}
 
@@ -80,7 +80,7 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 	sp.Stop()
 
 	if err != nil {
-		return fmt.Errorf("deleting app: %w", err)
+		return fmt.Errorf("deleting nugget: %w", err)
 	}
 
 	ui.Success(fmt.Sprintf("Destroyed %s", slug))
@@ -92,7 +92,7 @@ func resolveSlug(args []string) (string, error) {
 		return args[0], nil
 	}
 	if !deps.HasRemote("hatch") {
-		return "", fmt.Errorf("no app specified and no hatch git remote found. Usage: hatch destroy <slug>")
+		return "", fmt.Errorf("no nugget specified and no hatch git remote found. Usage: hatch destroy <slug>")
 	}
 	url, err := deps.GetRemoteURL("hatch")
 	if err != nil {

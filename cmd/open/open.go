@@ -33,8 +33,8 @@ var deps = defaultDeps()
 func NewCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "open [slug]",
-		Short: "Open application in browser",
-		Long:  "Open the Hatch application URL in your default browser. If no slug is provided, the app is detected from the current git remote.",
+		Short: "Open nugget in browser",
+		Long:  "Open the Hatch nugget URL in your default browser. If no slug is provided, the nugget is detected from the current git remote.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE:  runOpen,
 	}
@@ -68,7 +68,7 @@ func resolveSlug(args []string) (string, error) {
 		return args[0], nil
 	}
 	if !deps.HasRemote("hatch") {
-		return "", fmt.Errorf("no app specified and no hatch git remote found. Usage: hatch open <slug>")
+		return "", fmt.Errorf("no nugget specified and no hatch git remote found. Usage: hatch open <slug>")
 	}
 	url, err := deps.GetRemoteURL("hatch")
 	if err != nil {
