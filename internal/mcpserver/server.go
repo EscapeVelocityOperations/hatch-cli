@@ -641,11 +641,22 @@ func addDomainHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 
 	cname := d.CNAME
 	if cname == "" {
-		cname = slug + ".gethatch.eu"
+		cname = slug + ".hosted.gethatch.eu"
 	}
 
-	result := fmt.Sprintf("Domain %s configured for %s.\nStatus: %s\n\nDNS Setup:\nAdd a CNAME record pointing %s to %s",
-		domain, slug, d.Status, domain, cname)
+	result := fmt.Sprintf(`Domain %s configured for %s.
+Status: %s
+
+DNS Setup:
+Add a CNAME record pointing %s to %s
+
+  Type   Name    Value
+  CNAME  @       %s
+  CNAME  www     %s
+
+For apex domains, use ALIAS/ANAME if your provider supports it.
+SSL is provisioned automatically via Let's Encrypt once DNS propagates.`,
+		domain, slug, d.Status, domain, cname, cname, cname)
 
 	return mcp.NewToolResultText(result), nil
 }

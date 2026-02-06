@@ -40,7 +40,21 @@ func NewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "domain",
 		Short: "Manage custom domains for your applications",
-		Long:  "Add, list, and remove custom domains for Hatch applications.",
+		Long: `Add, list, and remove custom domains for Hatch applications.
+
+After adding a domain, configure your DNS provider with a CNAME record
+pointing to your app's hosted URL:
+
+  Type   Name   Value
+  CNAME  @      <slug>.hosted.gethatch.eu
+  CNAME  www    <slug>.hosted.gethatch.eu
+
+Replace <slug> with your app's slug (shown after "hatch domain add").
+
+For apex domains (e.g. example.com), use an ALIAS or ANAME record if your
+DNS provider supports it. Otherwise, use a subdomain (www.example.com).
+
+SSL certificates are provisioned automatically via Let's Encrypt.`,
 	}
 
 	cmd.AddCommand(newListCmd())
@@ -56,7 +70,10 @@ func newListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List custom domains",
-		Long:  "List all custom domains for an application.",
+		Long: `List all custom domains for an application.
+
+Example:
+  hatch domain list --app my-app`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runList(appSlug)
 		},
@@ -74,7 +91,17 @@ func newAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add <domain>",
 		Short: "Add a custom domain",
-		Long:  "Add a custom domain to an application.",
+		Long: `Add a custom domain to an application.
+
+After adding the domain, create a CNAME record at your DNS provider:
+
+  CNAME  your-domain.com  →  <slug>.hosted.gethatch.eu
+
+SSL is provisioned automatically once DNS propagates (usually a few minutes).
+
+Example:
+  hatch domain add example.com --app my-app
+  hatch domain add www.example.com --app my-app`,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAdd(appSlug, args[0])
@@ -93,7 +120,10 @@ func newRemoveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "remove <domain>",
 		Short: "Remove a custom domain",
-		Long:  "Remove a custom domain from an application.",
+		Long: `Remove a custom domain from an application.
+
+Example:
+  hatch domain remove example.com --app my-app`,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runRemove(appSlug, args[0])
@@ -159,6 +189,11 @@ func runAdd(appSlug, domain string) error {
 	ui.Success(fmt.Sprintf("Domain '%s' added to '%s'", d.Domain, appSlug))
 	if d.CNAME != "" {
 		fmt.Printf("  %s Create a CNAME record pointing to: %s\n", ui.Dim("→"), ui.Bold(d.CNAME))
+		fmt.Printf("  %s SSL will be provisioned automatically once DNS propagates.\n", ui.Dim("→"))
+	}
+	if d.CNAME == "" {
+		fmt.Printf("  %s Create a CNAME record: %s → %s\n", ui.Dim("→"), ui.Bold(domain), ui.Bold(appSlug+".hosted.gethatch.eu"))
+		fmt.Printf("  %s SSL will be provisioned automatically once DNS propagates.\n", ui.Dim("→"))
 	}
 	fmt.Println()
 
