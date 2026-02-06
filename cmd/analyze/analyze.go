@@ -108,14 +108,34 @@ func AnalyzeProject(dir string) (*Analysis, error) {
 		analysis.HasDockerfile = true
 	}
 
+	// Detection priority order:
+	// 1. Node.js frameworks (nuxt, next, express, node)
+	// 2. Go
+	// 3. Python
+	// 4. Rust
+	// 5. Static sites (jekyll, hugo, static)
+
 	// Check for package.json (Node.js project)
 	pkgPath := filepath.Join(dir, "package.json")
 	if _, err := os.Stat(pkgPath); err == nil {
 		if err := analyzeNodeProject(dir, analysis); err != nil {
 			return nil, err
 		}
+	} else if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+		// Go project
+		analyzeGoProject(dir, analysis)
+	} else if hasPythonProject(dir) {
+		// Python project
+		if err := analyzePythonProject(dir, analysis); err != nil {
+			return nil, err
+		}
+	} else if _, err := os.Stat(filepath.Join(dir, "Cargo.toml")); err == nil {
+		// Rust project
+		if err := analyzeRustProject(dir, analysis); err != nil {
+			return nil, err
+		}
 	} else {
-		// No package.json — check for static site
+		// No known project files — check for static site
 		analyzeStaticSite(dir, analysis)
 	}
 
@@ -321,4 +341,187 @@ func extractModuleName(nodeModulesDir, path string) string {
 		return parts[0] + "/" + parts[1]
 	}
 	return parts[0]
+}
+
+// analyzeGoProject detects Go projects.
+func analyzeGoProject(dir string, analysis *Analysis) {
+	analysis.Framework = "go"
+	analysis.BuildCommand = "go build -o app ."
+	analysis.OutputDir = "."
+	analysis.StartCommand = "./app"
+}
+
+// hasPythonProject checks if directory contains Python project markers.
+func hasPythonProject(dir string) bool {
+	markers := []string{"pyproject.toml", "requirements.txt", "Pipfile"}
+	for _, marker := range markers {
+		if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// analyzePythonProject detects Python framework and configuration.
+func analyzePythonProject(dir string, analysis *Analysis) error {
+	// Default Python settings
+	analysis.Framework = "python"
+	analysis.BuildCommand = "pip install -r requirements.txt"
+	analysis.OutputDir = "."
+	analysis.StartCommand = "python main.py"
+
+	// Detect framework from dependencies
+	deps := collectPythonDeps(dir)
+
+	if containsDep(deps, "fastapi") {
+		analysis.Framework = "fastapi"
+		analysis.StartCommand = "uvicorn main:app --host 0.0.0.0 --port 8080"
+	} else if containsDep(deps, "django") {
+		analysis.Framework = "django"
+		// Try to detect Django project name from manage.py
+		projectName := detectDjangoProject(dir)
+		if projectName != "" {
+			analysis.StartCommand = fmt.Sprintf("gunicorn %s.wsgi:application --bind 0.0.0.0:8080", projectName)
+		} else {
+			analysis.StartCommand = "gunicorn project.wsgi:application --bind 0.0.0.0:8080"
+		}
+	} else if containsDep(deps, "flask") {
+		analysis.Framework = "flask"
+		analysis.StartCommand = "gunicorn app:app --bind 0.0.0.0:8080"
+	}
+
+	// Adjust build command based on project type
+	if _, err := os.Stat(filepath.Join(dir, "pyproject.toml")); err == nil {
+		data, err := os.ReadFile(filepath.Join(dir, "pyproject.toml"))
+		if err == nil && (strings.Contains(string(data), "[tool.poetry]") || strings.Contains(string(data), "[build-system]")) {
+			analysis.BuildCommand = "pip install ."
+		}
+	}
+
+	return nil
+}
+
+// collectPythonDeps extracts dependency names from Python project files.
+func collectPythonDeps(dir string) []string {
+	var deps []string
+
+	// Check requirements.txt
+	if data, err := os.ReadFile(filepath.Join(dir, "requirements.txt")); err == nil {
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			// Extract package name (before ==, >=, etc.)
+			parts := strings.FieldsFunc(line, func(r rune) bool {
+				return r == '=' || r == '<' || r == '>' || r == '~' || r == '!'
+			})
+			if len(parts) > 0 {
+				deps = append(deps, strings.ToLower(parts[0]))
+			}
+		}
+	}
+
+	// Check pyproject.toml
+	if data, err := os.ReadFile(filepath.Join(dir, "pyproject.toml")); err == nil {
+		content := string(data)
+		// Simple dependency extraction (not a full TOML parser)
+		if idx := strings.Index(content, "[tool.poetry.dependencies]"); idx != -1 {
+			section := content[idx:]
+			if endIdx := strings.Index(section[1:], "\n["); endIdx != -1 {
+				section = section[:endIdx+1]
+			}
+			lines := strings.Split(section, "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if strings.Contains(line, "=") && !strings.HasPrefix(line, "[") {
+					parts := strings.SplitN(line, "=", 2)
+					if len(parts) > 0 {
+						dep := strings.TrimSpace(parts[0])
+						deps = append(deps, strings.ToLower(dep))
+					}
+				}
+			}
+		}
+	}
+
+	return deps
+}
+
+// containsDep checks if a dependency is in the list (case-insensitive).
+func containsDep(deps []string, target string) bool {
+	target = strings.ToLower(target)
+	for _, dep := range deps {
+		if strings.ToLower(dep) == target {
+			return true
+		}
+	}
+	return false
+}
+
+// detectDjangoProject tries to find Django project name from manage.py or settings.py.
+func detectDjangoProject(dir string) string {
+	// Try to read manage.py
+	if data, err := os.ReadFile(filepath.Join(dir, "manage.py")); err == nil {
+		content := string(data)
+		// Look for DJANGO_SETTINGS_MODULE pattern
+		if idx := strings.Index(content, "DJANGO_SETTINGS_MODULE"); idx != -1 {
+			// Extract project name from pattern like "project.settings"
+			line := content[idx:]
+			if endIdx := strings.Index(line, "\n"); endIdx != -1 {
+				line = line[:endIdx]
+			}
+			// Find quoted string
+			if startIdx := strings.Index(line, `"`); startIdx != -1 {
+				line = line[startIdx+1:]
+				if endIdx := strings.Index(line, `"`); endIdx != -1 {
+					settingsModule := line[:endIdx]
+					// Extract project name (before .settings)
+					parts := strings.Split(settingsModule, ".")
+					if len(parts) > 0 {
+						return parts[0]
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// analyzeRustProject detects Rust projects.
+func analyzeRustProject(dir string, analysis *Analysis) error {
+	analysis.Framework = "rust"
+	analysis.BuildCommand = "cargo build --release"
+	analysis.OutputDir = "target/release"
+	analysis.StartCommand = "./app"
+
+	// Try to read Cargo.toml to get the binary name
+	if data, err := os.ReadFile(filepath.Join(dir, "Cargo.toml")); err == nil {
+		content := string(data)
+		// Look for [package] section and name field
+		if idx := strings.Index(content, "[package]"); idx != -1 {
+			section := content[idx:]
+			if endIdx := strings.Index(section[1:], "\n["); endIdx != -1 {
+				section = section[:endIdx+1]
+			}
+			lines := strings.Split(section, "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "name") && strings.Contains(line, "=") {
+					parts := strings.SplitN(line, "=", 2)
+					if len(parts) == 2 {
+						name := strings.TrimSpace(parts[1])
+						name = strings.Trim(name, `"'`)
+						if name != "" {
+							analysis.StartCommand = "./" + name
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return nil
 }

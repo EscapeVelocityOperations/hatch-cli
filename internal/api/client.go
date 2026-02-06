@@ -418,3 +418,22 @@ func (c *Client) ListKeys() ([]APIKey, error) {
 	}
 	return keys, nil
 }
+
+// GetAppStatus returns the raw JSON status response for an app.
+// This includes app info, last deployment status, and custom domains.
+func (c *Client) GetAppStatus(slug string) (json.RawMessage, error) {
+	if err := validateSlug(slug); err != nil {
+		return nil, err
+	}
+	resp, err := c.do("GET", "/apps/"+slug+"/status", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+	return json.RawMessage(data), nil
+}

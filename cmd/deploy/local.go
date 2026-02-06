@@ -35,6 +35,7 @@ type ArtifactDeployConfig struct {
 var validFrameworks = map[string]bool{
 	"static": true, "jekyll": true, "hugo": true,
 	"nuxt": true, "next": true, "node": true, "express": true,
+	"go": true, "python": true, "fastapi": true, "django": true, "flask": true, "rust": true,
 }
 
 // staticFrameworks don't need a start command.
@@ -49,7 +50,7 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 		return fmt.Errorf("--framework is required when using --artifact")
 	}
 	if !validFrameworks[cfg.Framework] {
-		return fmt.Errorf("unknown framework %q (valid: static, jekyll, hugo, nuxt, next, node, express)", cfg.Framework)
+		return fmt.Errorf("unknown framework %q (valid: static, jekyll, hugo, nuxt, next, node, express, go, python, fastapi, django, flask, rust)", cfg.Framework)
 	}
 
 	// Validate start command for non-static

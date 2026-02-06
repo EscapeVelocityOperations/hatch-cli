@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/analyze"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
@@ -56,12 +58,16 @@ func NewServer() *server.MCPServer {
 	s.AddTool(getLogsTool(), getLogsHandler)
 	s.AddTool(getEnvTool(), getEnvHandler)
 	s.AddTool(getDatabaseURLTool(), getDatabaseURLHandler)
+	s.AddTool(getAppDetailsTool(), getAppDetailsHandler)
+	s.AddTool(healthCheckTool(), healthCheckHandler)
 
 	// Write operations (deploy_*, add_*, set_*, delete_*, remove_*, restart_*)
 	s.AddTool(deployAppTool(), deployAppHandler)
+	s.AddTool(deployDirectoryTool(), deployDirectoryHandler)
 	s.AddTool(addDatabaseTool(), addDatabaseHandler)
 	s.AddTool(addStorageTool(), addStorageHandler)
 	s.AddTool(setEnvTool(), setEnvHandler)
+	s.AddTool(bulkSetEnvTool(), bulkSetEnvHandler)
 	s.AddTool(deleteEnvTool(), deleteEnvHandler)
 	s.AddTool(addDomainTool(), addDomainHandler)
 	s.AddTool(listDomainsTool(), listDomainsHandler)
@@ -201,6 +207,48 @@ func getPlatformInfoHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 				ExtractionPath:      ".",
 				Description:         "Express.js application",
 			},
+			"go": {
+				BaseImage:           "golang:1.21-alpine",
+				NeedsStartCommand:   true,
+				DefaultStartCommand: "./app",
+				ExtractionPath:      ".",
+				Description:         "Go application",
+			},
+			"python": {
+				BaseImage:           "python:3.11-alpine",
+				NeedsStartCommand:   true,
+				DefaultStartCommand: "python main.py",
+				ExtractionPath:      ".",
+				Description:         "Python application",
+			},
+			"fastapi": {
+				BaseImage:           "python:3.11-alpine",
+				NeedsStartCommand:   true,
+				DefaultStartCommand: "uvicorn main:app --host 0.0.0.0 --port 8080",
+				ExtractionPath:      ".",
+				Description:         "FastAPI application",
+			},
+			"django": {
+				BaseImage:           "python:3.11-alpine",
+				NeedsStartCommand:   true,
+				DefaultStartCommand: "gunicorn project.wsgi:application --bind 0.0.0.0:8080",
+				ExtractionPath:      ".",
+				Description:         "Django application",
+			},
+			"flask": {
+				BaseImage:           "python:3.11-alpine",
+				NeedsStartCommand:   true,
+				DefaultStartCommand: "gunicorn app:app --bind 0.0.0.0:8080",
+				ExtractionPath:      ".",
+				Description:         "Flask application",
+			},
+			"rust": {
+				BaseImage:           "rust:1.75-alpine",
+				NeedsStartCommand:   true,
+				DefaultStartCommand: "./app",
+				ExtractionPath:      "target/release",
+				Description:         "Rust application",
+			},
 		},
 	}
 
@@ -282,7 +330,7 @@ func deployAppTool() mcp.Tool {
 		),
 		mcp.WithString("framework",
 			mcp.Required(),
-			mcp.Description("Framework type: static, jekyll, hugo, nuxt, next, node, or express"),
+			mcp.Description("Framework type: static, jekyll, hugo, nuxt, next, node, express, go, python, fastapi, django, flask, or rust"),
 		),
 		mcp.WithString("start_command",
 			mcp.Description("Start command for the app (required for non-static frameworks)"),
@@ -329,9 +377,10 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	validFrameworks := map[string]bool{
 		"static": true, "jekyll": true, "hugo": true,
 		"nuxt": true, "next": true, "node": true, "express": true,
+		"go": true, "python": true, "fastapi": true, "django": true, "flask": true, "rust": true,
 	}
 	if !validFrameworks[fw] {
-		return mcp.NewToolResultError(fmt.Sprintf("Unknown framework %q. Valid: static, jekyll, hugo, nuxt, next, node, express", fw)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("Unknown framework %q. Valid: static, jekyll, hugo, nuxt, next, node, express, go, python, fastapi, django, flask, rust", fw)), nil
 	}
 
 	// Validate start command for non-static
@@ -1048,4 +1097,166 @@ func checkAuthHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf("Authenticated. Token source: %s", source)), nil
+}
+
+// --- get_app_details ---
+
+func getAppDetailsTool() mcp.Tool {
+	return mcp.NewTool("get_app_details",
+		mcp.WithDescription("Get detailed app information including deployment history, framework, and domains"),
+		mcp.WithString("app",
+			mcp.Required(),
+			mcp.Description("App slug (name) to get details for"),
+		),
+	)
+}
+
+func getAppDetailsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	slug, err := req.RequireString("app")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	app, err := client.GetApp(slug)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to get app details: %v", err)), nil
+	}
+
+	data, _ := json.MarshalIndent(app, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// --- health_check ---
+
+func healthCheckTool() mcp.Tool {
+	return mcp.NewTool("health_check",
+		mcp.WithDescription("Check if an app is responding by hitting its public URL. Returns HTTP status and response time."),
+		mcp.WithString("app",
+			mcp.Required(),
+			mcp.Description("App slug (name) to health check"),
+		),
+	)
+}
+
+func healthCheckHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	slug, err := req.RequireString("app")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	// Create a separate HTTP client with short timeout for health checks
+	healthClient := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return nil // Follow redirects
+		},
+	}
+
+	url := fmt.Sprintf("https://%s.hosted.gethatch.eu", slug)
+	start := time.Now()
+
+	resp, err := healthClient.Get(url)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		result := map[string]interface{}{
+			"url":     url,
+			"error":   err.Error(),
+			"healthy": false,
+		}
+		data, _ := json.MarshalIndent(result, "", "  ")
+		return mcp.NewToolResultText(string(data)), nil
+	}
+	defer resp.Body.Close()
+
+	result := map[string]interface{}{
+		"url":              url,
+		"status_code":      resp.StatusCode,
+		"response_time_ms": elapsed.Milliseconds(),
+		"healthy":          resp.StatusCode >= 200 && resp.StatusCode < 500,
+	}
+
+	data, _ := json.MarshalIndent(result, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// --- bulk_set_env ---
+
+func bulkSetEnvTool() mcp.Tool {
+	return mcp.NewTool("bulk_set_env",
+		mcp.WithDescription("Set multiple environment variables at once. More efficient than calling set_env repeatedly."),
+		mcp.WithString("app",
+			mcp.Required(),
+			mcp.Description("App slug (name) to set variables on"),
+		),
+	)
+}
+
+func bulkSetEnvHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	slug, err := req.RequireString("app")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	args := req.GetArguments()
+	varsParam, ok := args["vars"]
+	if !ok {
+		return mcp.NewToolResultError("vars parameter is required"), nil
+	}
+
+	varsMap, ok := varsParam.(map[string]interface{})
+	if !ok {
+		return mcp.NewToolResultError("vars must be an object with string values"), nil
+	}
+
+	if len(varsMap) == 0 {
+		return mcp.NewToolResultError("vars cannot be empty"), nil
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	var successKeys []string
+	var errors []string
+
+	for key, value := range varsMap {
+		valueStr, ok := value.(string)
+		if !ok {
+			errors = append(errors, fmt.Sprintf("%s: value must be a string", key))
+			continue
+		}
+
+		if err := client.SetEnvVar(slug, key, valueStr); err != nil {
+			errors = append(errors, fmt.Sprintf("%s: %v", key, err))
+		} else {
+			successKeys = append(successKeys, key)
+		}
+	}
+
+	// Build result message
+	var result strings.Builder
+	if len(successKeys) > 0 {
+		result.WriteString(fmt.Sprintf("Set %d environment variables on '%s': %s",
+			len(successKeys), slug, strings.Join(successKeys, ", ")))
+	}
+
+	if len(errors) > 0 {
+		if result.Len() > 0 {
+			result.WriteString("\n\nErrors:\n")
+		}
+		result.WriteString(strings.Join(errors, "\n"))
+	}
+
+	if len(successKeys) == 0 && len(errors) > 0 {
+		return mcp.NewToolResultError(result.String()), nil
+	}
+
+	return mcp.NewToolResultText(result.String()), nil
 }
