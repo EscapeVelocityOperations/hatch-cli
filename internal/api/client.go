@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -20,6 +21,22 @@ const (
 	apiPath     = "/v1"
 	timeout     = 30 * time.Second
 )
+
+var slugRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+
+// validateSlug ensures slug values are safe for URL paths.
+func validateSlug(slug string) error {
+	if !slugRegex.MatchString(slug) {
+		return fmt.Errorf("invalid slug %q: must be lowercase alphanumeric with hyphens", slug)
+	}
+	return nil
+}
+
+// redactToken removes sensitive tokens from error messages.
+func redactToken(s string) string {
+	re := regexp.MustCompile(`hatch_[a-zA-Z0-9_]+`)
+	return re.ReplaceAllString(s, "hatch_****")
+}
 
 // Client is the Hatch API client.
 type Client struct {
@@ -59,7 +76,7 @@ func (c *Client) do(method, path string, body io.Reader) (*http.Response, error)
 	url := c.host + apiPath + path
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	if body != nil {
@@ -67,12 +84,12 @@ func (c *Client) do(method, path string, body io.Reader) (*http.Response, error)
 	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w", err)
 	}
 	if resp.StatusCode >= 400 {
 		defer resp.Body.Close()
 		data, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, redactToken(strings.TrimSpace(string(data))))
 	}
 	return resp, nil
 }
@@ -94,6 +111,9 @@ func (c *Client) ListApps() ([]App, error) {
 
 // GetApp returns details for a single app.
 func (c *Client) GetApp(slug string) (*App, error) {
+	if err := validateSlug(slug); err != nil {
+		return nil, err
+	}
 	resp, err := c.do("GET", "/apps/"+slug, nil)
 	if err != nil {
 		return nil, err
@@ -128,6 +148,9 @@ func (c *Client) CreateApp(name string) (*App, error) {
 // It calls the handler for each log line. The caller should cancel via context or close.
 // logType can be "" for runtime logs or "build" for build logs.
 func (c *Client) StreamLogs(slug string, tail int, follow bool, logType string, handler func(line string)) error {
+	if err := validateSlug(slug); err != nil {
+		return err
+	}
 	// Build WebSocket URL from HTTP host
 	wsURL, err := url.Parse(c.host)
 	if err != nil {
@@ -156,7 +179,7 @@ func (c *Client) StreamLogs(slug string, tail int, follow bool, logType string, 
 	if err != nil {
 		if resp != nil && resp.StatusCode >= 400 {
 			data, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("API error %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+			return fmt.Errorf("API error %d: %s", resp.StatusCode, redactToken(strings.TrimSpace(string(data))))
 		}
 		return fmt.Errorf("connecting to log stream: %w", err)
 	}
@@ -177,6 +200,9 @@ func (c *Client) StreamLogs(slug string, tail int, follow bool, logType string, 
 
 // GetEnvVars returns environment variables for an app.
 func (c *Client) GetEnvVars(slug string) ([]EnvVar, error) {
+	if err := validateSlug(slug); err != nil {
+		return nil, err
+	}
 	resp, err := c.do("GET", "/apps/"+slug+"/env", nil)
 	if err != nil {
 		return nil, err
@@ -192,6 +218,9 @@ func (c *Client) GetEnvVars(slug string) ([]EnvVar, error) {
 
 // SetEnvVar sets an environment variable on an app.
 func (c *Client) SetEnvVar(slug, key, value string) error {
+	if err := validateSlug(slug); err != nil {
+		return err
+	}
 	body := fmt.Sprintf(`{"key":%q,"value":%q}`, key, value)
 	resp, err := c.do("POST", "/apps/"+slug+"/env", strings.NewReader(body))
 	if err != nil {
@@ -203,6 +232,9 @@ func (c *Client) SetEnvVar(slug, key, value string) error {
 
 // UnsetEnvVar removes an environment variable from an app.
 func (c *Client) UnsetEnvVar(slug, key string) error {
+	if err := validateSlug(slug); err != nil {
+		return err
+	}
 	resp, err := c.do("DELETE", "/apps/"+slug+"/env/"+key, nil)
 	if err != nil {
 		return err
@@ -213,6 +245,9 @@ func (c *Client) UnsetEnvVar(slug, key string) error {
 
 // RestartApp restarts the specified app.
 func (c *Client) RestartApp(slug string) error {
+	if err := validateSlug(slug); err != nil {
+		return err
+	}
 	resp, err := c.do("POST", "/apps/"+slug+"/restart", nil)
 	if err != nil {
 		return err
@@ -223,6 +258,9 @@ func (c *Client) RestartApp(slug string) error {
 
 // DeleteApp permanently deletes the specified app.
 func (c *Client) DeleteApp(slug string) error {
+	if err := validateSlug(slug); err != nil {
+		return err
+	}
 	resp, err := c.do("DELETE", "/apps/"+slug, nil)
 	if err != nil {
 		return err
@@ -233,6 +271,9 @@ func (c *Client) DeleteApp(slug string) error {
 
 // AddAddon provisions an addon (e.g. "postgresql", "s3") for an app.
 func (c *Client) AddAddon(slug, addonType string) (*Addon, error) {
+	if err := validateSlug(slug); err != nil {
+		return nil, err
+	}
 	body := fmt.Sprintf(`{"type":%q}`, addonType)
 	resp, err := c.do("POST", "/apps/"+slug+"/addons", strings.NewReader(body))
 	if err != nil {
@@ -249,6 +290,9 @@ func (c *Client) AddAddon(slug, addonType string) (*Addon, error) {
 
 // ListDomains returns custom domains for an app.
 func (c *Client) ListDomains(slug string) ([]Domain, error) {
+	if err := validateSlug(slug); err != nil {
+		return nil, err
+	}
 	resp, err := c.do("GET", "/apps/"+slug+"/domains", nil)
 	if err != nil {
 		return nil, err
@@ -264,6 +308,9 @@ func (c *Client) ListDomains(slug string) ([]Domain, error) {
 
 // AddDomain configures a custom domain for an app.
 func (c *Client) AddDomain(slug, domain string) (*Domain, error) {
+	if err := validateSlug(slug); err != nil {
+		return nil, err
+	}
 	body := fmt.Sprintf(`{"domain":%q}`, domain)
 	resp, err := c.do("POST", "/apps/"+slug+"/domains", strings.NewReader(body))
 	if err != nil {
@@ -280,6 +327,9 @@ func (c *Client) AddDomain(slug, domain string) (*Domain, error) {
 
 // RemoveDomain removes a custom domain from an app.
 func (c *Client) RemoveDomain(slug, domain string) error {
+	if err := validateSlug(slug); err != nil {
+		return err
+	}
 	resp, err := c.do("DELETE", "/apps/"+slug+"/domains/"+domain, nil)
 	if err != nil {
 		return err
@@ -290,6 +340,9 @@ func (c *Client) RemoveDomain(slug, domain string) error {
 
 // GetLogs returns recent log lines (non-streaming).
 func (c *Client) GetLogs(slug string, tail int, logType string) ([]string, error) {
+	if err := validateSlug(slug); err != nil {
+		return nil, err
+	}
 	path := fmt.Sprintf("/apps/%s/logs?tail=%d&follow=false", slug, tail)
 	if logType != "" {
 		path += "&type=" + logType
@@ -313,6 +366,9 @@ func (c *Client) GetLogs(slug string, tail int, logType string) ([]string, error
 
 // UploadArtifact uploads a pre-built tar.gz artifact for deployment.
 func (c *Client) UploadArtifact(slug string, artifact io.Reader, framework, startCommand string) error {
+	if err := validateSlug(slug); err != nil {
+		return err
+	}
 	url := c.host + apiPath + "/apps/" + slug + "/artifact"
 	req, err := http.NewRequest("POST", url, artifact)
 	if err != nil {
@@ -343,7 +399,7 @@ func (c *Client) UploadArtifact(slug string, artifact io.Reader, framework, star
 
 	if resp.StatusCode >= 400 {
 		data, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("upload failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return fmt.Errorf("upload failed (%d): %s", resp.StatusCode, redactToken(strings.TrimSpace(string(data))))
 	}
 	return nil
 }

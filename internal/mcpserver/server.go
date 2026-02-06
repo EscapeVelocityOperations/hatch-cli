@@ -16,6 +16,29 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
+// validateProjectPath ensures directory paths are safe and not in restricted locations.
+func validateProjectPath(dir string) error {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return fmt.Errorf("invalid path: %w", err)
+	}
+
+	// Block sensitive directories
+	blocked := []string{"/etc", "/root", "/var", "/usr", "/bin", "/sbin", "/sys", "/proc"}
+	for _, b := range blocked {
+		if strings.HasPrefix(abs, b) {
+			return fmt.Errorf("path %q is in a restricted directory", abs)
+		}
+	}
+
+	// Block path traversal attempts
+	if strings.Contains(dir, "..") {
+		return fmt.Errorf("path traversal detected in %q", dir)
+	}
+
+	return nil
+}
+
 // NewServer creates the Hatch MCP server with all tools and resources registered.
 func NewServer() *server.MCPServer {
 	s := server.NewMCPServer(
@@ -193,6 +216,10 @@ func analyzeProjectHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
+	if err := validateProjectPath(dir); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {
 		return mcp.NewToolResultError(fmt.Sprintf("Directory not found: %s", dir)), nil
@@ -268,6 +295,10 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
+	if err := validateProjectPath(artifactPath); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Invalid artifact path: %v", err)), nil
+	}
+
 	fw, err := req.RequireString("framework")
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -277,6 +308,12 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	appSlug := req.GetString("app", "")
 	name := req.GetString("name", "")
 	dir := req.GetString("directory", "")
+
+	if dir != "" {
+		if err := validateProjectPath(dir); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Invalid directory: %v", err)), nil
+		}
+	}
 
 	// Validate framework
 	validFrameworks := map[string]bool{
