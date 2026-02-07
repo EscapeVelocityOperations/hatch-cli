@@ -1,6 +1,23 @@
 package ui
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+	"sync"
+
+	"golang.org/x/term"
+)
+
+var (
+	colorEnabled bool
+	colorOnce    sync.Once
+)
+
+func initColors() {
+	colorOnce.Do(func() {
+		colorEnabled = term.IsTerminal(int(os.Stdout.Fd()))
+	})
+}
 
 const (
 	reset  = "\033[0m"
@@ -12,12 +29,20 @@ const (
 	dim    = "\033[2m"
 )
 
-func Red(s string) string    { return red + s + reset }
-func Green(s string) string  { return green + s + reset }
-func Yellow(s string) string { return yellow + s + reset }
-func Blue(s string) string   { return blue + s + reset }
-func Bold(s string) string   { return bold + s + reset }
-func Dim(s string) string    { return dim + s + reset }
+func colorize(color, s string) string {
+	initColors()
+	if colorEnabled {
+		return color + s + reset
+	}
+	return s
+}
+
+func Red(s string) string    { return colorize(red, s) }
+func Green(s string) string  { return colorize(green, s) }
+func Yellow(s string) string { return colorize(yellow, s) }
+func Blue(s string) string   { return colorize(blue, s) }
+func Bold(s string) string   { return colorize(bold, s) }
+func Dim(s string) string    { return colorize(dim, s) }
 
 func Success(msg string) { fmt.Println(Green("✓ " + msg)) }
 func Error(msg string)   { fmt.Println(Red("✗ " + msg)) }
