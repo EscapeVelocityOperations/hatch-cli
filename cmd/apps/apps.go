@@ -80,7 +80,7 @@ func runList(cmd *cobra.Command, args []string) error {
 	for _, a := range appList {
 		url := a.URL
 		if url == "" {
-			url = "https://" + a.Slug + ".gethatch.eu"
+			url = "https://" + a.Slug + ".hosted.gethatch.eu"
 		}
 		table.AddRow(a.Slug, a.Name, statusColor(a.Status), url)
 	}

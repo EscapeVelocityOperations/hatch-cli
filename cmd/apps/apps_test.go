@@ -117,7 +117,7 @@ func TestRunList_GeneratesURLFromSlug(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
-	if !contains(output, "https://nourl-app.gethatch.eu") {
+	if !contains(output, "https://nourl-app.hosted.gethatch.eu") {
 		t.Fatalf("expected generated URL in output, got: %s", output)
 	}
 }

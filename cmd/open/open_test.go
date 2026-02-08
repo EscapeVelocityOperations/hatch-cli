@@ -53,10 +53,10 @@ func TestRunOpen_WithSlug(t *testing.T) {
 		}
 	})
 
-	if openedURL != "https://myapp.gethatch.eu" {
-		t.Fatalf("expected URL 'https://myapp.gethatch.eu', got %q", openedURL)
+	if openedURL != "https://myapp.hosted.gethatch.eu" {
+		t.Fatalf("expected URL 'https://myapp.hosted.gethatch.eu', got %q", openedURL)
 	}
-	if !contains(output, "https://myapp.gethatch.eu") {
+	if !contains(output, "https://myapp.hosted.gethatch.eu") {
 		t.Fatalf("expected URL in output, got: %s", output)
 	}
 }
@@ -81,8 +81,8 @@ func TestRunOpen_AutoDetect(t *testing.T) {
 		}
 	})
 
-	if openedURL != "https://detected.gethatch.eu" {
-		t.Fatalf("expected URL 'https://detected.gethatch.eu', got %q", openedURL)
+	if openedURL != "https://detected.hosted.gethatch.eu" {
+		t.Fatalf("expected URL 'https://detected.hosted.gethatch.eu', got %q", openedURL)
 	}
 }
 
