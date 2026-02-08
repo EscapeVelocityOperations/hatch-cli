@@ -493,3 +493,97 @@ func (c *Client) GetAppStatus(slug string) (json.RawMessage, error) {
 	}
 	return json.RawMessage(data), nil
 }
+
+// EnergyStatus represents energy information for the user's account.
+type EnergyStatus struct {
+	Tier               string   `json:"tier"`
+	DailyRemaining     int      `json:"daily_remaining_minutes"`
+	DailyLimit         int      `json:"daily_limit_minutes"`
+	WeeklyRemaining    int      `json:"weekly_remaining_minutes"`
+	WeeklyLimit        int      `json:"weekly_limit_minutes"`
+	ResetsAt           string   `json:"resets_at"`
+	EggsActive         int      `json:"eggs_active"`
+	EggsSleeping       int      `json:"eggs_sleeping"`
+	EggsLimit          int      `json:"eggs_limit"`
+	AlwaysOnEggs       []string `json:"always_on_eggs"`
+	BoostedEggs        []string `json:"boosted_eggs,omitempty"`
+}
+
+// AppEnergy represents energy information for a specific app.
+type AppEnergy struct {
+	Slug               string  `json:"slug"`
+	Status             string  `json:"status"`
+	Plan               string  `json:"plan"`
+	AlwaysOn           bool    `json:"always_on"`
+	Boosted            bool    `json:"boosted"`
+	BoostExpiresAt     *string `json:"boost_expires_at,omitempty"`
+	DailyRemainingMin  int     `json:"daily_remaining_minutes"`
+	DailyLimitMin      int     `json:"daily_limit_minutes"`
+	DailyUsedMin       int     `json:"daily_used_minutes"`
+	WeeklyRemainingMin int     `json:"weekly_remaining_minutes"`
+	WeeklyLimitMin     int     `json:"weekly_limit_minutes"`
+	WeeklyUsedMin      int     `json:"weekly_used_minutes"`
+	DailyResetsAt      string  `json:"daily_resets_at"`
+	WeeklyResetsAt     string  `json:"weekly_resets_at"`
+	BonusEnergy        int     `json:"bonus_energy"`
+}
+
+// BoostCheckoutResponse represents a boost checkout session.
+type BoostCheckoutResponse struct {
+	CheckoutURL string `json:"checkout_url"`
+	Duration    string `json:"duration"`
+	AmountEur   string `json:"amount_eur"`
+}
+
+// GetAccountEnergy returns the user's account energy status.
+func (c *Client) GetAccountEnergy() (*EnergyStatus, error) {
+	resp, err := c.do("GET", "/account/energy", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var energy EnergyStatus
+	if err := json.NewDecoder(resp.Body).Decode(&energy); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return &energy, nil
+}
+
+// GetAppEnergy returns energy status for a specific app.
+func (c *Client) GetAppEnergy(slug string) (*AppEnergy, error) {
+	if err := validateSlug(slug); err != nil {
+		return nil, err
+	}
+	resp, err := c.do("GET", "/apps/"+slug+"/energy", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var energy AppEnergy
+	if err := json.NewDecoder(resp.Body).Decode(&energy); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return &energy, nil
+}
+
+// BoostCheckout creates a Stripe checkout session for boost purchase.
+// Returns a checkout URL to open in browser.
+func (c *Client) BoostCheckout(slug, duration string) (*BoostCheckoutResponse, error) {
+	if err := validateSlug(slug); err != nil {
+		return nil, err
+	}
+	body := fmt.Sprintf(`{"egg_slug":%q,"duration":%q}`, slug, duration)
+	resp, err := c.do("POST", "/billing/boost-checkout", strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result BoostCheckoutResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return &result, nil
+}
