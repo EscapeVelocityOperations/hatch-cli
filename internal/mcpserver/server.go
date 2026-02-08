@@ -121,6 +121,16 @@ func NewServer() *server.MCPServer {
 		skillResourceHandler,
 	)
 
+	s.AddResource(
+		mcp.NewResource(
+			"hatch://tos",
+			"Hatch Terms of Service for AI Agents",
+			mcp.WithResourceDescription("What can and cannot be hosted on Hatch — forbidden data types, forbidden applications, resource limits, and legal obligations"),
+			mcp.WithMIMEType("text/markdown"),
+		),
+		tosResourceHandler,
+	)
+
 	return s
 }
 
@@ -131,6 +141,29 @@ func skillResourceHandler(ctx context.Context, req mcp.ReadResourceRequest) ([]m
 			URI:      "hatch://skill",
 			MIMEType: "text/markdown",
 			Text:     SkillMD,
+		},
+	}, nil
+}
+
+// tosResourceHandler fetches the current TOS from the hatch-landing API.
+func tosResourceHandler(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	tosURL := "https://gethatch.eu/api/tos/agents"
+
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	resp, err := httpClient.Get(tosURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch TOS: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body := new(bytes.Buffer)
+	body.ReadFrom(resp.Body)
+
+	return []mcp.ResourceContents{
+		mcp.TextResourceContents{
+			URI:      "hatch://tos",
+			MIMEType: "text/markdown",
+			Text:     body.String(),
 		},
 	}, nil
 }

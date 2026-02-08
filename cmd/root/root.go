@@ -1,8 +1,11 @@
 package root
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/analyze"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/apps"
@@ -52,6 +55,57 @@ func init() {
 		if tokenFlag != "" {
 			auth.SetTokenFlag(tokenFlag)
 		}
+
+		// Skip TOS check for commands that don't need it
+		name := cmd.Name()
+		if name == "version" || name == "help" || name == "login" || name == "mcp" {
+			return
+		}
+
+		// Check if TOS already accepted
+		cfg, err := config.Load()
+		if err != nil {
+			return // Don't block on config errors
+		}
+		if cfg.TosAcceptedAt != "" {
+			return // Already accepted
+		}
+
+		// Show TOS summary and prompt for acceptance
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "╔══════════════════════════════════════════════════════╗")
+		fmt.Fprintln(os.Stderr, "║          Hatch — Terms of Service                    ║")
+		fmt.Fprintln(os.Stderr, "╚══════════════════════════════════════════════════════╝")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "  Key points:")
+		fmt.Fprintln(os.Stderr, "  • Hatch is EXPERIMENTAL — no SLA, no uptime guarantee")
+		fmt.Fprintln(os.Stderr, "  • Your data is YOUR responsibility — back up externally")
+		fmt.Fprintln(os.Stderr, "  • No health data, banking data, or sensitive personal data")
+		fmt.Fprintln(os.Stderr, "  • No crypto mining, spam, malware, or illegal content")
+		fmt.Fprintln(os.Stderr, "  • Free tier: apps sleep after 10 min, 2h/day energy")
+		fmt.Fprintln(os.Stderr, "  • Accounts violating terms may be suspended")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "  Full terms: https://gethatch.eu/terms")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprint(os.Stderr, "  Do you accept these terms? [y/N] ")
+
+		reader := bufio.NewReader(os.Stdin)
+		answer, _ := reader.ReadString('\n')
+		answer = strings.TrimSpace(strings.ToLower(answer))
+
+		if answer != "y" && answer != "yes" {
+			fmt.Fprintln(os.Stderr, "\n  Terms not accepted. You must accept the terms to use Hatch.")
+			os.Exit(1)
+		}
+
+		// Save acceptance
+		cfg.TosAcceptedAt = time.Now().UTC().Format(time.RFC3339)
+		if err := config.Save(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "  Warning: could not save TOS acceptance: %v\n", err)
+		} else {
+			fmt.Fprintln(os.Stderr, "\n  Terms accepted. Welcome to Hatch!")
+		}
+		fmt.Fprintln(os.Stderr, "")
 	}
 
 	rootCmd.AddCommand(versionCmd)
