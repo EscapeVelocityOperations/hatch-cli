@@ -172,7 +172,7 @@ func (d *Deployer) Deploy(ctx context.Context, opts DeployOptions) (*DeployResul
 	// 8. Return result
 	result := &DeployResult{
 		Slug:      slug,
-		URL:       fmt.Sprintf("https://%s.hosted.gethatch.eu", slug),
+		URL:       fmt.Sprintf("https://%s.nest.gethatch.eu", slug),
 		Framework: analysis.Framework,
 		Analysis:  analysis,
 	}
@@ -195,7 +195,7 @@ func (d *Deployer) resolveApp(client APIClient, nameOverride, dir string) (strin
 		return "", fmt.Errorf("reading .hatch.toml: %w", err)
 	}
 	if hatchConfig != nil {
-		d.progress("resolving_app", fmt.Sprintf("Deploying to existing nugget: %s", hatchConfig.Slug))
+		d.progress("resolving_app", fmt.Sprintf("Deploying to existing egg: %s", hatchConfig.Slug))
 		return hatchConfig.Slug, nil
 	}
 
@@ -206,10 +206,10 @@ func (d *Deployer) resolveApp(client APIClient, nameOverride, dir string) (strin
 		name = filepath.Base(absDir)
 	}
 
-	d.progress("resolving_app", fmt.Sprintf("Creating new nugget: %s", name))
+	d.progress("resolving_app", fmt.Sprintf("Creating new egg: %s", name))
 	slug, err := client.CreateApp(name)
 	if err != nil {
-		return "", fmt.Errorf("creating nugget: %w", err)
+		return "", fmt.Errorf("creating egg: %w", err)
 	}
 
 	// Write .hatch.toml for future deploys

@@ -36,7 +36,7 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "hatch",
 	Short: "Hatch CLI - Developer tools for Hatch",
-	Long:  "Hatch is a command-line interface for deploying and managing nuggets on the Hatch platform.",
+	Long:  "Hatch is a command-line interface for deploying and managing eggs on the Hatch platform.",
 	SilenceUsage: true,
 }
 

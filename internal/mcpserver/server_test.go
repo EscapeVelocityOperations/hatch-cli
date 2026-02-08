@@ -210,7 +210,7 @@ func TestListAppsHandler_Success(t *testing.T) {
 	setAuthToken("tok")
 	newMockServer(t, map[string]http.HandlerFunc{
 		"GET /v1/apps": jsonHandler([]api.App{
-			{Slug: "myapp-a1b2", Name: "myapp", Status: "running", URL: "https://myapp-a1b2.hosted.gethatch.eu"},
+			{Slug: "myapp-a1b2", Name: "myapp", Status: "running", URL: "https://myapp-a1b2.nest.gethatch.eu"},
 		}),
 	})
 
@@ -270,7 +270,7 @@ func TestGetStatusHandler_Success(t *testing.T) {
 	newMockServer(t, map[string]http.HandlerFunc{
 		"GET /v1/apps/myapp-a1b2": jsonHandler(api.App{
 			Slug: "myapp-a1b2", Name: "myapp", Status: "running",
-			URL: "https://myapp-a1b2.hosted.gethatch.eu", Region: "eu",
+			URL: "https://myapp-a1b2.nest.gethatch.eu", Region: "eu",
 			CreatedAt: now, UpdatedAt: now,
 		}),
 	})
@@ -672,7 +672,7 @@ func TestAddDomainHandler_Success(t *testing.T) {
 		"POST /v1/apps/myapp-a1b2/domains": jsonHandler(api.Domain{
 			Domain: "example.com",
 			Status: "pending",
-			CNAME:  "myapp-a1b2.hosted.gethatch.eu",
+			CNAME:  "myapp-a1b2.nest.gethatch.eu",
 		}),
 	})
 
@@ -713,7 +713,7 @@ func TestListDomainsHandler_Success(t *testing.T) {
 	setAuthToken("tok")
 	newMockServer(t, map[string]http.HandlerFunc{
 		"GET /v1/apps/myapp-a1b2/domains": jsonHandler([]api.Domain{
-			{Domain: "example.com", Status: "active", CNAME: "myapp-a1b2.hosted.gethatch.eu"},
+			{Domain: "example.com", Status: "active", CNAME: "myapp-a1b2.nest.gethatch.eu"},
 		}),
 	})
 
@@ -1054,7 +1054,7 @@ func TestGetAppDetailsHandler_Success(t *testing.T) {
 	newMockServer(t, map[string]http.HandlerFunc{
 		"GET /v1/apps/myapp-a1b2": jsonHandler(api.App{
 			Slug: "myapp-a1b2", Name: "myapp", Status: "running",
-			URL: "https://myapp-a1b2.hosted.gethatch.eu",
+			URL: "https://myapp-a1b2.nest.gethatch.eu",
 			CreatedAt: now, UpdatedAt: now,
 		}),
 	})

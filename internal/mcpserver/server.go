@@ -527,7 +527,7 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		return toolError("failed to deploy app: upload failed: %v", err)
 	}
 
-	appURL := fmt.Sprintf("https://%s.hosted.gethatch.eu", slug)
+	appURL := fmt.Sprintf("https://%s.nest.gethatch.eu", slug)
 	return mcp.NewToolResultText(fmt.Sprintf("Deployed successfully!\nApp: %s\nURL: %s\nFramework: %s", slug, appURL, fw)), nil
 }
 
@@ -805,7 +805,7 @@ func addDomainHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 
 	cname := d.CNAME
 	if cname == "" {
-		cname = slug + ".hosted.gethatch.eu"
+		cname = slug + ".nest.gethatch.eu"
 	}
 
 	result := fmt.Sprintf(`Domain %s configured for %s.
@@ -1101,7 +1101,7 @@ func createAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	result := map[string]string{
 		"slug": app.Slug,
 		"name": app.Name,
-		"url":  fmt.Sprintf("https://%s.hosted.gethatch.eu", app.Slug),
+		"url":  fmt.Sprintf("https://%s.nest.gethatch.eu", app.Slug),
 	}
 
 	data, _ := json.MarshalIndent(result, "", "  ")
@@ -1239,7 +1239,7 @@ func healthCheckHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Call
 		},
 	}
 
-	url := fmt.Sprintf("https://%s.hosted.gethatch.eu", slug)
+	url := fmt.Sprintf("https://%s.nest.gethatch.eu", slug)
 	start := time.Now()
 
 	resp, err := healthClient.Get(url)

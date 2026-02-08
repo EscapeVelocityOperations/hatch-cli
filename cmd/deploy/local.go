@@ -86,7 +86,7 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 	}
 
 	ui.Success("Deployed successfully!")
-	ui.Info(fmt.Sprintf("Nugget URL: https://%s.hosted.gethatch.eu", slug))
+	ui.Info(fmt.Sprintf("Egg URL: https://%s.nest.gethatch.eu", slug))
 
 	// Set custom domain if specified
 	if cfg.Domain != "" {
@@ -169,7 +169,7 @@ func RunLocalDeploy(cfg LocalDeployConfig) error {
 	}
 
 	ui.Success("Deployed successfully!")
-	ui.Info(fmt.Sprintf("Nugget URL: %s", result.URL))
+	ui.Info(fmt.Sprintf("Egg URL: %s", result.URL))
 
 	// Set custom domain if specified
 	if cfg.Domain != "" {

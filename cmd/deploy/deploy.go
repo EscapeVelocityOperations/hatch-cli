@@ -106,15 +106,15 @@ var (
 func NewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "deploy",
-		Short: "Deploy your nugget to Hatch",
-		Long:  "Deploy the current directory as a Hatch nugget. Builds locally and uploads the artifact.",
+		Short: "Deploy your egg to Hatch",
+		Long:  "Deploy the current directory as a Hatch egg. Builds locally and uploads the artifact.",
 		RunE:  runDeploy,
 	}
-	cmd.Flags().StringVarP(&appName, "name", "n", "", "custom nugget name (defaults to directory name)")
+	cmd.Flags().StringVarP(&appName, "name", "n", "", "custom egg name (defaults to directory name)")
 	cmd.Flags().StringVarP(&domainName, "domain", "d", "", "custom domain (e.g. example.com)")
 	cmd.Flags().StringVar(&artifactPath, "artifact", "", "path to pre-built tar.gz artifact (skips analyze+build)")
 	cmd.Flags().StringVar(&framework, "framework", "", "framework type (static, jekyll, hugo, nuxt, next, node, express)")
-	cmd.Flags().StringVar(&startCommand, "start-command", "", "start command for the nugget (required for non-static frameworks)")
+	cmd.Flags().StringVar(&startCommand, "start-command", "", "start command for the egg (required for non-static frameworks)")
 	return cmd
 }
 
@@ -175,7 +175,7 @@ func resolveApp(client APIClient, appSlug, appNameOverride, dir string) (string,
 		return "", fmt.Errorf("reading .hatch.toml: %w", err)
 	}
 	if hatchConfig != nil {
-		ui.Info(fmt.Sprintf("Deploying to existing nugget: %s", hatchConfig.Slug))
+		ui.Info(fmt.Sprintf("Deploying to existing egg: %s", hatchConfig.Slug))
 		return hatchConfig.Slug, nil
 	}
 
@@ -190,12 +190,12 @@ func resolveApp(client APIClient, appSlug, appNameOverride, dir string) (string,
 		}
 	}
 
-	ui.Info(fmt.Sprintf("Creating new nugget: %s", name))
+	ui.Info(fmt.Sprintf("Creating new egg: %s", name))
 	app, err := client.CreateApp(name)
 	if err != nil {
-		return "", fmt.Errorf("creating nugget: %w", err)
+		return "", fmt.Errorf("creating egg: %w", err)
 	}
-	ui.Success(fmt.Sprintf("Created nugget: %s", app.Slug))
+	ui.Success(fmt.Sprintf("Created egg: %s", app.Slug))
 
 	if err := writeHatchConfig(dir, app.Slug, name); err != nil {
 		ui.Warn(fmt.Sprintf("Could not write .hatch.toml: %v", err))

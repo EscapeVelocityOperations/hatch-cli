@@ -35,8 +35,8 @@ var deps = defaultDeps()
 func NewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "apps",
-		Short: "List your Hatch nuggets",
-		Long:  "Display a list of all nuggets deployed to the Hatch platform.",
+		Short: "List your Hatch eggs",
+		Long:  "Display a list of all eggs deployed to the Hatch platform.",
 		RunE:  runList,
 	}
 	return cmd
@@ -46,8 +46,8 @@ func NewCmd() *cobra.Command {
 func NewInfoCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "info [slug]",
-		Short: "Show details for a nugget",
-		Long:  "Display detailed information about a specific Hatch nugget.",
+		Short: "Show details for an egg",
+		Long:  "Display detailed information about a specific Hatch egg.",
 		Args:  cobra.ExactArgs(1),
 		RunE:  runInfo,
 	}
@@ -62,17 +62,17 @@ func runList(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
 	}
 
-	sp := ui.NewSpinner("Fetching nuggets...")
+	sp := ui.NewSpinner("Fetching eggs...")
 	sp.Start()
 	appList, err := deps.ListApps(token)
 	sp.Stop()
 
 	if err != nil {
-		return fmt.Errorf("fetching nuggets: %w", err)
+		return fmt.Errorf("fetching eggs: %w", err)
 	}
 
 	if len(appList) == 0 {
-		ui.Info("No nuggets found. Deploy one with 'hatch deploy'.")
+		ui.Info("No eggs found. Deploy one with 'hatch deploy'.")
 		return nil
 	}
 
@@ -80,7 +80,7 @@ func runList(cmd *cobra.Command, args []string) error {
 	for _, a := range appList {
 		url := a.URL
 		if url == "" {
-			url = "https://" + a.Slug + ".hosted.gethatch.eu"
+			url = "https://" + a.Slug + ".nest.gethatch.eu"
 		}
 		table.AddRow(a.Slug, a.Name, statusColor(a.Status), url)
 	}
@@ -99,13 +99,13 @@ func runInfo(cmd *cobra.Command, args []string) error {
 
 	slug := args[0]
 
-	sp := ui.NewSpinner("Fetching nugget details...")
+	sp := ui.NewSpinner("Fetching egg details...")
 	sp.Start()
 	app, err := deps.GetApp(token, slug)
 	sp.Stop()
 
 	if err != nil {
-		return fmt.Errorf("fetching nugget: %w", err)
+		return fmt.Errorf("fetching egg: %w", err)
 	}
 
 	fmt.Println()
