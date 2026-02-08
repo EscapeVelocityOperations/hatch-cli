@@ -421,7 +421,7 @@ func (c *Client) GetLogs(slug string, tail int, logType string) ([]string, error
 }
 
 // UploadArtifact uploads a pre-built tar.gz artifact for deployment.
-func (c *Client) UploadArtifact(slug string, artifact io.Reader, framework, startCommand string) error {
+func (c *Client) UploadArtifact(slug string, artifact io.Reader, runtime, startCommand string) error {
 	if err := validateSlug(slug); err != nil {
 		return err
 	}
@@ -435,10 +435,10 @@ func (c *Client) UploadArtifact(slug string, artifact io.Reader, framework, star
 
 	// hatch-api expects metadata as a single JSON header
 	metadata := struct {
-		Framework    string `json:"framework"`
+		Runtime      string `json:"runtime"`
 		StartCommand string `json:"startCommand"`
 	}{
-		Framework:    framework,
+		Runtime:      runtime,
 		StartCommand: startCommand,
 	}
 	metadataJSON, err := json.Marshal(metadata)

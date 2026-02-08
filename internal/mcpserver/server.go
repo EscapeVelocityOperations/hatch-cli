@@ -1,17 +1,19 @@
 package mcpserver
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/EscapeVelocityOperations/hatch-cli/cmd/analyze"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -82,7 +84,6 @@ func NewServer() *server.MCPServer {
 
 	// Read operations (get_*)
 	s.AddTool(getPlatformInfoTool(), getPlatformInfoHandler)
-	s.AddTool(analyzeProjectTool(), analyzeProjectHandler)
 	s.AddTool(listAppsTool(), listAppsHandler)
 	s.AddTool(getStatusTool(), getStatusHandler)
 	s.AddTool(getLogsTool(), getLogsHandler)
@@ -93,7 +94,6 @@ func NewServer() *server.MCPServer {
 
 	// Write operations (deploy_*, add_*, set_*, delete_*, remove_*, restart_*)
 	s.AddTool(deployAppTool(), deployAppHandler)
-	s.AddTool(deployDirectoryTool(), deployDirectoryHandler)
 	s.AddTool(addDatabaseTool(), addDatabaseHandler)
 	s.AddTool(addStorageTool(), addStorageHandler)
 	s.AddTool(setEnvTool(), setEnvHandler)
@@ -182,20 +182,18 @@ func newClient() (*api.Client, error) {
 
 // --- get_platform_info ---
 
-// FrameworkSpec describes platform requirements for a framework.
-type FrameworkSpec struct {
-	BaseImage           string `json:"base_image"`
-	NeedsStartCommand   bool   `json:"needs_start_command"`
-	DefaultStartCommand string `json:"default_start_command,omitempty"`
-	ExtractionPath      string `json:"extraction_path,omitempty"`
-	Description         string `json:"description"`
+// RuntimeSpec describes a runtime available on the platform.
+type RuntimeSpec struct {
+	BaseImage            string   `json:"base_image"`
+	Description          string   `json:"description"`
+	StartCommandExamples []string `json:"start_command_examples"`
 }
 
 // DeployRequirements is the platform contract returned to agents.
 type DeployRequirements struct {
-	Platform   PlatformSpec            `json:"platform"`
-	Artifact   ArtifactSpec            `json:"artifact"`
-	Frameworks map[string]FrameworkSpec `json:"frameworks"`
+	Platform    PlatformSpec           `json:"platform"`
+	DeployTarget DeployTargetSpec      `json:"deploy_target"`
+	Runtimes    map[string]RuntimeSpec `json:"runtimes"`
 }
 
 type PlatformSpec struct {
@@ -204,14 +202,14 @@ type PlatformSpec struct {
 	MaxArtifactSizeMB int    `json:"max_artifact_size_mb"`
 }
 
-type ArtifactSpec struct {
-	Format   string `json:"format"`
-	Contents string `json:"contents"`
+type DeployTargetSpec struct {
+	Description string `json:"description"`
+	Tip         string `json:"tip"`
 }
 
 func getPlatformInfoTool() mcp.Tool {
 	return mcp.NewTool("get_platform_info",
-		mcp.WithDescription("Returns the platform contract: supported frameworks, artifact format, and deployment requirements. Call this first to understand what the platform needs before preparing a deployment."),
+		mcp.WithDescription("Returns the platform contract: supported runtimes, artifact format, and deployment requirements. Call this first to understand what the platform needs before preparing a deployment."),
 	)
 }
 
@@ -222,136 +220,46 @@ func getPlatformInfoHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 			Port:              8080,
 			MaxArtifactSizeMB: 500,
 		},
-		Artifact: ArtifactSpec{
-			Format:   "tar.gz",
-			Contents: "Output directory contents only, no wrapping folder",
+		DeployTarget: DeployTargetSpec{
+			Description: "Directory containing your build output. Entire contents extracted to /app/ in container.",
+			Tip:         "Include everything needed at runtime (compiled code, node_modules, static assets). Exclude source code and dev dependencies.",
 		},
-		Frameworks: map[string]FrameworkSpec{
-			"static": {
-				BaseImage:         "nginx:alpine",
-				NeedsStartCommand: false,
-				Description:       "Static HTML/CSS/JS served by nginx",
-			},
-			"jekyll": {
-				BaseImage:         "nginx:alpine",
-				NeedsStartCommand: false,
-				Description:       "Pre-built Jekyll site",
-			},
-			"hugo": {
-				BaseImage:         "nginx:alpine",
-				NeedsStartCommand: false,
-				Description:       "Pre-built Hugo site",
-			},
-			"nuxt": {
-				BaseImage:           "node:20-alpine",
-				NeedsStartCommand:   true,
-				DefaultStartCommand: "node .output/server/index.mjs",
-				ExtractionPath:      ".output",
-				Description:         "Nuxt 3 application (SSR or static)",
-			},
-			"next": {
-				BaseImage:           "node:20-alpine",
-				NeedsStartCommand:   true,
-				DefaultStartCommand: "pnpm start",
-				ExtractionPath:      ".next",
-				Description:         "Next.js application",
-			},
+		Runtimes: map[string]RuntimeSpec{
 			"node": {
-				BaseImage:           "node:20-alpine",
-				NeedsStartCommand:   true,
-				DefaultStartCommand: "node index.js",
-				ExtractionPath:      ".",
-				Description:         "Generic Node.js application",
-			},
-			"express": {
-				BaseImage:           "node:20-alpine",
-				NeedsStartCommand:   true,
-				DefaultStartCommand: "node index.js",
-				ExtractionPath:      ".",
-				Description:         "Express.js application",
-			},
-			"go": {
-				BaseImage:           "golang:1.21-alpine",
-				NeedsStartCommand:   true,
-				DefaultStartCommand: "./app",
-				ExtractionPath:      ".",
-				Description:         "Go application",
+				BaseImage:   "node:20-alpine",
+				Description: "Node.js 20 — for Nuxt, Next, Express, or any Node app",
+				StartCommandExamples: []string{
+					"node server/index.mjs",
+					"node index.js",
+					"npx next start",
+				},
 			},
 			"python": {
-				BaseImage:           "python:3.11-alpine",
-				NeedsStartCommand:   true,
-				DefaultStartCommand: "python main.py",
-				ExtractionPath:      ".",
-				Description:         "Python application",
+				BaseImage:   "python:3.12-slim",
+				Description: "Python 3.12 — for FastAPI, Django, Flask, or any Python app",
+				StartCommandExamples: []string{
+					"uvicorn main:app --host 0.0.0.0 --port 8080",
+					"gunicorn app:app --bind 0.0.0.0:8080",
+					"python main.py",
+				},
 			},
-			"fastapi": {
-				BaseImage:           "python:3.11-alpine",
-				NeedsStartCommand:   true,
-				DefaultStartCommand: "uvicorn main:app --host 0.0.0.0 --port 8080",
-				ExtractionPath:      ".",
-				Description:         "FastAPI application",
+			"go": {
+				BaseImage:   "alpine:latest",
+				Description: "Minimal Alpine — for pre-compiled Go or Rust binaries",
+				StartCommandExamples: []string{
+					"./server",
+					"./myapp",
+				},
 			},
-			"django": {
-				BaseImage:           "python:3.11-alpine",
-				NeedsStartCommand:   true,
-				DefaultStartCommand: "gunicorn project.wsgi:application --bind 0.0.0.0:8080",
-				ExtractionPath:      ".",
-				Description:         "Django application",
-			},
-			"flask": {
-				BaseImage:           "python:3.11-alpine",
-				NeedsStartCommand:   true,
-				DefaultStartCommand: "gunicorn app:app --bind 0.0.0.0:8080",
-				ExtractionPath:      ".",
-				Description:         "Flask application",
-			},
-			"rust": {
-				BaseImage:           "rust:1.75-alpine",
-				NeedsStartCommand:   true,
-				DefaultStartCommand: "./app",
-				ExtractionPath:      "target/release",
-				Description:         "Rust application",
+			"static": {
+				BaseImage:            "nginx:alpine",
+				Description:          "Nginx — for static HTML/CSS/JS sites. No start_command needed.",
+				StartCommandExamples: []string{},
 			},
 		},
 	}
 
 	data, _ := json.MarshalIndent(reqs, "", "  ")
-	return mcp.NewToolResultText(string(data)), nil
-}
-
-// --- analyze_project ---
-
-func analyzeProjectTool() mcp.Tool {
-	return mcp.NewTool("analyze_project",
-		mcp.WithDescription("Analyze a project directory to detect framework, build command, output directory, and native modules. Use this to understand a project before deploying."),
-		mcp.WithString("directory",
-			mcp.Required(),
-			mcp.Description("Absolute path to the project directory to analyze"),
-		),
-	)
-}
-
-func analyzeProjectHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	dir, err := req.RequireString("directory")
-	if err != nil {
-		return toolError("failed to analyze project: missing required parameter 'directory'")
-	}
-
-	if err := validateProjectPath(dir); err != nil {
-		return toolError("failed to analyze project: %v", err)
-	}
-
-	info, err := os.Stat(dir)
-	if err != nil || !info.IsDir() {
-		return toolError("failed to analyze project: directory not found: %s", dir)
-	}
-
-	analysis, err := analyze.AnalyzeProject(dir)
-	if err != nil {
-		return toolError("failed to analyze project: %v", err)
-	}
-
-	data, _ := json.MarshalIndent(analysis, "", "  ")
 	return mcp.NewToolResultText(string(data)), nil
 }
 
@@ -386,76 +294,105 @@ func listAppsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 
 func deployAppTool() mcp.Tool {
 	return mcp.NewTool("deploy_app",
-		mcp.WithDescription("Upload a pre-built tar.gz artifact to deploy an application. The agent should have already prepared the artifact using get_platform_info to understand the format. Creates a new app if no slug is provided and no .hatch.toml exists."),
-		mcp.WithString("artifact_path",
+		mcp.WithDescription(`Deploy a pre-built application directory to Hatch.
+
+PREREQUISITE: You must build the project first (npm run build, go build, etc.)
+and have the build output in a local directory.
+
+WHAT THIS TOOL DOES:
+1. Validates the deploy-target directory exists
+2. Validates the start-command entrypoint file exists in deploy-target
+3. Creates a tar.gz of the directory contents
+4. Uploads to Hatch which wraps it in a thin container image and deploys
+
+CONTAINER BEHAVIOR:
+- The ENTIRE contents of deploy_target are extracted to /app/ inside the container
+- The start_command runs from /app/ as working directory
+- PORT env var is always 8080 — your app must listen on it
+- Your app must bind to 0.0.0.0 (not localhost)
+
+RUNTIME IMAGES:
+- "node"   → node:20-alpine (for Node.js/Nuxt/Next/Express apps)
+- "python" → python:3.12-slim (for Python/FastAPI/Django/Flask apps)
+- "go"     → alpine:latest (for pre-compiled Go or Rust binaries)
+- "static" → nginx:alpine (serves files via nginx, no start_command needed)
+
+ERROR RECOVERY:
+- If deploy fails, use get_logs to read container stderr
+- If app crashes, check that it listens on process.env.PORT (or equivalent)
+- If connection refused, check it binds to 0.0.0.0 not 127.0.0.1
+
+EXAMPLES:
+  Nuxt:    deploy_app({deploy_target: ".output", runtime: "node", start_command: "node server/index.mjs"})
+  FastAPI: deploy_app({deploy_target: ".", runtime: "python", start_command: "uvicorn main:app --host 0.0.0.0 --port 8080"})
+  Go:      deploy_app({deploy_target: "dist", runtime: "go", start_command: "./server"})
+  Static:  deploy_app({deploy_target: "dist", runtime: "static"})`),
+
+		mcp.WithString("deploy_target",
 			mcp.Required(),
-			mcp.Description("Absolute path to the tar.gz artifact file"),
+			mcp.Description("Absolute path to the build output directory. Its ENTIRE contents will be extracted to /app/ in the container."),
 		),
-		mcp.WithString("framework",
+		mcp.WithString("runtime",
 			mcp.Required(),
-			mcp.Description("Framework type: static, jekyll, hugo, nuxt, next, node, express, go, python, fastapi, django, flask, or rust"),
+			mcp.Description("Base container image: node, python, go, or static"),
 		),
 		mcp.WithString("start_command",
-			mcp.Description("Start command for the app (required for non-static frameworks)"),
+			mcp.Description("Command to start the app (paths relative to /app/). Required for all runtimes except static."),
 		),
 		mcp.WithString("app",
-			mcp.Description("App slug to deploy to (reads .hatch.toml or creates new app if omitted)"),
+			mcp.Description("App slug to deploy to. If omitted, reads .hatch.toml or creates a new app."),
 		),
 		mcp.WithString("name",
-			mcp.Description("Custom app name for new apps (defaults to directory name)"),
+			mcp.Description("App name for new apps (defaults to directory name)"),
 		),
-		mcp.WithString("directory",
-			mcp.Description("Project directory for .hatch.toml lookup (defaults to cwd)"),
+		mcp.WithString("domain",
+			mcp.Description("Custom domain to configure (e.g. example.com)"),
 		),
 	)
 }
 
 func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	artifactPath, err := req.RequireString("artifact_path")
+	deployTarget, err := req.RequireString("deploy_target")
 	if err != nil {
-		return toolError("failed to deploy app: missing required parameter 'artifact_path'")
+		return toolError("failed to deploy app: missing required parameter 'deploy_target'")
 	}
 
-	if err := validateProjectPath(artifactPath); err != nil {
-		return toolError("failed to deploy app: invalid artifact path: %v", err)
+	if err := validateProjectPath(deployTarget); err != nil {
+		return toolError("failed to deploy app: invalid deploy_target path: %v", err)
 	}
 
-	fw, err := req.RequireString("framework")
+	rt, err := req.RequireString("runtime")
 	if err != nil {
-		return toolError("failed to deploy app: missing required parameter 'framework'")
+		return toolError("failed to deploy app: missing required parameter 'runtime'")
 	}
 
 	startCmd := req.GetString("start_command", "")
 	appSlug := req.GetString("app", "")
 	name := req.GetString("name", "")
-	dir := req.GetString("directory", "")
 
-	if dir != "" {
-		if err := validateProjectPath(dir); err != nil {
-			return toolError("failed to deploy app: invalid directory: %v", err)
-		}
+	// Validate runtime
+	validRuntimes := map[string]bool{
+		"node": true, "python": true, "go": true, "static": true,
 	}
-
-	// Validate framework
-	validFrameworks := map[string]bool{
-		"static": true, "jekyll": true, "hugo": true,
-		"nuxt": true, "next": true, "node": true, "express": true,
-		"go": true, "python": true, "fastapi": true, "django": true, "flask": true, "rust": true,
-	}
-	if !validFrameworks[fw] {
-		return toolError("failed to deploy app: unknown framework %q", fw)
+	if !validRuntimes[rt] {
+		return toolError("failed to deploy app: unknown runtime %q (valid: node, python, go, static)", rt)
 	}
 
 	// Validate start command for non-static
-	staticFrameworks := map[string]bool{"static": true, "jekyll": true, "hugo": true}
-	if !staticFrameworks[fw] && startCmd == "" {
-		return toolError("failed to deploy app: start_command is required for framework %q", fw)
+	if rt != "static" && startCmd == "" {
+		return toolError("failed to deploy app: start_command is required for runtime %q", rt)
 	}
 
-	// Read artifact
-	artifact, err := os.ReadFile(artifactPath)
+	// Validate deploy-target directory exists
+	info, err := os.Stat(deployTarget)
+	if err != nil || !info.IsDir() {
+		return toolError("failed to deploy app: deploy_target directory not found: %s", deployTarget)
+	}
+
+	// Read and tar the directory
+	artifact, err := createMCPTarGz(deployTarget)
 	if err != nil {
-		return toolError("failed to deploy app: cannot read artifact: %v", err)
+		return toolError("failed to deploy app: creating artifact: %v", err)
 	}
 
 	// Auth
@@ -467,19 +404,8 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	// Resolve app slug
 	slug := appSlug
 	if slug == "" {
-		// Check .hatch.toml
-		tomlDir := dir
-		if tomlDir == "" {
-			tomlDir = "."
-		}
-		tomlPath := filepath.Join(tomlDir, ".hatch.toml")
+		tomlPath := filepath.Join(".", ".hatch.toml")
 		if data, err := os.ReadFile(tomlPath); err == nil {
-			var cfg struct {
-				App struct {
-					Slug string `json:"slug" toml:"slug"`
-				} `json:"app" toml:"app"`
-			}
-			// Try [app] section format
 			if strings.Contains(string(data), "[app]") {
 				lines := strings.Split(string(data), "\n")
 				for _, line := range lines {
@@ -492,20 +418,14 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 					}
 				}
 			}
-			_ = cfg // suppress unused
 		}
 	}
 
 	if slug == "" {
-		// Create new app
 		appName := name
 		if appName == "" {
-			if dir != "" {
-				appName = filepath.Base(dir)
-			} else {
-				cwd, _ := os.Getwd()
-				appName = filepath.Base(cwd)
-			}
+			cwd, _ := os.Getwd()
+			appName = filepath.Base(cwd)
 		}
 
 		app, err := client.CreateApp(appName)
@@ -514,21 +434,70 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		}
 		slug = app.Slug
 
-		// Write .hatch.toml for future deploys
-		if dir != "" {
-			tomlPath := filepath.Join(dir, ".hatch.toml")
-			content := fmt.Sprintf("[app]\nslug = %q\nname = %q\n", slug, appName)
-			_ = os.WriteFile(tomlPath, []byte(content), 0644)
-		}
+		tomlPath := filepath.Join(".", ".hatch.toml")
+		content := fmt.Sprintf("[app]\nslug = %q\nname = %q\n", slug, appName)
+		_ = os.WriteFile(tomlPath, []byte(content), 0644)
 	}
 
 	// Upload
-	if err := client.UploadArtifact(slug, bytes.NewReader(artifact), fw, startCmd); err != nil {
+	if err := client.UploadArtifact(slug, bytes.NewReader(artifact), rt, startCmd); err != nil {
 		return toolError("failed to deploy app: upload failed: %v", err)
 	}
 
 	appURL := fmt.Sprintf("https://%s.nest.gethatch.eu", slug)
-	return mcp.NewToolResultText(fmt.Sprintf("Deployed successfully!\nApp: %s\nURL: %s\nFramework: %s", slug, appURL, fw)), nil
+	return mcp.NewToolResultText(fmt.Sprintf("Deployed successfully!\nApp: %s\nURL: %s\nRuntime: %s", slug, appURL, rt)), nil
+}
+
+// createMCPTarGz creates a tar.gz from a directory for MCP deploy_app tool.
+func createMCPTarGz(dir string) ([]byte, error) {
+	var buf bytes.Buffer
+	gzw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gzw)
+
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		rel, _ := filepath.Rel(dir, path)
+
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		header.Name = rel
+		if info.IsDir() {
+			header.Name += "/"
+		}
+
+		if err := tw.WriteHeader(header); err != nil {
+			return err
+		}
+
+		if info.Mode().IsRegular() {
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			if _, err := io.Copy(tw, f); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	tw.Close()
+	gzw.Close()
+
+	if buf.Len() > 500*1024*1024 {
+		return nil, fmt.Errorf("artifact too large (%.0f MB, max 500 MB)", float64(buf.Len())/1024/1024)
+	}
+
+	return buf.Bytes(), nil
 }
 
 // --- add_database ---

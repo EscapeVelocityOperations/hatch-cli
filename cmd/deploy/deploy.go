@@ -60,7 +60,7 @@ func readHatchConfig(dir string) (*HatchConfig, error) {
 // APIClient is the interface for the Hatch API.
 type APIClient interface {
 	CreateApp(name string) (*api.App, error)
-	UploadArtifact(slug string, artifact []byte, framework, startCommand string) error
+	UploadArtifact(slug string, artifact []byte, runtime, startCommand string) error
 }
 
 // Deps holds injectable dependencies for testing.
@@ -79,8 +79,8 @@ func (r *realAPIClient) CreateApp(name string) (*api.App, error) {
 	return r.client.CreateApp(name)
 }
 
-func (r *realAPIClient) UploadArtifact(slug string, artifact []byte, framework, startCommand string) error {
-	return r.client.UploadArtifact(slug, bytes.NewReader(artifact), framework, startCommand)
+func (r *realAPIClient) UploadArtifact(slug string, artifact []byte, runtime, startCommand string) error {
+	return r.client.UploadArtifact(slug, bytes.NewReader(artifact), runtime, startCommand)
 }
 
 func defaultDeps() *Deps {
@@ -98,28 +98,71 @@ var deps = defaultDeps()
 var (
 	appName      string
 	domainName   string
-	artifactPath string
-	framework    string
+	deployTarget string
+	runtime      string
 	startCommand string
 )
 
 func NewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "deploy",
-		Short: "Deploy your egg to Hatch",
-		Long:  "Deploy the current directory as a Hatch egg. Builds locally and uploads the artifact.",
-		RunE:  runDeploy,
+		Short: "Deploy a pre-built application directory to Hatch",
+		Long: `Deploy a pre-built application directory to Hatch.
+
+YOU must build the project first (e.g. npm run build, go build, etc.),
+then point --deploy-target at the output directory containing everything
+needed to run the app. Hatch wraps it in a thin container and deploys it.
+
+Required flags:
+  --deploy-target <dir>    Path to the build output directory
+  --runtime <runtime>      Base container image: node, python, go, or static
+  --start-command <cmd>    Command to start your app (not needed for static)
+
+Platform constraints:
+  - Container runs linux/amd64
+  - App must listen on PORT env var (always 8080)
+  - App must bind to 0.0.0.0 (not 127.0.0.1 or localhost)
+  - Max artifact size: 500 MB
+
+Examples:
+  # Node.js (Nuxt)
+  cd my-nuxt-app && pnpm build
+  hatch deploy --deploy-target .output --runtime node \
+    --start-command "node server/index.mjs"
+
+  # Python (FastAPI)
+  cd my-api && pip install -r requirements.txt
+  hatch deploy --deploy-target . --runtime python \
+    --start-command "uvicorn main:app --host 0.0.0.0 --port 8080"
+
+  # Go
+  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dist/server .
+  hatch deploy --deploy-target dist --runtime go \
+    --start-command "./server"
+
+  # Static site
+  cd my-site && npm run build
+  hatch deploy --deploy-target dist --runtime static`,
+		RunE: runDeploy,
 	}
 	cmd.Flags().StringVarP(&appName, "name", "n", "", "custom egg name (defaults to directory name)")
 	cmd.Flags().StringVarP(&domainName, "domain", "d", "", "custom domain (e.g. example.com)")
-	cmd.Flags().StringVar(&artifactPath, "artifact", "", "path to pre-built tar.gz artifact (skips analyze+build)")
-	cmd.Flags().StringVar(&framework, "framework", "", "framework type (static, jekyll, hugo, nuxt, next, node, express)")
-	cmd.Flags().StringVar(&startCommand, "start-command", "", "start command for the egg (required for non-static frameworks)")
+	cmd.Flags().StringVar(&deployTarget, "deploy-target", "", "path to the build output directory (required)")
+	cmd.Flags().StringVar(&runtime, "runtime", "", "base container image: node, python, go, or static (required)")
+	cmd.Flags().StringVar(&startCommand, "start-command", "", "command to start the app (required for non-static runtimes)")
 	return cmd
 }
 
 func runDeploy(cmd *cobra.Command, args []string) error {
-	// 1. Check auth
+	// Validate required flags
+	if deployTarget == "" {
+		return fmt.Errorf("--deploy-target is required\n\nUsage: hatch deploy --deploy-target <dir> --runtime <runtime> --start-command <cmd>\n\nRun 'hatch deploy --help' for details")
+	}
+	if runtime == "" {
+		return fmt.Errorf("--runtime is required (node, python, go, or static)\n\nRun 'hatch deploy --help' for details")
+	}
+
+	// Check auth
 	token, err := deps.GetToken()
 	if err != nil {
 		return fmt.Errorf("checking auth: %w", err)
@@ -128,23 +171,13 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
 	}
 
-	// 2. Route to agent mode or auto mode
-	if artifactPath != "" {
-		return RunArtifactDeploy(ArtifactDeployConfig{
-			Token:        token,
-			AppName:      appName,
-			Domain:       domainName,
-			ArtifactPath: artifactPath,
-			Framework:    framework,
-			StartCommand: startCommand,
-		})
-	}
-
-	// Auto mode: analyze, build, upload
-	return RunLocalDeploy(LocalDeployConfig{
-		Token:   token,
-		AppName: appName,
-		Domain:  domainName,
+	return RunArtifactDeploy(ArtifactDeployConfig{
+		Token:        token,
+		AppName:      appName,
+		Domain:       domainName,
+		DeployTarget: deployTarget,
+		Runtime:      runtime,
+		StartCommand: startCommand,
 	})
 }
 

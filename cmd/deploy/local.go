@@ -1,77 +1,81 @@
 package deploy
 
 import (
-	"context"
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
-	"github.com/EscapeVelocityOperations/hatch-cli/internal/deployer"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
 )
 
-// LocalDeployConfig holds configuration for auto-mode deployment (analyze+build+upload).
-type LocalDeployConfig struct {
-	Token     string
-	AppName   string
-	Domain    string
-	OutputDir string // Override output directory
-}
-
-// ArtifactDeployConfig holds configuration for agent-mode deployment (pre-built artifact).
+// ArtifactDeployConfig holds configuration for deploy-target mode.
 type ArtifactDeployConfig struct {
 	Token        string
 	AppName      string
 	Domain       string
-	ArtifactPath string
-	Framework    string
+	DeployTarget string
+	Runtime      string
 	StartCommand string
 	AppSlug      string // Explicit slug (optional, reads .hatch.toml if empty)
-	Directory    string // Project dir for .hatch.toml lookup
 }
 
-// validFrameworks lists accepted framework values.
-var validFrameworks = map[string]bool{
-	"static": true, "jekyll": true, "hugo": true,
-	"nuxt": true, "next": true, "node": true, "express": true,
-	"go": true, "python": true, "fastapi": true, "django": true, "flask": true, "rust": true,
+// validRuntimes lists accepted runtime values.
+var validRuntimes = map[string]bool{
+	"node": true, "python": true, "go": true, "static": true,
 }
 
-// staticFrameworks don't need a start command.
-var staticFrameworks = map[string]bool{
-	"static": true, "jekyll": true, "hugo": true,
-}
-
-// RunArtifactDeploy deploys a pre-built artifact (agent mode).
+// RunArtifactDeploy deploys a pre-built directory as an artifact.
 func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
-	// Validate framework
-	if cfg.Framework == "" {
-		return fmt.Errorf("--framework is required when using --artifact")
+	// Validate runtime
+	if cfg.Runtime == "" {
+		return fmt.Errorf("--runtime is required (node, python, go, or static)")
 	}
-	if !validFrameworks[cfg.Framework] {
-		return fmt.Errorf("unknown framework %q (valid: static, jekyll, hugo, nuxt, next, node, express, go, python, fastapi, django, flask, rust)", cfg.Framework)
+	if !validRuntimes[cfg.Runtime] {
+		return fmt.Errorf("unknown runtime %q (valid: node, python, go, static)", cfg.Runtime)
 	}
 
 	// Validate start command for non-static
-	if !staticFrameworks[cfg.Framework] && cfg.StartCommand == "" {
-		return fmt.Errorf("--start-command is required for framework %q", cfg.Framework)
+	if cfg.Runtime != "static" && cfg.StartCommand == "" {
+		return fmt.Errorf("--start-command is required for runtime %q", cfg.Runtime)
 	}
 
-	// Read artifact
-	artifact, err := os.ReadFile(cfg.ArtifactPath)
+	// Validate deploy-target directory exists
+	targetInfo, err := os.Stat(cfg.DeployTarget)
 	if err != nil {
-		return fmt.Errorf("reading artifact: %w", err)
+		return fmt.Errorf("deploy-target directory not found: %s", cfg.DeployTarget)
+	}
+	if !targetInfo.IsDir() {
+		return fmt.Errorf("deploy-target must be a directory: %s", cfg.DeployTarget)
+	}
+
+	// Validate entrypoint exists (for non-static runtimes)
+	if cfg.Runtime != "static" && cfg.StartCommand != "" {
+		entrypoint := parseEntrypoint(cfg.StartCommand)
+		if entrypoint != "" {
+			entrypointPath := filepath.Join(cfg.DeployTarget, entrypoint)
+			if _, err := os.Stat(entrypointPath); os.IsNotExist(err) {
+				return fmt.Errorf("entrypoint file %q not found in deploy-target %q\n\nThe start-command references %q but that file does not exist in your deploy-target directory.\nCheck that your build output is complete.", entrypoint, cfg.DeployTarget, entrypoint)
+			}
+		}
+	}
+
+	// Create tar.gz from directory
+	ui.Info("Creating artifact from " + cfg.DeployTarget)
+	artifact, err := createTarGz(cfg.DeployTarget)
+	if err != nil {
+		return fmt.Errorf("creating artifact: %w", err)
 	}
 	ui.Info(fmt.Sprintf("Artifact size: %.2f MB", float64(len(artifact))/1024/1024))
 
 	// Resolve app
 	client := deps.NewAPIClient(cfg.Token)
-	dir := cfg.Directory
-	if dir == "" {
-		dir = "."
-	}
-	slug, err := resolveApp(client, cfg.AppSlug, cfg.AppName, dir)
+	slug, err := resolveApp(client, cfg.AppSlug, cfg.AppName, ".")
 	if err != nil {
 		return err
 	}
@@ -79,7 +83,7 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 	// Upload
 	sp := ui.NewSpinner("Uploading artifact...")
 	sp.Start()
-	err = client.UploadArtifact(slug, artifact, cfg.Framework, cfg.StartCommand)
+	err = client.UploadArtifact(slug, artifact, cfg.Runtime, cfg.StartCommand)
 	sp.Stop()
 	if err != nil {
 		return fmt.Errorf("uploading artifact: %w", err)
@@ -97,87 +101,25 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 	return nil
 }
 
-// apiClientAdapter adapts the deploy.APIClient interface to deployer.APIClient.
-type apiClientAdapter struct {
-	client APIClient
-}
-
-func (a *apiClientAdapter) CreateApp(name string) (string, error) {
-	app, err := a.client.CreateApp(name)
-	if err != nil {
-		return "", err
-	}
-	return app.Slug, nil
-}
-
-func (a *apiClientAdapter) UploadArtifact(slug string, artifact []byte, framework, startCommand string) error {
-	return a.client.UploadArtifact(slug, artifact, framework, startCommand)
-}
-
-// RunLocalDeploy performs auto-mode: analyze, build, upload.
-func RunLocalDeploy(cfg LocalDeployConfig) error {
-	// Create deployer with progress callback for UI updates
-	d := deployer.NewDeployer(
-		func() (string, error) { return cfg.Token, nil },
-		func(token string) deployer.APIClient {
-			return &apiClientAdapter{client: deps.NewAPIClient(token)}
-		},
-	)
-
-	// Set up progress callback to show UI updates
-	var currentSpinner *ui.Spinner
-	d.Progress = func(stage, message string) {
-		// Stop any running spinner
-		if currentSpinner != nil {
-			currentSpinner.Stop()
-			currentSpinner = nil
-		}
-
-		// Show info messages for most stages
-		if stage == "uploading" {
-			currentSpinner = ui.NewSpinner(message)
-			currentSpinner.Start()
-		} else {
-			ui.Info(message)
-		}
+// parseEntrypoint extracts the file path from a start command.
+// e.g. "node server/index.mjs" -> "server/index.mjs"
+// e.g. "python -m uvicorn main:app" -> "" (skip validation for -m flag)
+// e.g. "./server" -> "server"
+func parseEntrypoint(cmd string) string {
+	parts := strings.Fields(cmd)
+	if len(parts) < 2 {
+		return ""
 	}
 
-	// Deploy using the deployer package
-	opts := deployer.DeployOptions{
-		Directory: ".",
-		Name:      cfg.AppName,
-		OutputDir: cfg.OutputDir,
+	// Skip the interpreter (node, python, etc.)
+	// If second arg starts with -, it's a flag — skip validation
+	arg := parts[1]
+	if strings.HasPrefix(arg, "-") {
+		return ""
 	}
 
-	result, err := d.Deploy(context.Background(), opts)
-
-	// Stop spinner if still running
-	if currentSpinner != nil {
-		currentSpinner.Stop()
-	}
-
-	if err != nil {
-		return err
-	}
-
-	// Show warnings for native modules
-	if result.Analysis.HasNativeModules {
-		ui.Warn("Project has native modules - local build may not work on different architecture")
-		if len(result.Analysis.NativeModules) > 0 {
-			ui.Info("Native modules: " + strings.Join(result.Analysis.NativeModules, ", "))
-		}
-	}
-
-	ui.Success("Deployed successfully!")
-	ui.Info(fmt.Sprintf("Egg URL: %s", result.URL))
-
-	// Set custom domain if specified
-	if cfg.Domain != "" {
-		realClient := api.NewClient(cfg.Token)
-		configureDomain(realClient, result.Slug, cfg.Domain)
-	}
-
-	return nil
+	// Strip leading ./ for path checking
+	return strings.TrimPrefix(arg, "./")
 }
 
 // configureDomain adds a custom domain to an app.
@@ -193,4 +135,94 @@ func configureDomain(client *api.Client, slug, domainName string) {
 			ui.Info(fmt.Sprintf("CNAME target: %s", domain.CNAME))
 		}
 	}
+}
+
+// createTarGz creates a tar.gz archive of the given directory.
+func createTarGz(dir string) ([]byte, error) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, fmt.Errorf("resolving directory: %w", err)
+	}
+
+	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		rel, _ := filepath.Rel(dir, path)
+
+		// Handle symlinks
+		link := ""
+		if info.Mode()&os.ModeSymlink != 0 {
+			link, err = os.Readlink(path)
+			if err != nil {
+				return err
+			}
+
+			// Validate symlink doesn't escape output directory
+			target := link
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(path), target)
+			}
+			target, err = filepath.Abs(target)
+			if err != nil {
+				return err
+			}
+
+			// Skip symlinks that point outside the output directory
+			if !strings.HasPrefix(target, absDir+string(filepath.Separator)) && target != absDir {
+				return nil
+			}
+		}
+
+		header, err := tar.FileInfoHeader(info, link)
+		if err != nil {
+			return err
+		}
+
+		header.Name = rel
+		if info.IsDir() {
+			header.Name += "/"
+		}
+
+		if err := tw.WriteHeader(header); err != nil {
+			return err
+		}
+
+		// Only copy content for regular files (not dirs or symlinks)
+		if info.Mode().IsRegular() {
+			f, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			if _, err := io.Copy(tw, f); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+	if err := gw.Close(); err != nil {
+		return nil, err
+	}
+
+	// Check artifact size
+	if buf.Len() > 500*1024*1024 {
+		return nil, fmt.Errorf("artifact too large (%.0f MB, max 500 MB)", float64(buf.Len())/1024/1024)
+	}
+
+	return buf.Bytes(), nil
 }
