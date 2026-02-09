@@ -239,7 +239,7 @@ func (c *Client) StreamLogs(slug string, tail int, follow bool, logType string, 
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				return nil
 			}
 			return err
