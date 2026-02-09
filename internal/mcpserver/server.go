@@ -88,6 +88,7 @@ func NewServer() *server.MCPServer {
 	s.AddTool(getStatusTool(), getStatusHandler)
 	s.AddTool(getLogsTool(), getLogsHandler)
 	s.AddTool(getEnvTool(), getEnvHandler)
+	s.AddTool(listEnvVarsTool(), listEnvVarsHandler)
 	s.AddTool(getDatabaseURLTool(), getDatabaseURLHandler)
 	s.AddTool(getAppDetailsTool(), getAppDetailsHandler)
 	s.AddTool(healthCheckTool(), healthCheckHandler)
@@ -97,6 +98,7 @@ func NewServer() *server.MCPServer {
 	s.AddTool(addDatabaseTool(), addDatabaseHandler)
 	s.AddTool(addStorageTool(), addStorageHandler)
 	s.AddTool(setEnvTool(), setEnvHandler)
+	s.AddTool(setEnvVarTool(), setEnvVarHandler)
 	s.AddTool(bulkSetEnvTool(), bulkSetEnvHandler)
 	s.AddTool(deleteEnvTool(), deleteEnvHandler)
 	s.AddTool(addDomainTool(), addDomainHandler)
@@ -1233,6 +1235,88 @@ func healthCheckHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Call
 	}
 
 	data, _ := json.MarshalIndent(result, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// --- set_env_var ---
+
+func setEnvVarTool() mcp.Tool {
+	return mcp.NewTool("set_env_var",
+		mcp.WithDescription("Set a single environment variable on an app. Alias for set_env with clearer naming."),
+		mcp.WithString("slug",
+			mcp.Required(),
+			mcp.Description("App slug (name) to set the variable on"),
+		),
+		mcp.WithString("key",
+			mcp.Required(),
+			mcp.Description("Environment variable name"),
+		),
+		mcp.WithString("value",
+			mcp.Required(),
+			mcp.Description("Environment variable value"),
+		),
+	)
+}
+
+func setEnvVarHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	slug, err := req.RequireString("slug")
+	if err != nil {
+		return toolError("failed to set env var: missing required parameter 'slug'")
+	}
+	key, err := req.RequireString("key")
+	if err != nil {
+		return toolError("failed to set env var: missing required parameter 'key'")
+	}
+	value, err := req.RequireString("value")
+	if err != nil {
+		return toolError("failed to set env var: missing required parameter 'value'")
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return toolError("failed to set env var: %v", err)
+	}
+
+	if err := client.SetEnvVar(slug, key, value); err != nil {
+		return toolError("failed to set env var: %v", err)
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("Set %s on %s.", key, slug)), nil
+}
+
+// --- list_env_vars ---
+
+func listEnvVarsTool() mcp.Tool {
+	return mcp.NewTool("list_env_vars",
+		mcp.WithDescription("List all environment variables for an app. Alias for get_env with clearer naming."),
+		mcp.WithString("slug",
+			mcp.Required(),
+			mcp.Description("App slug (name) to list env vars for"),
+		),
+	)
+}
+
+func listEnvVarsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	slug, err := req.RequireString("slug")
+	if err != nil {
+		return toolError("failed to list env vars: missing required parameter 'slug'")
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return toolError("failed to list env vars: %v", err)
+	}
+
+	vars, err := client.GetEnvVars(slug)
+	if err != nil {
+		return toolError("failed to list env vars: %v", err)
+	}
+
+	if len(vars) == 0 {
+		return mcp.NewToolResultText("No environment variables set."), nil
+	}
+
+	data, _ := json.MarshalIndent(vars, "", "  ")
 	return mcp.NewToolResultText(string(data)), nil
 }
 

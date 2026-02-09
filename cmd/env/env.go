@@ -1,6 +1,7 @@
 package env
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strings"
@@ -42,6 +43,7 @@ func defaultDeps() *Deps {
 var deps = defaultDeps()
 
 var appSlug string
+var envFile string
 
 // NewCmd returns the env command with set/unset subcommands.
 func NewCmd() *cobra.Command {
@@ -54,12 +56,13 @@ func NewCmd() *cobra.Command {
 	cmd.PersistentFlags().StringVarP(&appSlug, "app", "a", "", "egg slug (auto-detected from git remote if omitted)")
 
 	setCmd := &cobra.Command{
-		Use:   "set KEY=VALUE [KEY=VALUE...]",
+		Use:   "set [KEY=VALUE...]",
 		Short: "Set environment variables",
-		Long:  "Set one or more environment variables on a Hatch egg. Values should be in KEY=VALUE format.",
-		Args:  cobra.MinimumNArgs(1),
+		Long:  "Set one or more environment variables on a Hatch egg. Values should be in KEY=VALUE format, or use --from-env to import from a .env file.",
+		Args:  cobra.ArbitraryArgs,
 		RunE:  runSet,
 	}
+	setCmd.Flags().StringVarP(&envFile, "from-env", "f", "", "path to .env file to import")
 
 	unsetCmd := &cobra.Command{
 		Use:   "unset KEY [KEY...]",
@@ -123,6 +126,11 @@ func runList(cmd *cobra.Command, args []string) error {
 }
 
 func runSet(cmd *cobra.Command, args []string) error {
+	// Validate inputs
+	if envFile == "" && len(args) == 0 {
+		return fmt.Errorf("no environment variables specified. Provide KEY=VALUE arguments or use --from-env")
+	}
+
 	token, err := deps.GetToken()
 	if err != nil {
 		return fmt.Errorf("checking auth: %w", err)
@@ -136,6 +144,14 @@ func runSet(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Process .env file if specified
+	if envFile != "" {
+		if err := processEnvFile(token, slug, envFile); err != nil {
+			return err
+		}
+	}
+
+	// Process positional KEY=VALUE arguments
 	for _, arg := range args {
 		parts := strings.SplitN(arg, "=", 2)
 		if len(parts) != 2 {
@@ -148,6 +164,55 @@ func runSet(cmd *cobra.Command, args []string) error {
 		}
 		ui.Success(fmt.Sprintf("Set %s", key))
 	}
+	return nil
+}
+
+// processEnvFile reads a .env file and sets each variable
+func processEnvFile(token, slug, filePath string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("opening .env file: %w", err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	lineNum := 0
+	for scanner.Scan() {
+		lineNum++
+		line := strings.TrimSpace(scanner.Text())
+
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Split on first =
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid format at line %d: %q (expected KEY=VALUE)", lineNum, line)
+		}
+
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+
+		// Trim surrounding quotes from value
+		if len(value) >= 2 {
+			if (value[0] == '"' && value[len(value)-1] == '"') ||
+				(value[0] == '\'' && value[len(value)-1] == '\'') {
+				value = value[1 : len(value)-1]
+			}
+		}
+
+		if err := deps.SetEnvVar(token, slug, key, value); err != nil {
+			return fmt.Errorf("setting %s: %w", key, err)
+		}
+		ui.Success(fmt.Sprintf("Set %s", key))
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("reading .env file: %w", err)
+	}
+
 	return nil
 }
 
