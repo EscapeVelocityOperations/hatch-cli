@@ -241,6 +241,21 @@ func runUnset(cmd *cobra.Command, args []string) error {
 
 func resolveSlug() (string, error) {
 	if appSlug != "" {
+		// Try to resolve as app name by listing apps
+		token, err := deps.GetToken()
+		if err == nil && token != "" {
+			client := api.NewClient(token)
+			apps, err := client.ListApps()
+			if err == nil {
+				// Check if appSlug matches any app name or slug
+				for _, app := range apps {
+					if app.Name == appSlug || app.Slug == appSlug {
+						return app.Slug, nil
+					}
+				}
+			}
+		}
+		// Fall back to using it directly as slug
 		return appSlug, nil
 	}
 	if !deps.HasRemote("hatch") {

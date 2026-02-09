@@ -136,7 +136,37 @@ Example:
 	return cmd
 }
 
+// resolveSlug resolves an app name to its slug by listing apps.
+// Returns the slug unchanged if it's already a valid slug or no match found.
+func resolveSlug(appSlug string) (string, error) {
+	token, err := deps.GetToken()
+	if err != nil {
+		return "", fmt.Errorf("checking auth: %w", err)
+	}
+	if token == "" {
+		return "", fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
+	}
+
+	client := api.NewClient(token)
+	apps, err := client.ListApps()
+	if err == nil {
+		// Check if appSlug matches any app name or slug
+		for _, app := range apps {
+			if app.Name == appSlug || app.Slug == appSlug {
+				return app.Slug, nil
+			}
+		}
+	}
+	// Fall back to using it directly as slug
+	return appSlug, nil
+}
+
 func runList(appSlug string) error {
+	slug, err := resolveSlug(appSlug)
+	if err != nil {
+		return err
+	}
+
 	token, err := deps.GetToken()
 	if err != nil {
 		return fmt.Errorf("checking auth: %w", err)
@@ -147,7 +177,7 @@ func runList(appSlug string) error {
 
 	sp := ui.NewSpinner("Fetching domains...")
 	sp.Start()
-	domains, err := deps.ListDomains(token, appSlug)
+	domains, err := deps.ListDomains(token, slug)
 	sp.Stop()
 
 	if err != nil {
@@ -155,7 +185,7 @@ func runList(appSlug string) error {
 	}
 
 	if len(domains) == 0 {
-		ui.Info(fmt.Sprintf("No custom domains configured for '%s'.", appSlug))
+		ui.Info(fmt.Sprintf("No custom domains configured for '%s'.", slug))
 		return nil
 	}
 
@@ -168,6 +198,11 @@ func runList(appSlug string) error {
 }
 
 func runAdd(appSlug, domain string) error {
+	slug, err := resolveSlug(appSlug)
+	if err != nil {
+		return err
+	}
+
 	token, err := deps.GetToken()
 	if err != nil {
 		return fmt.Errorf("checking auth: %w", err)
@@ -178,7 +213,7 @@ func runAdd(appSlug, domain string) error {
 
 	sp := ui.NewSpinner("Adding domain...")
 	sp.Start()
-	d, err := deps.AddDomain(token, appSlug, domain)
+	d, err := deps.AddDomain(token, slug, domain)
 	sp.Stop()
 
 	if err != nil {
@@ -187,11 +222,11 @@ func runAdd(appSlug, domain string) error {
 
 	cname := d.CNAME
 	if cname == "" {
-		cname = appSlug + ".nest.gethatch.eu"
+		cname = slug + ".nest.gethatch.eu"
 	}
 
 	fmt.Println()
-	ui.Success(fmt.Sprintf("Domain '%s' added to '%s'", d.Domain, appSlug))
+	ui.Success(fmt.Sprintf("Domain '%s' added to '%s'", d.Domain, slug))
 	fmt.Printf("  %s Create a CNAME record pointing to: %s\n", ui.Dim("→"), ui.Bold(cname))
 	fmt.Printf("  %s For apex domains, use ALIAS/ANAME if your provider supports it.\n", ui.Dim("→"))
 	fmt.Printf("  %s SSL will be provisioned automatically once DNS propagates.\n", ui.Dim("→"))
@@ -203,6 +238,11 @@ func runAdd(appSlug, domain string) error {
 }
 
 func runRemove(appSlug, domain string) error {
+	slug, err := resolveSlug(appSlug)
+	if err != nil {
+		return err
+	}
+
 	token, err := deps.GetToken()
 	if err != nil {
 		return fmt.Errorf("checking auth: %w", err)
@@ -213,14 +253,14 @@ func runRemove(appSlug, domain string) error {
 
 	sp := ui.NewSpinner("Removing domain...")
 	sp.Start()
-	err = deps.RemoveDomain(token, appSlug, domain)
+	err = deps.RemoveDomain(token, slug, domain)
 	sp.Stop()
 
 	if err != nil {
 		return fmt.Errorf("removing domain: %w", err)
 	}
 
-	ui.Success(fmt.Sprintf("Domain '%s' removed from '%s'", domain, appSlug))
+	ui.Success(fmt.Sprintf("Domain '%s' removed from '%s'", domain, slug))
 	return nil
 }
 
