@@ -10,6 +10,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/apps"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/authcmd"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/boost"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/configure"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/db"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/deploy"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/destroy"
@@ -59,7 +60,7 @@ func init() {
 
 		// Skip TOS check for commands that don't need it
 		name := cmd.Name()
-		if name == "version" || name == "help" || name == "login" || name == "mcp" {
+		if name == "version" || name == "help" || name == "login" || name == "mcp" || name == "configure" {
 			return
 		}
 
@@ -114,6 +115,7 @@ func init() {
 	rootCmd.AddCommand(apps.NewInfoCmd())
 	rootCmd.AddCommand(authcmd.NewCmd())
 	rootCmd.AddCommand(boost.NewCmd())
+	rootCmd.AddCommand(configure.NewCmd())
 	rootCmd.AddCommand(db.NewCmd())
 	rootCmd.AddCommand(deploy.NewCmd())
 	rootCmd.AddCommand(destroy.NewCmd())
