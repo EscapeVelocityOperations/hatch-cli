@@ -6,6 +6,7 @@ import (
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/resolve"
 	"github.com/spf13/cobra"
 )
 
@@ -26,6 +27,10 @@ func NewCmd() *cobra.Command {
 			if len(args) == 1 {
 				return showAppEnergy(client, args[0])
 			}
+			// Check .hatch.toml for per-app energy
+			if slug := resolve.SlugFromToml(); slug != "" {
+				return showAppEnergy(client, slug)
+			}
 			return showAccountEnergy(client)
 		},
 	}
@@ -39,7 +44,7 @@ func showAccountEnergy(client *api.Client) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "\n")
-	fmt.Fprintf(os.Stderr, "  Energy Status (%s tier)\n", energy.Tier)
+	fmt.Fprintf(os.Stderr, "  Energy Status\n")
 	fmt.Fprintf(os.Stderr, "  ─────────────────────────────\n")
 	fmt.Fprintf(os.Stderr, "  Daily:   %d/%d min remaining\n", energy.DailyRemaining, energy.DailyLimit)
 	fmt.Fprintf(os.Stderr, "  Weekly:  %d/%d min remaining\n", energy.WeeklyRemaining, energy.WeeklyLimit)
@@ -74,7 +79,7 @@ func showAppEnergy(client *api.Client, slug string) error {
 	} else if energy.Boosted {
 		fmt.Fprintf(os.Stderr, "  Mode:    boosted (until %s)\n", *energy.BoostExpiresAt)
 	} else {
-		fmt.Fprintf(os.Stderr, "  Mode:    free tier\n")
+		fmt.Fprintf(os.Stderr, "  Mode:    free\n")
 	}
 
 	fmt.Fprintf(os.Stderr, "  Daily:   %d/%d min (%d used)\n",

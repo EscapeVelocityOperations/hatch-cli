@@ -1420,8 +1420,7 @@ func checkEnergyHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Call
 		return toolError("failed to check energy: %v", err)
 	}
 
-	result := fmt.Sprintf("Tier: %s\nDaily Energy: %d / %d min remaining\nWeekly Energy: %d / %d min remaining\nResets At: %s\nActive Eggs: %d\nSleeping Eggs: %d\nEggs Limit: %d",
-		energy.Tier,
+	result := fmt.Sprintf("Daily Energy: %d / %d min remaining\nWeekly Energy: %d / %d min remaining\nResets At: %s\nActive Eggs: %d\nSleeping Eggs: %d\nEggs Limit: %d",
 		energy.DailyRemaining, energy.DailyLimit,
 		energy.WeeklyRemaining, energy.WeeklyLimit,
 		energy.ResetsAt,

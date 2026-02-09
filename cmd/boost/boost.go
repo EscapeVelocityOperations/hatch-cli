@@ -8,30 +8,53 @@ import (
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/resolve"
 	"github.com/spf13/cobra"
 )
 
 func NewCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "boost <slug> [day|week]",
+		Use:   "boost [slug] [day|week]",
 		Short: "Boost an egg with extra energy",
 		Long: `Boost an egg to keep it running without sleep restrictions.
+
+If no slug is provided, the egg is detected from .hatch.toml or the current git remote.
 
 Pricing:
   day   24 hours of boost for €1
   week  7 days of boost for €3
 
 This opens a Stripe checkout page in your browser to complete payment.`,
-		Args: cobra.RangeArgs(1, 2),
+		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			token, err := auth.GetToken()
 			if err != nil {
 				return fmt.Errorf("not logged in: %w (run 'hatch login' first)", err)
 			}
 
-			slug := args[0]
+			var slug string
 			duration := "day"
-			if len(args) == 2 {
+
+			switch len(args) {
+			case 0:
+				// Resolve from .hatch.toml
+				slug = resolve.SlugFromToml()
+				if slug == "" {
+					return fmt.Errorf("no egg specified. Provide a slug or add a .hatch.toml.\nUsage: hatch boost <slug> [day|week]")
+				}
+			case 1:
+				// Could be slug or duration
+				if args[0] == "day" || args[0] == "week" {
+					slug = resolve.SlugFromToml()
+					if slug == "" {
+						return fmt.Errorf("no egg specified. Provide a slug or add a .hatch.toml.\nUsage: hatch boost <slug> [day|week]")
+					}
+					duration = args[0]
+				} else {
+					slug = args[0]
+				}
+			case 2:
+				slug = args[0]
 				duration = args[1]
 			}
 

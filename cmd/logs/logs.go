@@ -6,6 +6,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/git"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/resolve"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -83,6 +84,10 @@ func runLogs(cmd *cobra.Command, args []string) error {
 func resolveSlug(args []string) (string, error) {
 	if len(args) > 0 {
 		return args[0], nil
+	}
+	// Check .hatch.toml
+	if slug := resolve.SlugFromToml(); slug != "" {
+		return slug, nil
 	}
 	// Auto-detect from git remote
 	if !deps.HasRemote("hatch") {

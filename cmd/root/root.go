@@ -84,7 +84,7 @@ func init() {
 		fmt.Fprintln(os.Stderr, "  • Your data is YOUR responsibility — back up externally")
 		fmt.Fprintln(os.Stderr, "  • No health data, banking data, or sensitive personal data")
 		fmt.Fprintln(os.Stderr, "  • No crypto mining, spam, malware, or illegal content")
-		fmt.Fprintln(os.Stderr, "  • Free tier: apps sleep after 10 min, 2h/day energy")
+		fmt.Fprintln(os.Stderr, "  • Free plan: apps sleep after 10 min, 2h/day energy")
 		fmt.Fprintln(os.Stderr, "  • Accounts violating terms may be suspended")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "  Full terms: https://gethatch.eu/terms")

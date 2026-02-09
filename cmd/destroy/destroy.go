@@ -9,6 +9,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/git"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/resolve"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -90,6 +91,10 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 func resolveSlug(args []string) (string, error) {
 	if len(args) > 0 {
 		return args[0], nil
+	}
+	// Check .hatch.toml
+	if slug := resolve.SlugFromToml(); slug != "" {
+		return slug, nil
 	}
 	if !deps.HasRemote("hatch") {
 		return "", fmt.Errorf("no egg specified and no hatch git remote found. Usage: hatch destroy <slug>")
