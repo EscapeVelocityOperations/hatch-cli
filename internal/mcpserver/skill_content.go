@@ -60,7 +60,7 @@ The deploy-target contents are extracted to /app/ in the container.
 |-------------------|------------------------------|----------------------------------------|
 | App crashed       | Not listening on PORT        | Use process.env.PORT (or equivalent)   |
 | Connection refused| Listening on localhost       | Bind to 0.0.0.0 not 127.0.0.1         |
-| Exit code 139     | Out of memory                | Reduce memory usage or upgrade plan    |
+| Exit code 139     | Out of memory                | Reduce memory usage                    |
 | Missing module    | node_modules not in artifact | Include node_modules in deploy-target  |
 
 ## MCP Tools
