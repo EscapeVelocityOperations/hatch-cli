@@ -64,6 +64,8 @@ func NewCmd() *cobra.Command {
 		Short: "Database management commands",
 	}
 	cmd.AddCommand(newConnectCmd())
+	cmd.AddCommand(newAddCmd())
+	cmd.AddCommand(newInfoCmd())
 	return cmd
 }
 
@@ -239,4 +241,160 @@ func runPsql(host string, port int) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func newAddCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "add [slug]",
+		Short: "Provision a PostgreSQL database for your egg",
+		Long: `Provisions a managed PostgreSQL database and sets DATABASE_URL automatically.
+
+Free tier limits: 50 MB storage, 10,000 rows.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: runAdd,
+	}
+	return cmd
+}
+
+func runAdd(cmd *cobra.Command, args []string) error {
+	token, err := deps.GetToken()
+	if err != nil {
+		return fmt.Errorf("checking auth: %w", err)
+	}
+	if token == "" {
+		return fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
+	}
+
+	slug, err := resolveSlug(args)
+	if err != nil {
+		return err
+	}
+
+	ui.Info(fmt.Sprintf("Provisioning PostgreSQL database for %s...", ui.Bold(slug)))
+
+	client := api.NewClient(token)
+	addon, err := client.AddAddon(slug, "postgresql")
+	if err != nil {
+		return fmt.Errorf("provisioning database: %w", err)
+	}
+
+	if addon.Status == "active" {
+		ui.Success("Database ready!")
+		if addon.DatabaseURL != "" {
+			ui.Info("DATABASE_URL has been set automatically.")
+		}
+		ui.Info(fmt.Sprintf("Connect locally: hatch db connect %s", slug))
+		fmt.Println()
+		ui.Info("Limits: 50 MB storage, 10,000 rows (free tier)")
+	} else {
+		ui.Warn(fmt.Sprintf("Database status: %s", addon.Status))
+	}
+
+	return nil
+}
+
+func newInfoCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "info [slug]",
+		Short: "Show database status and usage for your egg",
+		Args:  cobra.MaximumNArgs(1),
+		RunE:  runInfo,
+	}
+	return cmd
+}
+
+func runInfo(cmd *cobra.Command, args []string) error {
+	token, err := deps.GetToken()
+	if err != nil {
+		return fmt.Errorf("checking auth: %w", err)
+	}
+	if token == "" {
+		return fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
+	}
+
+	slug, err := resolveSlug(args)
+	if err != nil {
+		return err
+	}
+
+	client := api.NewClient(token)
+	addons, err := client.ListAddons(slug)
+	if err != nil {
+		return fmt.Errorf("fetching addons: %w", err)
+	}
+
+	// Find postgresql addon
+	var pgAddon *api.Addon
+	for i, a := range addons {
+		if a.Type == "postgresql" {
+			pgAddon = &addons[i]
+			break
+		}
+	}
+
+	if pgAddon == nil {
+		return fmt.Errorf("no database provisioned for %s. Run: hatch db add %s", slug, slug)
+	}
+
+	fmt.Printf("Database for %s\n", ui.Bold(slug))
+	fmt.Printf("  Status:  %s\n", pgAddon.Status)
+
+	if pgAddon.PostgresBytesUsed != nil && pgAddon.PostgresLimitBytes != nil {
+		used := *pgAddon.PostgresBytesUsed
+		limit := *pgAddon.PostgresLimitBytes
+		pct := float64(0)
+		if limit > 0 {
+			pct = float64(used) / float64(limit) * 100
+		}
+		fmt.Printf("  Size:    %s / %s (%.1f%%)\n", formatBytes(used), formatBytes(limit), pct)
+	}
+
+	if pgAddon.PostgresRowsUsed != nil && pgAddon.PostgresLimitRows != nil {
+		used := *pgAddon.PostgresRowsUsed
+		limit := *pgAddon.PostgresLimitRows
+		if limit > 0 {
+			pct := float64(used) / float64(limit) * 100
+			fmt.Printf("  Rows:    %s / %s (%.1f%%)\n", formatCount(used), formatCount(limit), pct)
+		} else {
+			fmt.Printf("  Rows:    %s (unlimited)\n", formatCount(used))
+		}
+	}
+
+	if pgAddon.WritesBlocked != nil {
+		if *pgAddon.WritesBlocked {
+			fmt.Printf("  Writes:  %s\n", ui.Bold("BLOCKED — quota exceeded"))
+		} else {
+			fmt.Printf("  Writes:  allowed\n")
+		}
+	}
+
+	return nil
+}
+
+func formatBytes(b int64) string {
+	const (
+		kb = 1024
+		mb = 1024 * kb
+		gb = 1024 * mb
+	)
+	switch {
+	case b >= gb:
+		return fmt.Sprintf("%.1f GB", float64(b)/float64(gb))
+	case b >= mb:
+		return fmt.Sprintf("%.1f MB", float64(b)/float64(mb))
+	case b >= kb:
+		return fmt.Sprintf("%.1f KB", float64(b)/float64(kb))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
+}
+
+func formatCount(n int64) string {
+	if n >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	}
+	if n >= 1_000 {
+		return fmt.Sprintf("%.1fK", float64(n)/1_000)
+	}
+	return fmt.Sprintf("%d", n)
 }

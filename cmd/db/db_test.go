@@ -167,11 +167,17 @@ func TestNewCmd(t *testing.T) {
 	if cmd.Use != "db" {
 		t.Fatalf("unexpected use: %s", cmd.Use)
 	}
-	if len(cmd.Commands()) != 1 {
-		t.Fatalf("expected 1 subcommand, got %d", len(cmd.Commands()))
+	if len(cmd.Commands()) != 3 {
+		t.Fatalf("expected 3 subcommands, got %d", len(cmd.Commands()))
 	}
-	if cmd.Commands()[0].Use != "connect [slug]" {
-		t.Fatalf("expected connect subcommand, got %s", cmd.Commands()[0].Use)
+	names := make(map[string]bool)
+	for _, sub := range cmd.Commands() {
+		names[sub.Name()] = true
+	}
+	for _, expected := range []string{"connect", "add", "info"} {
+		if !names[expected] {
+			t.Fatalf("expected %s subcommand", expected)
+		}
 	}
 }
 

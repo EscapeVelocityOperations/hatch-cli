@@ -341,6 +341,24 @@ func (c *Client) AddAddon(slug, addonType string) (*Addon, error) {
 	return &addon, nil
 }
 
+// ListAddons returns addons for an app (includes usage stats for postgresql).
+func (c *Client) ListAddons(slug string) ([]Addon, error) {
+	if err := validateSlug(slug); err != nil {
+		return nil, err
+	}
+	resp, err := c.do("GET", "/apps/"+slug+"/addons", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var addons []Addon
+	if err := json.NewDecoder(resp.Body).Decode(&addons); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return addons, nil
+}
+
 // ListDomains returns custom domains for an app.
 func (c *Client) ListDomains(slug string) ([]Domain, error) {
 	if err := validateSlug(slug); err != nil {

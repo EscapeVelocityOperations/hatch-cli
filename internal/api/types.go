@@ -35,9 +35,15 @@ type LogEntry struct {
 
 // Addon represents a provisioned addon (database, storage, etc).
 type Addon struct {
-	Type   string `json:"type"`
-	Status string `json:"status"`
-	URL    string `json:"url,omitempty"`
+	Type              string `json:"type"`
+	Status            string `json:"status"`
+	URL               string `json:"url,omitempty"`
+	DatabaseURL       string `json:"database_url,omitempty"`
+	PostgresBytesUsed *int64 `json:"postgres_bytes_used,omitempty"`
+	PostgresRowsUsed  *int64 `json:"postgres_rows_used,omitempty"`
+	PostgresLimitBytes *int64 `json:"postgres_limit_bytes,omitempty"`
+	PostgresLimitRows  *int64 `json:"postgres_limit_rows,omitempty"`
+	WritesBlocked     *bool  `json:"postgres_writes_blocked,omitempty"`
 }
 
 // Domain represents a custom domain configuration.
