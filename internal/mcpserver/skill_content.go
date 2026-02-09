@@ -79,3 +79,35 @@ The deploy-target contents are extracted to /app/ in the container.
 | ` + "`add_domain`" + ` | Custom domain setup with DNS instructions |
 | ` + "`get_database_url`" + ` | Get DATABASE_URL for an app |
 `
+
+// ClaudeMDContent is the user-facing Hatch deployment guide written by `hatch init`.
+const ClaudeMDContent = `## Hatch Deployment
+
+This project deploys to [Hatch](https://gethatch.eu), an EU-hosted PaaS.
+
+### Deploy
+Build your project, then deploy the output:
+` + "```" + `bash
+hatch deploy --deploy-target <build-dir> --runtime <node|python|go|static> --start-command "<cmd>"
+` + "```" + `
+
+### Runtimes
+| Runtime | For | Example start command |
+|---------|-----|----------------------|
+| node | Nuxt, Next, Express | ` + "`node server/index.mjs`" + ` |
+| python | FastAPI, Django, Flask | ` + "`uvicorn main:app --host 0.0.0.0 --port 8080`" + ` |
+| go | Go/Rust binaries | ` + "`./server`" + ` |
+| static | HTML/CSS/JS | (none needed) |
+
+### Environment Variables (auto-injected)
+- ` + "`PORT`" + ` — Always 8080. Your app must listen on this port.
+- ` + "`DATABASE_URL`" + ` — PostgreSQL connection string (if provisioned via ` + "`hatch db`" + ` or MCP ` + "`add_database`" + `).
+
+### MCP Tools (via ` + "`hatch mcp`" + `)
+Use these tools to manage your deployment: ` + "`deploy_app`" + `, ` + "`get_logs`" + `, ` + "`get_status`" + `, ` + "`restart_app`" + `, ` + "`set_env`" + `, ` + "`add_database`" + `, ` + "`add_domain`" + `.
+
+Run ` + "`hatch mcp`" + ` or configure in ` + "`.claude/settings.json`" + `:
+` + "```" + `json
+{ "mcpServers": { "hatch": { "command": "hatch", "args": ["mcp"] } } }
+` + "```" + `
+`
