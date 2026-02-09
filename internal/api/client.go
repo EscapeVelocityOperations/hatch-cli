@@ -359,6 +359,26 @@ func (c *Client) ListAddons(slug string) ([]Addon, error) {
 	return addons, nil
 }
 
+// GetDatabaseURL returns the DATABASE_URL for an app's provisioned database.
+func (c *Client) GetDatabaseURL(slug string) (string, error) {
+	if err := validateSlug(slug); err != nil {
+		return "", err
+	}
+	resp, err := c.do("GET", "/apps/"+slug+"/addons/database", nil)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		DatabaseURL string `json:"database_url"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decoding response: %w", err)
+	}
+	return result.DatabaseURL, nil
+}
+
 // ListDomains returns custom domains for an app.
 func (c *Client) ListDomains(slug string) ([]Domain, error) {
 	if err := validateSlug(slug); err != nil {

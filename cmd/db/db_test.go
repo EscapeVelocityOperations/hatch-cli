@@ -33,7 +33,7 @@ func TestRunConnect_NoRemoteNoArg(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "no app specified") {
+	if !strings.Contains(err.Error(), "no egg specified") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -92,7 +92,7 @@ func TestResolveSlug_NoRemoteNoArg(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "no app specified") {
+	if !strings.Contains(err.Error(), "no egg specified") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -145,7 +145,7 @@ func TestNewConnectCmd(t *testing.T) {
 	if cmd.Use != "connect [slug]" {
 		t.Fatalf("unexpected use: %s", cmd.Use)
 	}
-	if cmd.Short != "Open a local TCP proxy to your app's database" {
+	if cmd.Short != "Open a local TCP proxy to your egg's database" {
 		t.Fatalf("unexpected short: %s", cmd.Short)
 	}
 	portFlag := cmd.Flags().Lookup("port")

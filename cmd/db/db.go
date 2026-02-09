@@ -22,10 +22,17 @@ import (
 )
 
 var (
-	port    int
-	host    string
+	port       int
+	host       string
 	launchPsql bool
 )
+
+// dbCreds holds parsed database credentials for psql.
+type dbCreds struct {
+	User     string
+	Password string
+	DBName   string
+}
 
 // Deps holds injectable dependencies for testing.
 type Deps struct {
@@ -34,7 +41,7 @@ type Deps struct {
 	GetRemoteURL func(name string) (string, error)
 	DialWS       func(url string, header http.Header) (*websocket.Conn, *http.Response, error)
 	Listen       func(network, address string) (net.Listener, error)
-	RunPsql      func(host string, port int) error
+	RunPsql      func(host string, port int, creds *dbCreds) error
 }
 
 func defaultDeps() *Deps {
@@ -50,8 +57,10 @@ func defaultDeps() *Deps {
 		DialWS: func(url string, header http.Header) (*websocket.Conn, *http.Response, error) {
 			return dialer.Dial(url, header)
 		},
-		Listen:  net.Listen,
-		RunPsql: runPsql,
+		Listen: net.Listen,
+		RunPsql: func(host string, port int, creds *dbCreds) error {
+			return runPsql(host, port, creds)
+		},
 	}
 }
 
@@ -114,8 +123,20 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		ui.Warn(fmt.Sprintf("Warning: binding to %s exposes the database proxy to the network. Use --host localhost for local-only access.", host))
 	}
 
+	// Fetch database credentials for psql connection
+	client := api.NewClient(token)
+	var creds *dbCreds
+	dbURL, err := client.GetDatabaseURL(slug)
+	if err == nil && dbURL != "" {
+		creds = parseDBURL(dbURL)
+	}
+
 	ui.Info(fmt.Sprintf("Database proxy for %s listening on %s", ui.Bold(slug), ui.Bold(addr)))
-	ui.Info("Connect with: psql -h " + host + " -p " + fmt.Sprint(port))
+	if creds != nil {
+		ui.Info(fmt.Sprintf("Connect with: PGPASSWORD='...' psql -h %s -p %d -U %s %s", host, port, creds.User, creds.DBName))
+	} else {
+		ui.Info("Connect with: psql -h " + host + " -p " + fmt.Sprint(port))
+	}
 	fmt.Println()
 
 	// Handle shutdown signals
@@ -124,7 +145,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 
 	if launchPsql {
 		go func() {
-			if err := deps.RunPsql(host, port); err != nil {
+			if err := deps.RunPsql(host, port, creds); err != nil {
 				ui.Error(fmt.Sprintf("psql: %v", err))
 			}
 			// After psql exits, shut down the proxy
@@ -235,12 +256,73 @@ func resolveSlug(args []string) (string, error) {
 	return api.SlugFromRemote(url)
 }
 
-func runPsql(host string, port int) error {
-	cmd := exec.Command("psql", "-h", host, "-p", fmt.Sprint(port))
+func runPsql(host string, port int, creds *dbCreds) error {
+	args := []string{"-h", host, "-p", fmt.Sprint(port)}
+	if creds != nil {
+		args = append(args, "-U", creds.User, creds.DBName)
+	}
+	cmd := exec.Command("psql", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	if creds != nil && creds.Password != "" {
+		cmd.Env = append(os.Environ(), "PGPASSWORD="+creds.Password)
+	}
 	return cmd.Run()
+}
+
+// parseDBURL extracts user, password, and dbname from a PostgreSQL URL.
+func parseDBURL(dbURL string) *dbCreds {
+	// postgresql://user:pass@host:port/dbname
+	idx := len("postgresql://")
+	if len(dbURL) <= idx {
+		return nil
+	}
+	rest := dbURL[idx:] // user:pass@host:port/dbname
+
+	atIdx := -1
+	for i, c := range rest {
+		if c == '@' {
+			atIdx = i
+			break
+		}
+	}
+	if atIdx < 0 {
+		return nil
+	}
+
+	userPass := rest[:atIdx]
+	hostDB := rest[atIdx+1:]
+
+	var user, pass string
+	colonIdx := -1
+	for i, c := range userPass {
+		if c == ':' {
+			colonIdx = i
+			break
+		}
+	}
+	if colonIdx >= 0 {
+		user = userPass[:colonIdx]
+		pass = userPass[colonIdx+1:]
+	} else {
+		user = userPass
+	}
+
+	// Extract dbname from host:port/dbname
+	var dbName string
+	slashIdx := -1
+	for i, c := range hostDB {
+		if c == '/' {
+			slashIdx = i
+			break
+		}
+	}
+	if slashIdx >= 0 {
+		dbName = hostDB[slashIdx+1:]
+	}
+
+	return &dbCreds{User: user, Password: pass, DBName: dbName}
 }
 
 func newAddCmd() *cobra.Command {
