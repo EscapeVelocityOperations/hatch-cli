@@ -142,7 +142,7 @@ func TestWSURLForSlug_EdgeCases(t *testing.T) {
 
 func TestNewConnectCmd(t *testing.T) {
 	cmd := newConnectCmd()
-	if cmd.Use != "connect [slug]" {
+	if cmd.Use != "connect [slug] [-- psql-args...]" {
 		t.Fatalf("unexpected use: %s", cmd.Use)
 	}
 	if cmd.Short != "Open a local TCP proxy to your egg's database" {
@@ -156,9 +156,9 @@ func TestNewConnectCmd(t *testing.T) {
 	if hostFlag == nil || hostFlag.DefValue != "localhost" {
 		t.Fatalf("unexpected default host")
 	}
-	psqlFlag := cmd.Flags().Lookup("psql")
-	if psqlFlag == nil {
-		t.Fatal("psql flag not found")
+	noPsqlFlag := cmd.Flags().Lookup("no-psql")
+	if noPsqlFlag == nil {
+		t.Fatal("no-psql flag not found")
 	}
 }
 

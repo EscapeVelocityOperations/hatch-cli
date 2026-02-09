@@ -41,7 +41,7 @@ type Deps struct {
 	GetRemoteURL func(name string) (string, error)
 	DialWS       func(url string, header http.Header) (*websocket.Conn, *http.Response, error)
 	Listen       func(network, address string) (net.Listener, error)
-	RunPsql      func(host string, port int, creds *dbCreds) error
+	RunPsql      func(host string, port int, creds *dbCreds, extraArgs []string) error
 }
 
 func defaultDeps() *Deps {
@@ -58,8 +58,8 @@ func defaultDeps() *Deps {
 			return dialer.Dial(url, header)
 		},
 		Listen: net.Listen,
-		RunPsql: func(host string, port int, creds *dbCreds) error {
-			return runPsql(host, port, creds)
+		RunPsql: func(host string, port int, creds *dbCreds, extraArgs []string) error {
+			return runPsql(host, port, creds, extraArgs)
 		},
 	}
 }
@@ -80,20 +80,22 @@ func NewCmd() *cobra.Command {
 
 func newConnectCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "connect [slug]",
+		Use:   "connect [slug] [-- psql-args...]",
 		Short: "Open a local TCP proxy to your egg's database",
-		Long: `Opens a WebSocket tunnel to your egg's PostgreSQL database and starts a
-local TCP listener. Connect with any PostgreSQL client:
+		Long: `Opens a WebSocket tunnel to your egg's PostgreSQL database and launches psql.
+Any arguments after -- are forwarded to psql:
 
-  psql -h localhost -p 15432
+  hatch db connect my-app
+  hatch db connect my-app -- -c "SELECT 1"
 
-Or use --psql to auto-launch psql.`,
-		Args: cobra.MaximumNArgs(1),
-		RunE: runConnect,
+Use --no-psql to only start the tunnel without launching psql.`,
+		Args:               cobra.ArbitraryArgs,
+		RunE:               runConnect,
+		DisableFlagParsing: false,
 	}
 	cmd.Flags().IntVarP(&port, "port", "p", 15432, "local port to listen on")
 	cmd.Flags().StringVar(&host, "host", "localhost", "local address to bind to")
-	cmd.Flags().BoolVar(&launchPsql, "psql", false, "auto-launch psql after connecting")
+	cmd.Flags().BoolVar(&launchPsql, "no-psql", false, "don't auto-launch psql, only start the tunnel")
 	return cmd
 }
 
@@ -106,7 +108,18 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
 	}
 
-	slug, err := resolveSlug(args)
+	// Split args: first arg is slug (optional), rest after -- are psql args
+	var slugArgs []string
+	var psqlArgs []string
+	for i, a := range args {
+		if a == "--" {
+			psqlArgs = args[i+1:]
+			break
+		}
+		slugArgs = append(slugArgs, a)
+	}
+
+	slug, err := resolveSlug(slugArgs)
 	if err != nil {
 		return err
 	}
@@ -132,25 +145,27 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	}
 
 	ui.Info(fmt.Sprintf("Database proxy for %s listening on %s", ui.Bold(slug), ui.Bold(addr)))
-	if creds != nil {
-		ui.Info(fmt.Sprintf("Connect with: PGPASSWORD='...' psql -h %s -p %d -U %s %s", host, port, creds.User, creds.DBName))
-	} else {
-		ui.Info("Connect with: psql -h " + host + " -p " + fmt.Sprint(port))
-	}
 	fmt.Println()
 
 	// Handle shutdown signals
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	if launchPsql {
+	// Auto-launch psql unless --no-psql is set
+	if !launchPsql {
 		go func() {
-			if err := deps.RunPsql(host, port, creds); err != nil {
+			if err := deps.RunPsql(host, port, creds, psqlArgs); err != nil {
 				ui.Error(fmt.Sprintf("psql: %v", err))
 			}
 			// After psql exits, shut down the proxy
 			sigCh <- syscall.SIGINT
 		}()
+	} else {
+		if creds != nil {
+			ui.Info(fmt.Sprintf("Connect with: psql postgresql://%s:***@%s:%d/%s", creds.User, host, port, creds.DBName))
+		} else {
+			ui.Info("Connect with: psql -h " + host + " -p " + fmt.Sprint(port))
+		}
 	}
 
 	// Accept connections until signal
@@ -256,18 +271,20 @@ func resolveSlug(args []string) (string, error) {
 	return api.SlugFromRemote(url)
 }
 
-func runPsql(host string, port int, creds *dbCreds) error {
-	args := []string{"-h", host, "-p", fmt.Sprint(port)}
+func runPsql(host string, port int, creds *dbCreds, extraArgs []string) error {
+	var args []string
 	if creds != nil {
-		args = append(args, "-U", creds.User, creds.DBName)
+		// Pass full connection URL so psql handles auth automatically
+		connURL := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s", creds.User, creds.Password, host, port, creds.DBName)
+		args = append(args, connURL)
+	} else {
+		args = append(args, "-h", host, "-p", fmt.Sprint(port))
 	}
+	args = append(args, extraArgs...)
 	cmd := exec.Command("psql", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if creds != nil && creds.Password != "" {
-		cmd.Env = append(os.Environ(), "PGPASSWORD="+creds.Password)
-	}
 	return cmd.Run()
 }
 
