@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-DOWNLOAD_BASE="https://gethatch.eu/downloads"
+REPO="EscapeVelocityOperations/hatch-cli"
 BINARY_NAME="hatch"
 INSTALL_DIR="${HATCH_INSTALL_DIR:-/usr/local/bin}"
 
@@ -22,7 +22,7 @@ main() {
     esac
 
     FILENAME="${BINARY_NAME}-${OS}-${ARCH}"
-    URL="${DOWNLOAD_BASE}/${FILENAME}"
+    URL="https://github.com/${REPO}/releases/latest/download/${FILENAME}"
 
     echo "Downloading ${BINARY_NAME} for ${OS}/${ARCH}..."
 
