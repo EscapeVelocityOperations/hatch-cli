@@ -112,6 +112,11 @@ func NewServer() *server.MCPServer {
 	s.AddTool(deleteAppTool(), deleteAppHandler)
 	s.AddTool(checkAuthTool(), checkAuthHandler)
 
+	// Energy operations
+	s.AddTool(checkEnergyTool(), checkEnergyHandler)
+	s.AddTool(getAppEnergyTool(), getAppEnergyHandler)
+	s.AddTool(boostAppTool(), boostAppHandler)
+
 	// Resources
 	s.AddResource(
 		mcp.NewResource(
@@ -1394,4 +1399,130 @@ func bulkSetEnvHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 	}
 
 	return mcp.NewToolResultText(result.String()), nil
+}
+
+// --- check_energy ---
+
+func checkEnergyTool() mcp.Tool {
+	return mcp.NewTool("check_energy",
+		mcp.WithDescription("Get account-level energy status: daily/weekly limits, remaining energy, active eggs, and always-on/boosted eggs."),
+	)
+}
+
+func checkEnergyHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	client, err := newClient()
+	if err != nil {
+		return toolError("failed to check energy: %v", err)
+	}
+
+	energy, err := client.GetAccountEnergy()
+	if err != nil {
+		return toolError("failed to check energy: %v", err)
+	}
+
+	result := fmt.Sprintf("Tier: %s\nDaily Energy: %d / %d min remaining\nWeekly Energy: %d / %d min remaining\nResets At: %s\nActive Eggs: %d\nSleeping Eggs: %d\nEggs Limit: %d",
+		energy.Tier,
+		energy.DailyRemaining, energy.DailyLimit,
+		energy.WeeklyRemaining, energy.WeeklyLimit,
+		energy.ResetsAt,
+		energy.EggsActive, energy.EggsSleeping, energy.EggsLimit)
+
+	if len(energy.AlwaysOnEggs) > 0 {
+		result += fmt.Sprintf("\nAlways-On Eggs: %s", strings.Join(energy.AlwaysOnEggs, ", "))
+	}
+	if len(energy.BoostedEggs) > 0 {
+		result += fmt.Sprintf("\nBoosted Eggs: %s", strings.Join(energy.BoostedEggs, ", "))
+	}
+
+	return mcp.NewToolResultText(result), nil
+}
+
+// --- get_app_energy ---
+
+func getAppEnergyTool() mcp.Tool {
+	return mcp.NewTool("get_app_energy",
+		mcp.WithDescription("Get energy status for a specific app: daily/weekly usage, limits, boost status, and reset times."),
+		mcp.WithString("app",
+			mcp.Required(),
+			mcp.Description("App slug (name) to check energy for"),
+		),
+	)
+}
+
+func getAppEnergyHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	slug, err := req.RequireString("app")
+	if err != nil {
+		return toolError("failed to get app energy: missing required parameter 'app'")
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return toolError("failed to get app energy: %v", err)
+	}
+
+	energy, err := client.GetAppEnergy(slug)
+	if err != nil {
+		return toolError("failed to get app energy: %v", err)
+	}
+
+	result := fmt.Sprintf("App: %s\nStatus: %s\nPlan: %s\nAlways On: %v\nBoosted: %v\n"+
+		"Daily: %d / %d min used (%d remaining)\nWeekly: %d / %d min used (%d remaining)\n"+
+		"Daily Resets At: %s\nWeekly Resets At: %s",
+		energy.Slug, energy.Status, energy.Plan,
+		energy.AlwaysOn, energy.Boosted,
+		energy.DailyUsedMin, energy.DailyLimitMin, energy.DailyRemainingMin,
+		energy.WeeklyUsedMin, energy.WeeklyLimitMin, energy.WeeklyRemainingMin,
+		energy.DailyResetsAt, energy.WeeklyResetsAt)
+
+	if energy.BoostExpiresAt != nil {
+		result += fmt.Sprintf("\nBoost Expires At: %s", *energy.BoostExpiresAt)
+	}
+	if energy.BonusEnergy > 0 {
+		result += fmt.Sprintf("\nBonus Energy: %d min", energy.BonusEnergy)
+	}
+
+	return mcp.NewToolResultText(result), nil
+}
+
+// --- boost_app ---
+
+func boostAppTool() mcp.Tool {
+	return mcp.NewTool("boost_app",
+		mcp.WithDescription("Get a Stripe checkout URL to boost an app's energy. Returns a payment link — the user must complete payment in their browser."),
+		mcp.WithString("app",
+			mcp.Required(),
+			mcp.Description("App slug (name) to boost"),
+		),
+		mcp.WithString("duration",
+			mcp.Description("Boost duration: 'day' for 24 hours (€1) or 'week' for 7 days (€5). Defaults to 'day'."),
+		),
+	)
+}
+
+func boostAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	slug, err := req.RequireString("app")
+	if err != nil {
+		return toolError("failed to boost app: missing required parameter 'app'")
+	}
+
+	duration := "day"
+	args := req.GetArguments()
+	if d, ok := args["duration"].(string); ok && d != "" {
+		duration = d
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return toolError("failed to boost app: %v", err)
+	}
+
+	checkout, err := client.BoostCheckout(slug, duration)
+	if err != nil {
+		return toolError("failed to boost app: %v", err)
+	}
+
+	result := fmt.Sprintf("Boost checkout created for %s:\nDuration: %s\nPrice: %s\nCheckout URL: %s\n\nOpen this URL in your browser to complete payment.",
+		slug, checkout.Duration, checkout.AmountEur, checkout.CheckoutURL)
+
+	return mcp.NewToolResultText(result), nil
 }
