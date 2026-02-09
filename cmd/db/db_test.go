@@ -115,7 +115,7 @@ func TestResolveSlug_RemoteError(t *testing.T) {
 
 func TestWSURLForSlug(t *testing.T) {
 	url := wsURLForSlug("myapp")
-	expected := "wss://api.gethatch.eu/api/v1/apps/myapp/db/tunnel"
+	expected := "wss://api.gethatch.eu/v1/apps/myapp/db/tunnel"
 	if url != expected {
 		t.Fatalf("expected URL %q, got %q", expected, url)
 	}
@@ -126,9 +126,9 @@ func TestWSURLForSlug_EdgeCases(t *testing.T) {
 		slug     string
 		expected string
 	}{
-		{"test", "wss://api.gethatch.eu/api/v1/apps/test/db/tunnel"},
-		{"my-app-123", "wss://api.gethatch.eu/api/v1/apps/my-app-123/db/tunnel"},
-		{"app_with_underscore", "wss://api.gethatch.eu/api/v1/apps/app_with_underscore/db/tunnel"},
+		{"test", "wss://api.gethatch.eu/v1/apps/test/db/tunnel"},
+		{"my-app-123", "wss://api.gethatch.eu/v1/apps/my-app-123/db/tunnel"},
+		{"app_with_underscore", "wss://api.gethatch.eu/v1/apps/app_with_underscore/db/tunnel"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.slug, func(t *testing.T) {

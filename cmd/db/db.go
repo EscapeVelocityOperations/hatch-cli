@@ -212,7 +212,7 @@ func handleConn(tcpConn net.Conn, wsURL string, header http.Header) {
 }
 
 func wsURLForSlug(slug string) string {
-	return "wss://" + api.DefaultHost[len("https://"):] + "/api/v1/apps/" + slug + "/db/tunnel"
+	return "wss://" + api.DefaultHost[len("https://"):] + "/v1/apps/" + slug + "/db/tunnel"
 }
 
 func resolveSlug(args []string) (string, error) {
