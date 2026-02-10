@@ -162,7 +162,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		}()
 	} else {
 		if creds != nil {
-			ui.Info(fmt.Sprintf("Connect with: psql postgresql://%s:***@%s:%d/%s", creds.User, host, port, creds.DBName))
+			ui.Info(fmt.Sprintf("Connect with: psql postgresql://%s:%s@%s:%d/%s", creds.User, creds.Password, host, port, creds.DBName))
 		} else {
 			ui.Info("Connect with: psql -h " + host + " -p " + fmt.Sprint(port))
 		}
