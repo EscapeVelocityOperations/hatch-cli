@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -22,9 +23,11 @@ import (
 )
 
 var (
-	port       int
-	host       string
-	launchPsql bool
+	port         int
+	host         string
+	launchPsql   bool
+	writeEnv     bool
+	overwriteEnv bool
 )
 
 // dbCreds holds parsed database credentials for psql.
@@ -96,6 +99,8 @@ Use --no-psql to only start the tunnel without launching psql.`,
 	cmd.Flags().IntVarP(&port, "port", "p", 15432, "local port to listen on")
 	cmd.Flags().StringVar(&host, "host", "localhost", "local address to bind to")
 	cmd.Flags().BoolVar(&launchPsql, "no-psql", false, "don't auto-launch psql, only start the tunnel")
+	cmd.Flags().BoolVar(&writeEnv, "write-env", false, "write DATABASE_URL to .env file for local development")
+	cmd.Flags().BoolVar(&overwriteEnv, "overwrite-env", false, "overwrite existing DATABASE_URL in .env (use with --write-env)")
 	return cmd
 }
 
@@ -142,6 +147,16 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	dbURL, err := client.GetDatabaseURL(slug)
 	if err == nil && dbURL != "" {
 		creds = parseDBURL(dbURL)
+	}
+
+	// Write DATABASE_URL to .env if requested
+	if writeEnv && creds != nil {
+		localURL := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s",
+			creds.User, creds.Password, host, port, creds.DBName)
+		if err := writeEnvFile(localURL, overwriteEnv); err != nil {
+			return err
+		}
+		ui.Success("Wrote DATABASE_URL to .env")
 	}
 
 	ui.Info(fmt.Sprintf("Database proxy for %s listening on %s", ui.Bold(slug), ui.Bold(addr)))
@@ -340,6 +355,41 @@ func parseDBURL(dbURL string) *dbCreds {
 	}
 
 	return &dbCreds{User: user, Password: pass, DBName: dbName}
+}
+
+// writeEnvFile writes or updates DATABASE_URL in a local .env file.
+// If DATABASE_URL already exists and overwrite is false, it returns an error.
+func writeEnvFile(dbURL string, overwrite bool) error {
+	const envPath = ".env"
+	const key = "DATABASE_URL"
+
+	existing, _ := os.ReadFile(envPath)
+	lines := strings.Split(string(existing), "\n")
+
+	// Check if DATABASE_URL already exists
+	foundIdx := -1
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, key+"=") || strings.HasPrefix(trimmed, key+" =") {
+			foundIdx = i
+			break
+		}
+	}
+
+	if foundIdx >= 0 && !overwrite {
+		return fmt.Errorf("DATABASE_URL already exists in .env. Use --overwrite-env to replace it")
+	}
+
+	if foundIdx >= 0 {
+		lines[foundIdx] = key + "=" + dbURL
+	} else {
+		if len(lines) > 0 && lines[len(lines)-1] != "" {
+			lines = append(lines, "")
+		}
+		lines = append(lines, key+"="+dbURL)
+	}
+
+	return os.WriteFile(envPath, []byte(strings.Join(lines, "\n")), 0644)
 }
 
 func newAddCmd() *cobra.Command {
