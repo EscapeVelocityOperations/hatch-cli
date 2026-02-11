@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func TestNewClient(t *testing.T) {
@@ -173,8 +175,8 @@ func TestGetEnvVars(t *testing.T) {
 
 func TestSetEnvVar(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "PATCH" {
-			t.Fatalf("expected PATCH, got %s", r.Method)
+		if r.Method != "POST" {
+			t.Fatalf("expected POST, got %s", r.Method)
 		}
 		if r.URL.Path != "/v1/apps/myapp/env" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -214,18 +216,24 @@ func TestUnsetEnvVar(t *testing.T) {
 }
 
 func TestStreamLogs(t *testing.T) {
+	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/apps/myapp/logs" {
+		if r.URL.Path != "/v1/apps/myapp/logs" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-		if r.URL.Query().Get("tail") != "50" {
-			t.Fatalf("expected tail=50, got %s", r.URL.Query().Get("tail"))
+		if r.URL.Query().Get("lines") != "50" {
+			t.Fatalf("expected lines=50, got %s", r.URL.Query().Get("lines"))
 		}
-		if r.Header.Get("Accept") != "text/event-stream" {
-			t.Fatalf("expected SSE accept header")
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade failed: %v", err)
+			return
 		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("data: line one\ndata: line two\n"))
+		defer conn.Close()
+		conn.WriteMessage(websocket.TextMessage, []byte("line one"))
+		conn.WriteMessage(websocket.TextMessage, []byte("line two"))
+		conn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 	}))
 	defer server.Close()
 
@@ -248,12 +256,20 @@ func TestStreamLogs(t *testing.T) {
 }
 
 func TestStreamLogs_BuildLogs(t *testing.T) {
+	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("type") != "build" {
 			t.Fatalf("expected type=build, got %s", r.URL.Query().Get("type"))
 		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("data: build output\n"))
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("upgrade failed: %v", err)
+			return
+		}
+		defer conn.Close()
+		conn.WriteMessage(websocket.TextMessage, []byte("build output"))
+		conn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 	}))
 	defer server.Close()
 

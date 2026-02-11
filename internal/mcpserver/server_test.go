@@ -156,8 +156,8 @@ func TestGetPlatformInfoHandler(t *testing.T) {
 	if !strings.Contains(text, "node") {
 		t.Error("expected 'node' framework in output")
 	}
-	if !strings.Contains(text, "tar.gz") {
-		t.Error("expected 'tar.gz' artifact format")
+	if !strings.Contains(text, "deploy") {
+		t.Error("expected deploy info in output")
 	}
 }
 
@@ -1155,60 +1155,32 @@ func TestBulkSetEnvHandler_AuthFailure(t *testing.T) {
 	assertError(t, result, err, "not authenticated")
 }
 
-// --- analyze_project ---
-
-func TestAnalyzeProjectHandler_MissingDirectory(t *testing.T) {
-	result, err := analyzeProjectHandler(context.Background(), makeReq(map[string]interface{}{}))
-	assertError(t, result, err, "missing required parameter")
-}
-
-func TestAnalyzeProjectHandler_NonexistentDirectory(t *testing.T) {
-	result, err := analyzeProjectHandler(context.Background(), makeReq(map[string]interface{}{
-		"directory": "/nonexistent/path/that/does/not/exist",
-	}))
-	assertError(t, result, err, "directory not found")
-}
-
-func TestAnalyzeProjectHandler_RestrictedPath(t *testing.T) {
-	result, err := analyzeProjectHandler(context.Background(), makeReq(map[string]interface{}{
-		"directory": "/etc/passwd",
-	}))
-	assertError(t, result, err, "restricted directory")
-}
-
-func TestAnalyzeProjectHandler_PathTraversal(t *testing.T) {
-	result, err := analyzeProjectHandler(context.Background(), makeReq(map[string]interface{}{
-		"directory": "/tmp/../etc",
-	}))
-	assertError(t, result, err, "path traversal")
-}
-
 // --- deploy_app ---
 
-func TestDeployAppHandler_MissingArtifact(t *testing.T) {
+func TestDeployAppHandler_MissingDeployTarget(t *testing.T) {
 	result, err := deployAppHandler(context.Background(), makeReq(map[string]interface{}{}))
 	assertError(t, result, err, "missing required parameter")
 }
 
-func TestDeployAppHandler_MissingFramework(t *testing.T) {
+func TestDeployAppHandler_MissingRuntime(t *testing.T) {
 	result, err := deployAppHandler(context.Background(), makeReq(map[string]interface{}{
-		"artifact_path": "/tmp/test.tar.gz",
+		"deploy_target": "/tmp",
 	}))
 	assertError(t, result, err, "missing required parameter")
 }
 
-func TestDeployAppHandler_InvalidFramework(t *testing.T) {
+func TestDeployAppHandler_InvalidRuntime(t *testing.T) {
 	result, err := deployAppHandler(context.Background(), makeReq(map[string]interface{}{
-		"artifact_path": "/tmp/test.tar.gz",
-		"framework":     "invalid-fw",
+		"deploy_target": "/tmp",
+		"runtime":       "invalid-fw",
 	}))
-	assertError(t, result, err, "unknown framework")
+	assertError(t, result, err, "unknown runtime")
 }
 
 func TestDeployAppHandler_NonStaticMissingStartCmd(t *testing.T) {
 	result, err := deployAppHandler(context.Background(), makeReq(map[string]interface{}{
-		"artifact_path": "/tmp/test.tar.gz",
-		"framework":     "node",
+		"deploy_target": "/tmp",
+		"runtime":       "node",
 	}))
 	assertError(t, result, err, "start_command is required")
 }

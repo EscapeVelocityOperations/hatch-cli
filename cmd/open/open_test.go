@@ -97,7 +97,7 @@ func TestRunOpen_NoRemoteNoArg(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !contains(err.Error(), "no app specified") {
+	if !contains(err.Error(), "no egg specified") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

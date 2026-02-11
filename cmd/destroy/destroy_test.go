@@ -102,7 +102,7 @@ func TestRunDestroy_APIError(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error")
 		}
-		if err.Error() != "deleting app: forbidden" {
+		if err.Error() != "deleting egg: forbidden" {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})

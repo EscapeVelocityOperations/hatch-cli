@@ -66,8 +66,8 @@ func TestRunList_Empty(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
-	if !contains(output, "No apps found") {
-		t.Fatalf("expected 'No apps found' message, got: %s", output)
+	if !contains(output, "No eggs found") {
+		t.Fatalf("expected 'No eggs found' message, got: %s", output)
 	}
 }
 
@@ -136,7 +136,7 @@ func TestRunList_APIError(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error")
 		}
-		if err.Error() != "fetching apps: connection refused" {
+		if err.Error() != "fetching eggs: connection refused" {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -204,7 +204,7 @@ func TestRunInfo_APIError(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error")
 		}
-		if err.Error() != "fetching app: not found" {
+		if err.Error() != "fetching egg: not found" {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})

@@ -14,7 +14,7 @@ import (
 // mockAPIClient implements the APIClient interface for testing.
 type mockAPIClient struct {
 	createAppFn      func(name string) (*api.App, error)
-	uploadArtifactFn func(slug string, artifact []byte, framework, startCommand string) error
+	uploadArtifactFn func(slug string, artifact []byte, runtime, startCommand string) error
 }
 
 func (m *mockAPIClient) CreateApp(name string) (*api.App, error) {
@@ -24,9 +24,9 @@ func (m *mockAPIClient) CreateApp(name string) (*api.App, error) {
 	return &api.App{Slug: name + "-abc1", Name: name}, nil
 }
 
-func (m *mockAPIClient) UploadArtifact(slug string, artifact []byte, framework, startCommand string) error {
+func (m *mockAPIClient) UploadArtifact(slug string, artifact []byte, runtime, startCommand string) error {
 	if m.uploadArtifactFn != nil {
-		return m.uploadArtifactFn(slug, artifact, framework, startCommand)
+		return m.uploadArtifactFn(slug, artifact, runtime, startCommand)
 	}
 	return nil
 }
@@ -52,10 +52,14 @@ func captureOutput(fn func()) string {
 }
 
 func TestRunDeploy_NotLoggedIn(t *testing.T) {
+	tmp := t.TempDir()
 	deps = &Deps{
 		GetToken: func() (string, error) { return "", nil },
 	}
-	defer func() { deps = defaultDeps() }()
+	defer func() { deps = defaultDeps(); deployTarget = ""; runtime = "" }()
+
+	deployTarget = tmp
+	runtime = "node"
 
 	err := runDeploy(nil, nil)
 	if err == nil {
@@ -67,10 +71,14 @@ func TestRunDeploy_NotLoggedIn(t *testing.T) {
 }
 
 func TestRunDeploy_TokenError(t *testing.T) {
+	tmp := t.TempDir()
 	deps = &Deps{
 		GetToken: func() (string, error) { return "", fmt.Errorf("disk error") },
 	}
-	defer func() { deps = defaultDeps() }()
+	defer func() { deps = defaultDeps(); deployTarget = ""; runtime = "" }()
+
+	deployTarget = tmp
+	runtime = "node"
 
 	err := runDeploy(nil, nil)
 	if err == nil {
@@ -81,66 +89,59 @@ func TestRunDeploy_TokenError(t *testing.T) {
 	}
 }
 
-func TestRunDeploy_ArtifactMode_MissingFramework(t *testing.T) {
-	// Create a temp artifact file
+func TestRunDeploy_ArtifactMode_MissingRuntime(t *testing.T) {
 	tmp := t.TempDir()
-	artifactFile := filepath.Join(tmp, "site.tar.gz")
-	os.WriteFile(artifactFile, []byte("fake"), 0644)
 
 	deps = &Deps{
 		GetToken: func() (string, error) { return "tok123", nil },
 		GetCwd:   func() (string, error) { return tmp, nil },
 	}
-	defer func() { deps = defaultDeps(); artifactPath = ""; framework = "" }()
+	defer func() { deps = defaultDeps(); deployTarget = ""; runtime = "" }()
 
-	artifactPath = artifactFile
-	framework = "" // Missing!
+	deployTarget = tmp
+	runtime = "" // Missing!
 
 	err := runDeploy(nil, nil)
 	if err == nil {
-		t.Fatal("expected error for missing framework")
+		t.Fatal("expected error for missing runtime")
 	}
-	if err.Error() != "--framework is required when using --artifact" {
+	if !contains(err.Error(), "--runtime is required") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestRunDeploy_ArtifactMode_InvalidFramework(t *testing.T) {
+func TestRunDeploy_ArtifactMode_InvalidRuntime(t *testing.T) {
 	tmp := t.TempDir()
-	artifactFile := filepath.Join(tmp, "site.tar.gz")
-	os.WriteFile(artifactFile, []byte("fake"), 0644)
 
 	deps = &Deps{
 		GetToken: func() (string, error) { return "tok123", nil },
 		GetCwd:   func() (string, error) { return tmp, nil },
 	}
-	defer func() { deps = defaultDeps(); artifactPath = ""; framework = "" }()
+	defer func() { deps = defaultDeps(); deployTarget = ""; runtime = "" }()
 
-	artifactPath = artifactFile
-	framework = "django" // Invalid
+	deployTarget = tmp
+	runtime = "django" // Invalid
 
 	err := runDeploy(nil, nil)
 	if err == nil {
-		t.Fatal("expected error for invalid framework")
+		t.Fatal("expected error for invalid runtime")
 	}
-	if !contains(err.Error(), "unknown framework") {
+	if !contains(err.Error(), "unknown runtime") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestRunDeploy_ArtifactMode_NonStaticMissingStartCommand(t *testing.T) {
 	tmp := t.TempDir()
-	artifactFile := filepath.Join(tmp, "app.tar.gz")
-	os.WriteFile(artifactFile, []byte("fake"), 0644)
 
 	deps = &Deps{
 		GetToken: func() (string, error) { return "tok123", nil },
 		GetCwd:   func() (string, error) { return tmp, nil },
 	}
-	defer func() { deps = defaultDeps(); artifactPath = ""; framework = ""; startCommand = "" }()
+	defer func() { deps = defaultDeps(); deployTarget = ""; runtime = ""; startCommand = "" }()
 
-	artifactPath = artifactFile
-	framework = "node"
+	deployTarget = tmp
+	runtime = "node"
 	startCommand = "" // Missing for non-static!
 
 	err := runDeploy(nil, nil)
@@ -154,25 +155,23 @@ func TestRunDeploy_ArtifactMode_NonStaticMissingStartCommand(t *testing.T) {
 
 func TestRunDeploy_ArtifactMode_StaticSuccess(t *testing.T) {
 	tmp := t.TempDir()
-	artifactFile := filepath.Join(tmp, "site.tar.gz")
-	os.WriteFile(artifactFile, []byte("fake-artifact"), 0644)
 
-	var uploadedSlug, uploadedFramework string
+	var uploadedSlug, uploadedRuntime string
 	deps = &Deps{
 		GetToken:     func() (string, error) { return "tok123", nil },
 		GetCwd:       func() (string, error) { return tmp, nil },
 		NewAPIClient: newMockAPIClient(&mockAPIClient{
-			uploadArtifactFn: func(slug string, artifact []byte, fw, sc string) error {
+			uploadArtifactFn: func(slug string, artifact []byte, rt, sc string) error {
 				uploadedSlug = slug
-				uploadedFramework = fw
+				uploadedRuntime = rt
 				return nil
 			},
 		}),
 	}
-	defer func() { deps = defaultDeps(); artifactPath = ""; framework = ""; startCommand = "" }()
+	defer func() { deps = defaultDeps(); deployTarget = ""; runtime = ""; startCommand = "" }()
 
-	artifactPath = artifactFile
-	framework = "static"
+	deployTarget = tmp
+	runtime = "static"
 
 	captureOutput(func() {
 		err := runDeploy(nil, nil)
@@ -185,15 +184,13 @@ func TestRunDeploy_ArtifactMode_StaticSuccess(t *testing.T) {
 	if uploadedSlug == "" {
 		t.Fatal("expected upload to be called")
 	}
-	if uploadedFramework != "static" {
-		t.Fatalf("expected framework 'static', got %q", uploadedFramework)
+	if uploadedRuntime != "static" {
+		t.Fatalf("expected runtime 'static', got %q", uploadedRuntime)
 	}
 }
 
 func TestRunDeploy_ArtifactMode_ReadsHatchToml(t *testing.T) {
 	tmp := t.TempDir()
-	artifactFile := filepath.Join(tmp, "site.tar.gz")
-	os.WriteFile(artifactFile, []byte("fake-artifact"), 0644)
 
 	// Write .hatch.toml
 	tomlContent := "[app]\nslug = \"mysite-x1y2\"\nname = \"mysite\"\n"
@@ -204,16 +201,16 @@ func TestRunDeploy_ArtifactMode_ReadsHatchToml(t *testing.T) {
 		GetToken:     func() (string, error) { return "tok123", nil },
 		GetCwd:       func() (string, error) { return tmp, nil },
 		NewAPIClient: newMockAPIClient(&mockAPIClient{
-			uploadArtifactFn: func(slug string, artifact []byte, fw, sc string) error {
+			uploadArtifactFn: func(slug string, artifact []byte, rt, sc string) error {
 				uploadedSlug = slug
 				return nil
 			},
 		}),
 	}
-	defer func() { deps = defaultDeps(); artifactPath = ""; framework = "" }()
+	defer func() { deps = defaultDeps(); deployTarget = ""; runtime = "" }()
 
-	artifactPath = artifactFile
-	framework = "static"
+	deployTarget = tmp
+	runtime = "static"
 
 	// Need to change to tmp dir so readHatchConfig finds .hatch.toml
 	oldDir, _ := os.Getwd()
@@ -234,8 +231,6 @@ func TestRunDeploy_ArtifactMode_ReadsHatchToml(t *testing.T) {
 
 func TestRunDeploy_CreateAppFailure(t *testing.T) {
 	tmp := t.TempDir()
-	artifactFile := filepath.Join(tmp, "site.tar.gz")
-	os.WriteFile(artifactFile, []byte("fake"), 0644)
 
 	deps = &Deps{
 		GetToken: func() (string, error) { return "tok123", nil },
@@ -246,10 +241,10 @@ func TestRunDeploy_CreateAppFailure(t *testing.T) {
 			},
 		}),
 	}
-	defer func() { deps = defaultDeps(); artifactPath = ""; framework = ""; startCommand = "" }()
+	defer func() { deps = defaultDeps(); deployTarget = ""; runtime = ""; startCommand = "" }()
 
-	artifactPath = artifactFile
-	framework = "static"
+	deployTarget = tmp
+	runtime = "static"
 
 	// Change to tmp dir so no stale .hatch.toml is found
 	oldDir, _ := os.Getwd()
@@ -261,7 +256,7 @@ func TestRunDeploy_CreateAppFailure(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error on API failure")
 		}
-		if !contains(err.Error(), "creating app") {
+		if !contains(err.Error(), "creating egg") {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
