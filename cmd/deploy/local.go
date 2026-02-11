@@ -67,9 +67,12 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 
 	// Create tar.gz from directory
 	ui.Info("Creating artifact from " + cfg.DeployTarget)
-	artifact, err := createTarGz(cfg.DeployTarget)
+	artifact, excluded, err := createTarGz(cfg.DeployTarget)
 	if err != nil {
 		return fmt.Errorf("creating artifact: %w", err)
+	}
+	if len(excluded) > 0 {
+		fmt.Println(ui.Dim("  Excluded: " + strings.Join(excluded, ", ")))
 	}
 	ui.Info(fmt.Sprintf("Artifact size: %.2f MB", float64(len(artifact))/1024/1024))
 
@@ -145,19 +148,37 @@ func configureDomain(client *api.Client, slug, domainName string) {
 }
 
 // createTarGz creates a tar.gz archive of the given directory.
-func createTarGz(dir string) ([]byte, error) {
+// Returns the archive bytes and a list of excluded dotfile/dotfolder names.
+func createTarGz(dir string) ([]byte, []string, error) {
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
 
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, fmt.Errorf("resolving directory: %w", err)
+		return nil, nil, fmt.Errorf("resolving directory: %w", err)
 	}
+
+	var excluded []string
 
 	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+
+		// Never skip the root directory itself (even if deploy-target starts with ".")
+		if path == dir {
+			return nil
+		}
+
+		// Skip all dotfiles and dot-prefixed directories
+		if strings.HasPrefix(filepath.Base(path), ".") {
+			if info.IsDir() {
+				excluded = append(excluded, filepath.Base(path)+"/")
+				return filepath.SkipDir
+			}
+			excluded = append(excluded, filepath.Base(path))
+			return nil
 		}
 
 		rel, _ := filepath.Rel(dir, path)
@@ -216,20 +237,20 @@ func createTarGz(dir string) ([]byte, error) {
 	})
 
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if err := tw.Close(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := gw.Close(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Check artifact size
 	if buf.Len() > 500*1024*1024 {
-		return nil, fmt.Errorf("artifact too large (%.0f MB, max 500 MB)", float64(buf.Len())/1024/1024)
+		return nil, nil, fmt.Errorf("artifact too large (%.0f MB, max 500 MB)", float64(buf.Len())/1024/1024)
 	}
 
-	return buf.Bytes(), nil
+	return buf.Bytes(), excluded, nil
 }
