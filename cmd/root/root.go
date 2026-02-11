@@ -86,6 +86,7 @@ func init() {
 		fmt.Fprintln(os.Stderr, "  • No health data, banking data, or sensitive personal data")
 		fmt.Fprintln(os.Stderr, "  • No crypto mining, spam, malware, or illegal content")
 		fmt.Fprintln(os.Stderr, "  • Free eggs sleep after 3 min idle, 2h/day + 8h/week energy")
+		fmt.Fprintln(os.Stderr, "  • Static eggs are always free, don't count toward limits")
 		fmt.Fprintln(os.Stderr, "  • Accounts violating terms may be suspended")
 		fmt.Fprintln(os.Stderr, "")
 		fmt.Fprintln(os.Stderr, "  Full terms: https://gethatch.eu/terms")
