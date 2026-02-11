@@ -274,6 +274,14 @@ func getPlatformInfoHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 					"php artisan serve --host=0.0.0.0 --port=8080",
 				},
 			},
+			"bun": {
+				BaseImage:   "oven/bun:1-alpine",
+				Description: "Bun 1.x — for Bun-based apps (Elysia, Hono, or any Bun project)",
+				StartCommandExamples: []string{
+					"bun run index.ts",
+					"bun start",
+				},
+			},
 			"static": {
 				BaseImage:            "nginx:alpine",
 				Description:          "Nginx — for static HTML/CSS/JS sites. No start_command needed.",
@@ -340,6 +348,7 @@ RUNTIME IMAGES:
 - "go"     → alpine:latest (for pre-compiled Go binaries)
 - "rust"   → alpine:latest (for pre-compiled Rust binaries)
 - "php"    → php:8.3-apache (for PHP/Laravel/Symfony/WordPress apps)
+- "bun"    → oven/bun:1-alpine (for Bun/Elysia/Hono apps)
 - "static" → nginx:alpine (serves files via nginx, no start_command needed)
 
 ERROR RECOVERY:
@@ -353,6 +362,7 @@ EXAMPLES:
   Go:      deploy_app({deploy_target: "dist", runtime: "go", start_command: "./server"})
   Rust:    deploy_app({deploy_target: "dist", runtime: "rust", start_command: "./server"})
   PHP:     deploy_app({deploy_target: ".", runtime: "php"})
+  Bun:     deploy_app({deploy_target: ".", runtime: "bun", start_command: "bun run index.ts"})
   Static:  deploy_app({deploy_target: "dist", runtime: "static"})`),
 
 		mcp.WithString("deploy_target",
@@ -361,7 +371,7 @@ EXAMPLES:
 		),
 		mcp.WithString("runtime",
 			mcp.Required(),
-			mcp.Description("Base container image: node, python, go, rust, php, or static"),
+			mcp.Description("Base container image: node, python, go, rust, php, bun, or static"),
 		),
 		mcp.WithString("start_command",
 			mcp.Description("Command to start the app (paths relative to /app/). Required for all runtimes except static."),
@@ -399,10 +409,10 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 
 	// Validate runtime
 	validRuntimes := map[string]bool{
-		"node": true, "python": true, "go": true, "rust": true, "php": true, "static": true,
+		"node": true, "python": true, "go": true, "rust": true, "php": true, "bun": true, "static": true,
 	}
 	if !validRuntimes[rt] {
-		return toolError("failed to deploy app: unknown runtime %q (valid: node, python, go, rust, php, static)", rt)
+		return toolError("failed to deploy app: unknown runtime %q (valid: node, python, go, rust, php, bun, static)", rt)
 	}
 
 	// Validate start command for non-static
