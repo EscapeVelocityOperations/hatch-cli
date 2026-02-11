@@ -5,3 +5,6 @@
 bin/
 dist/
 hatch
+
+# OMC agent state
+.omc/
