@@ -195,21 +195,22 @@ func writeHatchConfig(dir, slug, name string) error {
 	return os.WriteFile(path, []byte(content), 0644)
 }
 
-// resolveApp resolves or creates an app, returning the slug. Writes .hatch.toml on first deploy.
-func resolveApp(client APIClient, appSlug, appNameOverride, dir string) (string, error) {
+// resolveApp resolves or creates an app, returning the slug and name.
+// The caller is responsible for writing .hatch.toml after a successful deploy.
+func resolveApp(client APIClient, appSlug, appNameOverride, dir string) (string, string, error) {
 	// If explicit slug provided, use it
 	if appSlug != "" {
-		return appSlug, nil
+		return appSlug, "", nil
 	}
 
 	// Check .hatch.toml
 	hatchConfig, err := readHatchConfig(dir)
 	if err != nil {
-		return "", fmt.Errorf("reading .hatch.toml: %w", err)
+		return "", "", fmt.Errorf("reading .hatch.toml: %w", err)
 	}
 	if hatchConfig != nil {
 		ui.Info(fmt.Sprintf("Deploying to existing egg: %s", hatchConfig.Slug))
-		return hatchConfig.Slug, nil
+		return hatchConfig.Slug, hatchConfig.Name, nil
 	}
 
 	// Create new app
@@ -226,13 +227,9 @@ func resolveApp(client APIClient, appSlug, appNameOverride, dir string) (string,
 	ui.Info(fmt.Sprintf("Creating new egg: %s", name))
 	app, err := client.CreateApp(name)
 	if err != nil {
-		return "", fmt.Errorf("creating egg: %w", err)
+		return "", "", fmt.Errorf("creating egg: %w", err)
 	}
 	ui.Success(fmt.Sprintf("Created egg: %s", app.Slug))
 
-	if err := writeHatchConfig(dir, app.Slug, name); err != nil {
-		ui.Warn(fmt.Sprintf("Could not write .hatch.toml: %v", err))
-	}
-
-	return app.Slug, nil
+	return app.Slug, name, nil
 }

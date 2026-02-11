@@ -75,7 +75,7 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 
 	// Resolve app
 	client := deps.NewAPIClient(cfg.Token)
-	slug, err := resolveApp(client, cfg.AppSlug, cfg.AppName, ".")
+	slug, name, err := resolveApp(client, cfg.AppSlug, cfg.AppName, ".")
 	if err != nil {
 		return err
 	}
@@ -87,6 +87,13 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 	sp.Stop()
 	if err != nil {
 		return fmt.Errorf("uploading artifact: %w", err)
+	}
+
+	// Write .hatch.toml only after successful upload
+	if name != "" {
+		if err := writeHatchConfig(cfg.DeployTarget, slug, name); err != nil {
+			ui.Warn(fmt.Sprintf("Could not write .hatch.toml: %v", err))
+		}
 	}
 
 	ui.Success("Deployed successfully!")

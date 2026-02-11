@@ -37,15 +37,19 @@ func defaultDeps() *Deps {
 
 var deps = defaultDeps()
 
+var skipConfirm bool
+
 // NewCmd returns the destroy command.
 func NewCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "destroy [slug]",
 		Short: "Permanently delete a egg",
-		Long:  "Permanently delete a Hatch egg. This action cannot be undone. Requires typing the egg name to confirm.",
+		Long:  "Permanently delete a Hatch egg. This action cannot be undone. Requires typing the egg name to confirm unless --yes is passed.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE:  runDestroy,
 	}
+	cmd.Flags().BoolVarP(&skipConfirm, "yes", "y", false, "skip confirmation prompt")
+	return cmd
 }
 
 func runDestroy(cmd *cobra.Command, args []string) error {
@@ -62,17 +66,19 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Double confirmation: first warning, then type app name
-	ui.Warn(fmt.Sprintf("This will permanently delete %s and all its data.", ui.Bold(slug)))
-	fmt.Println()
+	// Confirmation: skip if --yes flag is set
+	if !skipConfirm {
+		ui.Warn(fmt.Sprintf("This will permanently delete %s and all its data.", ui.Bold(slug)))
+		fmt.Println()
 
-	answer, err := deps.ReadInput(fmt.Sprintf("Type %q to confirm: ", slug))
-	if err != nil {
-		return fmt.Errorf("reading input: %w", err)
-	}
-	if strings.TrimSpace(answer) != slug {
-		ui.Info("Cancelled. Egg name did not match.")
-		return nil
+		answer, err := deps.ReadInput(fmt.Sprintf("Type %q to confirm: ", slug))
+		if err != nil {
+			return fmt.Errorf("reading input: %w", err)
+		}
+		if strings.TrimSpace(answer) != slug {
+			ui.Info("Cancelled. Egg name did not match.")
+			return nil
+		}
 	}
 
 	sp := ui.NewSpinner(fmt.Sprintf("Destroying %s...", slug))

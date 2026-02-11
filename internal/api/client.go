@@ -9,12 +9,21 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+// verboseEnabled controls whether HTTP request/response details are logged to stderr.
+var verboseEnabled bool
+
+// SetVerbose enables or disables verbose HTTP logging.
+func SetVerbose(v bool) {
+	verboseEnabled = v
+}
 
 const (
 	DefaultHost = "https://api.gethatch.eu"
@@ -132,14 +141,38 @@ func (c *Client) do(method, path string, body io.Reader) (*http.Response, error)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+
+	if verboseEnabled {
+		fmt.Fprintf(os.Stderr, "> %s %s\n", method, url)
+		for k, v := range req.Header {
+			val := strings.Join(v, ", ")
+			if k == "Authorization" {
+				val = "Bearer " + RedactToken(c.token)
+			}
+			fmt.Fprintf(os.Stderr, "> %s: %s\n", k, val)
+		}
+	}
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
+
+	if verboseEnabled {
+		fmt.Fprintf(os.Stderr, "< %s\n", resp.Status)
+		for k, v := range resp.Header {
+			fmt.Fprintf(os.Stderr, "< %s: %s\n", k, strings.Join(v, ", "))
+		}
+	}
+
 	if resp.StatusCode >= 400 {
 		defer resp.Body.Close()
 		data, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, RedactToken(strings.TrimSpace(string(data))))
+		body := RedactToken(strings.TrimSpace(string(data)))
+		if verboseEnabled {
+			fmt.Fprintf(os.Stderr, "< Body: %s\n", body)
+		}
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, body)
 	}
 	return resp, nil
 }

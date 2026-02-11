@@ -24,6 +24,7 @@ import (
 	mcpcmd "github.com/EscapeVelocityOperations/hatch-cli/cmd/mcp"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/open"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/restart"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/config"
 	"github.com/spf13/cobra"
@@ -47,6 +48,11 @@ func Execute() error {
 	return rootCmd.Execute()
 }
 
+// IsVerbose returns whether the --verbose flag is set.
+func IsVerbose() bool {
+	return verbose
+}
+
 func init() {
 	cobra.OnInitialize(initConfig)
 
@@ -55,6 +61,9 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&tokenFlag, "token", "", "API token (overrides HATCH_TOKEN and config file)")
 
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		if verbose {
+			api.SetVerbose(true)
+		}
 		if tokenFlag != "" {
 			auth.SetTokenFlag(tokenFlag)
 		}
