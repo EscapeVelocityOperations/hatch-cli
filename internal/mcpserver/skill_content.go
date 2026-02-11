@@ -13,7 +13,7 @@ Optimized for AI agents.
 2. Deploy the build output directory:
 
 ` + "```" + `bash
-hatch deploy --deploy-target <build-dir> --runtime <node|python|go|static> --start-command "<cmd>"
+hatch deploy --deploy-target <build-dir> --runtime <node|python|go|rust|php|static> --start-command "<cmd>"
 ` + "```" + `
 
 Or via MCP:
@@ -28,7 +28,9 @@ deploy_app({ deploy_target: "/path/to/build", runtime: "node", start_command: "n
 |----------|-------------------|----------------------------------------|
 | node     | node:20-alpine    | Nuxt, Next, Express, any Node.js app   |
 | python   | python:3.12-slim  | FastAPI, Django, Flask, any Python app  |
-| go       | alpine:latest     | Pre-compiled Go or Rust binaries       |
+| go       | alpine:latest     | Pre-compiled Go binaries               |
+| rust     | alpine:latest     | Pre-compiled Rust binaries             |
+| php      | php:8.3-apache    | Laravel, Symfony, WordPress, any PHP   |
 | static   | nginx:alpine      | Static HTML/CSS/JS (no start command)  |
 
 ## What goes in deploy-target
@@ -42,6 +44,8 @@ The deploy-target directory should contain everything needed at runtime:
 | Express      | (none)             | .             | node index.js                |
 | FastAPI      | (none)             | .             | uvicorn main:app --host 0.0.0.0 --port 8080 |
 | Go           | go build -o dist/  | dist          | ./server                     |
+| Rust         | cargo build --release | target/release | ./server                  |
+| PHP/Laravel  | composer install   | .             | apache2-foreground           |
 | Static site  | npm run build      | dist          | (not needed)                 |
 
 IMPORTANT: Include node_modules if your Node.js app needs them at runtime.
@@ -88,7 +92,7 @@ This project deploys to [Hatch](https://gethatch.eu), an EU-hosted PaaS.
 ### Deploy
 Build your project, then deploy the output:
 ` + "```" + `bash
-hatch deploy --deploy-target <build-dir> --runtime <node|python|go|static> --start-command "<cmd>"
+hatch deploy --deploy-target <build-dir> --runtime <node|python|go|rust|php|static> --start-command "<cmd>"
 ` + "```" + `
 
 ### Runtimes
@@ -96,7 +100,9 @@ hatch deploy --deploy-target <build-dir> --runtime <node|python|go|static> --sta
 |---------|-----|----------------------|
 | node | Nuxt, Next, Express | ` + "`node server/index.mjs`" + ` |
 | python | FastAPI, Django, Flask | ` + "`uvicorn main:app --host 0.0.0.0 --port 8080`" + ` |
-| go | Go/Rust binaries | ` + "`./server`" + ` |
+| go | Go binaries | ` + "`./server`" + ` |
+| rust | Rust binaries | ` + "`./server`" + ` |
+| php | Laravel, Symfony, WordPress | ` + "`apache2-foreground`" + ` |
 | static | HTML/CSS/JS | (none needed) |
 
 ### Environment Variables (auto-injected)

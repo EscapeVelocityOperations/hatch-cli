@@ -252,10 +252,26 @@ func getPlatformInfoHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 			},
 			"go": {
 				BaseImage:   "alpine:latest",
-				Description: "Minimal Alpine — for pre-compiled Go or Rust binaries",
+				Description: "Minimal Alpine — for pre-compiled Go binaries",
 				StartCommandExamples: []string{
 					"./server",
 					"./myapp",
+				},
+			},
+			"rust": {
+				BaseImage:   "alpine:latest",
+				Description: "Minimal Alpine — for pre-compiled Rust binaries",
+				StartCommandExamples: []string{
+					"./server",
+					"./myapp",
+				},
+			},
+			"php": {
+				BaseImage:   "php:8.3-apache",
+				Description: "PHP 8.3 with Apache — for Laravel, Symfony, WordPress, or any PHP app",
+				StartCommandExamples: []string{
+					"apache2-foreground",
+					"php artisan serve --host=0.0.0.0 --port=8080",
 				},
 			},
 			"static": {
@@ -321,7 +337,9 @@ CONTAINER BEHAVIOR:
 RUNTIME IMAGES:
 - "node"   → node:20-alpine (for Node.js/Nuxt/Next/Express apps)
 - "python" → python:3.12-slim (for Python/FastAPI/Django/Flask apps)
-- "go"     → alpine:latest (for pre-compiled Go or Rust binaries)
+- "go"     → alpine:latest (for pre-compiled Go binaries)
+- "rust"   → alpine:latest (for pre-compiled Rust binaries)
+- "php"    → php:8.3-apache (for PHP/Laravel/Symfony/WordPress apps)
 - "static" → nginx:alpine (serves files via nginx, no start_command needed)
 
 ERROR RECOVERY:
@@ -333,6 +351,8 @@ EXAMPLES:
   Nuxt:    deploy_app({deploy_target: ".output", runtime: "node", start_command: "node server/index.mjs"})
   FastAPI: deploy_app({deploy_target: ".", runtime: "python", start_command: "uvicorn main:app --host 0.0.0.0 --port 8080"})
   Go:      deploy_app({deploy_target: "dist", runtime: "go", start_command: "./server"})
+  Rust:    deploy_app({deploy_target: "dist", runtime: "rust", start_command: "./server"})
+  PHP:     deploy_app({deploy_target: ".", runtime: "php"})
   Static:  deploy_app({deploy_target: "dist", runtime: "static"})`),
 
 		mcp.WithString("deploy_target",
@@ -341,7 +361,7 @@ EXAMPLES:
 		),
 		mcp.WithString("runtime",
 			mcp.Required(),
-			mcp.Description("Base container image: node, python, go, or static"),
+			mcp.Description("Base container image: node, python, go, rust, php, or static"),
 		),
 		mcp.WithString("start_command",
 			mcp.Description("Command to start the app (paths relative to /app/). Required for all runtimes except static."),
@@ -379,10 +399,10 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 
 	// Validate runtime
 	validRuntimes := map[string]bool{
-		"node": true, "python": true, "go": true, "static": true,
+		"node": true, "python": true, "go": true, "rust": true, "php": true, "static": true,
 	}
 	if !validRuntimes[rt] {
-		return toolError("failed to deploy app: unknown runtime %q (valid: node, python, go, static)", rt)
+		return toolError("failed to deploy app: unknown runtime %q (valid: node, python, go, rust, php, static)", rt)
 	}
 
 	// Validate start command for non-static

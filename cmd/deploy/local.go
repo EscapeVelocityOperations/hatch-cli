@@ -27,17 +27,17 @@ type ArtifactDeployConfig struct {
 
 // validRuntimes lists accepted runtime values.
 var validRuntimes = map[string]bool{
-	"node": true, "python": true, "go": true, "static": true,
+	"node": true, "python": true, "go": true, "rust": true, "php": true, "static": true,
 }
 
 // RunArtifactDeploy deploys a pre-built directory as an artifact.
 func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 	// Validate runtime
 	if cfg.Runtime == "" {
-		return fmt.Errorf("--runtime is required (node, python, go, or static)")
+		return fmt.Errorf("--runtime is required (node, python, go, rust, php, or static)")
 	}
 	if !validRuntimes[cfg.Runtime] {
-		return fmt.Errorf("unknown runtime %q (valid: node, python, go, static)", cfg.Runtime)
+		return fmt.Errorf("unknown runtime %q (valid: node, python, go, rust, php, static)", cfg.Runtime)
 	}
 
 	// Validate start command for non-static
