@@ -465,6 +465,27 @@ func (c *Client) RemoveDomain(slug, domain string) error {
 	return nil
 }
 
+// VerifyDomain triggers verification of a custom domain.
+func (c *Client) VerifyDomain(slug, domain string) (*Domain, error) {
+	if err := validateSlug(slug); err != nil {
+		return nil, err
+	}
+	if err := ValidateDomain(domain); err != nil {
+		return nil, err
+	}
+	resp, err := c.do("POST", "/apps/"+slug+"/domains/"+domain+"/verify", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var d Domain
+	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return &d, nil
+}
+
 // GetLogs returns recent log lines (non-streaming).
 func (c *Client) GetLogs(slug string, tail int, logType string) ([]string, error) {
 	if err := validateSlug(slug); err != nil {

@@ -48,9 +48,11 @@ type Addon struct {
 
 // Domain represents a custom domain configuration.
 type Domain struct {
-	Domain string `json:"domain"`
-	Status string `json:"status"`
-	CNAME  string `json:"cname,omitempty"`
+	Domain            string `json:"domain"`
+	Status            string `json:"status"`
+	CNAME             string `json:"cname,omitempty"`
+	Verified          bool   `json:"verified"`
+	VerificationToken string `json:"verification_token,omitempty"`
 }
 
 // APIKey represents an API key for the user.

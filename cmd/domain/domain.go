@@ -12,10 +12,11 @@ import (
 
 // Deps holds injectable dependencies for testing.
 type Deps struct {
-	GetToken     func() (string, error)
-	ListDomains  func(token, slug string) ([]api.Domain, error)
-	AddDomain    func(token, slug, domain string) (*api.Domain, error)
-	RemoveDomain func(token, slug, domain string) error
+	GetToken       func() (string, error)
+	ListDomains    func(token, slug string) ([]api.Domain, error)
+	AddDomain      func(token, slug, domain string) (*api.Domain, error)
+	RemoveDomain   func(token, slug, domain string) error
+	VerifyDomain   func(token, slug, domain string) (*api.Domain, error)
 }
 
 func defaultDeps() *Deps {
@@ -29,6 +30,9 @@ func defaultDeps() *Deps {
 		},
 		RemoveDomain: func(token, slug, domain string) error {
 			return api.NewClient(token).RemoveDomain(slug, domain)
+		},
+		VerifyDomain: func(token, slug, domain string) (*api.Domain, error) {
+			return api.NewClient(token).VerifyDomain(slug, domain)
 		},
 	}
 }
@@ -59,6 +63,7 @@ SSL certificates are provisioned automatically via Let's Encrypt.`,
 
 	cmd.AddCommand(newListCmd())
 	cmd.AddCommand(newAddCmd())
+	cmd.AddCommand(newVerifyCmd())
 	cmd.AddCommand(newRemoveCmd())
 
 	return cmd
@@ -189,9 +194,13 @@ func runList(appSlug string) error {
 		return nil
 	}
 
-	table := ui.NewTable(os.Stdout, "DOMAIN", "STATUS", "CNAME")
+	table := ui.NewTable(os.Stdout, "DOMAIN", "STATUS", "VERIFIED", "CNAME")
 	for _, d := range domains {
-		table.AddRow(d.Domain, statusColor(d.Status), d.CNAME)
+		verified := ui.Green("yes")
+		if !d.Verified {
+			verified = ui.Yellow("no")
+		}
+		table.AddRow(d.Domain, statusColor(d.Status), verified, d.CNAME)
 	}
 	table.Render()
 	return nil
@@ -226,12 +235,21 @@ func runAdd(appSlug, domain string) error {
 	}
 
 	fmt.Println()
-	ui.Success(fmt.Sprintf("Domain '%s' added to '%s'", d.Domain, slug))
+	if d.Verified {
+		ui.Success(fmt.Sprintf("Domain '%s' added and verified for '%s'", d.Domain, slug))
+	} else {
+		ui.Success(fmt.Sprintf("Domain '%s' added to '%s' (pending verification)", d.Domain, slug))
+		fmt.Println()
+		fmt.Println(ui.Bold("To verify ownership, add this DNS TXT record:"))
+		fmt.Printf("  Host:  %s\n", ui.Bold("_hatch-verify."+domain))
+		fmt.Printf("  Value: %s\n", ui.Bold(d.VerificationToken))
+		fmt.Println()
+		fmt.Printf("Then run: %s\n", ui.Bold(fmt.Sprintf("hatch domain verify %s --app %s", domain, slug)))
+		fmt.Println()
+	}
 	fmt.Printf("  %s Create a CNAME record pointing to: %s\n", ui.Dim("→"), ui.Bold(cname))
 	fmt.Printf("  %s For apex domains, use ALIAS/ANAME if your provider supports it.\n", ui.Dim("→"))
 	fmt.Printf("  %s SSL will be provisioned automatically once DNS propagates.\n", ui.Dim("→"))
-	fmt.Println()
-	fmt.Printf("  %s Verify DNS with: %s\n", ui.Dim("→"), ui.Bold(fmt.Sprintf("dig +short CNAME %s", domain)))
 	fmt.Println()
 
 	return nil
@@ -264,11 +282,76 @@ func runRemove(appSlug, domain string) error {
 	return nil
 }
 
+func newVerifyCmd() *cobra.Command {
+	var appSlug string
+
+	cmd := &cobra.Command{
+		Use:   "verify <domain>",
+		Short: "Verify domain ownership via DNS",
+		Long: `Verify domain ownership by checking the DNS TXT record.
+
+After adding the required TXT record (_hatch-verify.domain.com), run this command
+to trigger verification. Once verified, Caddy will configure the route and provision SSL.
+
+Example:
+  hatch domain verify example.com --app my-app`,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runVerify(appSlug, args[0])
+		},
+	}
+
+	cmd.Flags().StringVarP(&appSlug, "app", "a", "", "Egg slug (required)")
+	cmd.MarkFlagRequired("app")
+
+	return cmd
+}
+
+func runVerify(appSlug, domain string) error {
+	slug, err := resolveSlug(appSlug)
+	if err != nil {
+		return err
+	}
+
+	token, err := deps.GetToken()
+	if err != nil {
+		return fmt.Errorf("checking auth: %w", err)
+	}
+	if token == "" {
+		return fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
+	}
+
+	sp := ui.NewSpinner("Verifying domain ownership...")
+	sp.Start()
+	d, err := deps.VerifyDomain(token, slug, domain)
+	sp.Stop()
+
+	if err != nil {
+		return fmt.Errorf("verifying domain: %w", err)
+	}
+
+	if d.Verified {
+		ui.Success(fmt.Sprintf("Domain '%s' verified successfully!", domain))
+		ui.Info("SSL certificate will be provisioned automatically.")
+	} else {
+		ui.Warn(fmt.Sprintf("Domain '%s' verification failed", domain))
+		fmt.Println()
+		fmt.Println("Make sure you have added the TXT record:")
+		fmt.Printf("  Host:  %s\n", ui.Bold("_hatch-verify."+domain))
+		fmt.Printf("  Value: %s\n", ui.Bold(d.VerificationToken))
+		fmt.Println()
+		fmt.Println("DNS changes can take a few minutes to propagate.")
+		fmt.Printf("Check with: %s\n", ui.Bold(fmt.Sprintf("dig +short TXT _hatch-verify.%s", domain)))
+	}
+
+	return nil
+}
+
 func statusColor(status string) string {
 	switch status {
 	case "active", "verified":
 		return ui.Green(status)
-	case "pending":
+	case "pending", "pending_verification":
 		return ui.Yellow(status)
 	case "error", "failed":
 		return ui.Red(status)

@@ -140,7 +140,18 @@ func configureDomain(client *api.Client, slug, domainName string) {
 		ui.Warn(fmt.Sprintf("Domain configuration failed: %v", err))
 		ui.Info("You can configure it later with: hatch domain add " + domainName)
 	} else {
-		ui.Success(fmt.Sprintf("Domain %s configured", domainName))
+		if domain.Verified {
+			ui.Success(fmt.Sprintf("Domain %s configured and verified", domainName))
+		} else {
+			ui.Success(fmt.Sprintf("Domain %s configured (pending verification)", domainName))
+			fmt.Println()
+			fmt.Println(ui.Bold("To verify ownership, add this DNS TXT record:"))
+			fmt.Printf("  Host:  %s\n", ui.Bold("_hatch-verify."+domainName))
+			fmt.Printf("  Value: %s\n", ui.Bold(domain.VerificationToken))
+			fmt.Println()
+			fmt.Printf("Then run: %s\n", ui.Bold(fmt.Sprintf("hatch domain verify %s --app %s", domainName, slug)))
+			fmt.Println()
+		}
 		if domain.CNAME != "" {
 			ui.Info(fmt.Sprintf("CNAME target: %s", domain.CNAME))
 		}
