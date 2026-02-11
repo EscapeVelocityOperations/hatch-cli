@@ -13,7 +13,7 @@ brew install EscapeVelocityOperations/tap/hatch
 ### Install script (Linux/macOS)
 
 ```sh
-curl -fsSL https://gethatch.eu/install.sh | sh
+curl -fsSL https://gethatch.eu/install | sh
 ```
 
 ### From source
