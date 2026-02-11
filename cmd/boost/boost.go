@@ -21,8 +21,8 @@ func NewCmd() *cobra.Command {
 If no slug is provided, the egg is detected from .hatch.toml or the current git remote.
 
 Pricing:
-  day   24 hours of boost for €1
-  week  7 days of boost for €3
+  day   24 hours of boost for €1.50
+  week  7 days of boost for €4
 
 This opens a Stripe checkout page in your browser to complete payment.`,
 		Args: cobra.MaximumNArgs(2),

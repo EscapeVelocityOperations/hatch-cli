@@ -1493,7 +1493,7 @@ func boostAppTool() mcp.Tool {
 			mcp.Description("App slug (name) to boost"),
 		),
 		mcp.WithString("duration",
-			mcp.Description("Boost duration: 'day' for 24 hours (€1) or 'week' for 7 days (€5). Defaults to 'day'."),
+			mcp.Description("Boost duration: 'day' for 24 hours (€1.50) or 'week' for 7 days (€4). Defaults to 'day'."),
 		),
 	)
 }
