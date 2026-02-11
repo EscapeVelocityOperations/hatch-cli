@@ -96,7 +96,7 @@ func TestRunRestart_APIError(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error")
 		}
-		if err.Error() != "restarting app: server error" {
+		if err.Error() != "restarting egg: server error" {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})

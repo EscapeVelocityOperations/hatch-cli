@@ -37,15 +37,23 @@ func defaultDeps() *Deps {
 
 var deps = defaultDeps()
 
+var (
+	appSlug    string
+	skipPrompt bool
+)
+
 // NewCmd returns the restart command.
 func NewCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "restart [slug]",
 		Short: "Restart a egg",
 		Long:  "Restart a Hatch egg. Requires confirmation unless --yes is provided.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE:  runRestart,
 	}
+	cmd.Flags().StringVarP(&appSlug, "app", "a", "", "egg slug (auto-detected from git remote if omitted)")
+	cmd.Flags().BoolVarP(&skipPrompt, "yes", "y", false, "skip confirmation prompt")
+	return cmd
 }
 
 func runRestart(cmd *cobra.Command, args []string) error {
@@ -62,7 +70,9 @@ func runRestart(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if !deps.Confirm(fmt.Sprintf("Restart %s?", slug)) {
+	if skipPrompt {
+		// Skip confirmation
+	} else if !deps.Confirm(fmt.Sprintf("Restart %s?", slug)) {
 		ui.Info("Cancelled.")
 		return nil
 	}
@@ -81,6 +91,9 @@ func runRestart(cmd *cobra.Command, args []string) error {
 }
 
 func resolveSlug(args []string) (string, error) {
+	if appSlug != "" {
+		return appSlug, nil
+	}
 	if len(args) > 0 {
 		return args[0], nil
 	}
@@ -89,7 +102,7 @@ func resolveSlug(args []string) (string, error) {
 		return slug, nil
 	}
 	if !deps.HasRemote("hatch") {
-		return "", fmt.Errorf("no egg specified and no hatch git remote found. Usage: hatch restart <slug>")
+		return "", fmt.Errorf("no egg specified and no hatch git remote found. Usage: hatch restart <slug> or hatch restart -a <slug>")
 	}
 	url, err := deps.GetRemoteURL("hatch")
 	if err != nil {

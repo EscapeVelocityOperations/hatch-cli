@@ -155,7 +155,7 @@ func runSet(cmd *cobra.Command, args []string) error {
 	for _, arg := range args {
 		parts := strings.SplitN(arg, "=", 2)
 		if len(parts) != 2 {
-			return fmt.Errorf("invalid format %q, expected KEY=VALUE", arg)
+			return fmt.Errorf("invalid format %q, expected KEY=VALUE. To specify an egg, use: hatch env set -a <slug> KEY=VALUE", arg)
 		}
 		key, value := parts[0], parts[1]
 
