@@ -34,7 +34,7 @@ var deps = defaultDeps()
 // NewCmd returns the apps command with info subcommand.
 func NewCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "apps",
+		Use:   "eggs",
 		Short: "List your Hatch eggs",
 		Long:  "Display a list of all eggs deployed to the Hatch platform.",
 		RunE:  runList,
