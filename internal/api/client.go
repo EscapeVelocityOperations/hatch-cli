@@ -412,6 +412,27 @@ func (c *Client) GetDatabaseURL(slug string) (string, error) {
 	return result.DatabaseURL, nil
 }
 
+// GetRedisURL returns the REDIS_URL for an app's Redis sidecar addon.
+func (c *Client) GetRedisURL(slug string) (string, string, error) {
+	if err := validateSlug(slug); err != nil {
+		return "", "", err
+	}
+	resp, err := c.do("GET", "/apps/"+slug+"/addons/redis", nil)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		RedisURL string `json:"redis_url"`
+		Status   string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", "", fmt.Errorf("decoding response: %w", err)
+	}
+	return result.RedisURL, result.Status, nil
+}
+
 // ListDomains returns custom domains for an app.
 func (c *Client) ListDomains(slug string) ([]Domain, error) {
 	if err := validateSlug(slug); err != nil {

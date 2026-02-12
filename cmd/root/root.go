@@ -13,6 +13,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/configure"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/db"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/deploy"
+	rediscmd "github.com/EscapeVelocityOperations/hatch-cli/cmd/redis"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/destroy"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/initignore"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/domain"
@@ -141,6 +142,7 @@ func init() {
 	rootCmd.AddCommand(logs.NewCmd())
 	rootCmd.AddCommand(mcpcmd.NewCmd())
 	rootCmd.AddCommand(open.NewCmd())
+	rootCmd.AddCommand(rediscmd.NewCmd())
 	rootCmd.AddCommand(restart.NewCmd())
 }
 
