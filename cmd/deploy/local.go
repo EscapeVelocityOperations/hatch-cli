@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/ignore"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
 )
 
@@ -63,6 +64,11 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 				return fmt.Errorf("entrypoint file %q not found in deploy-target %q\n\nThe start-command references %q but that file does not exist in your deploy-target directory.\nCheck that your build output is complete.", entrypoint, cfg.DeployTarget, entrypoint)
 			}
 		}
+	}
+
+	// Check if deploy target looks like a source directory (not build output)
+	if err := checkSourceDirectory(cfg.DeployTarget, cfg.Runtime); err != nil {
+		return err
 	}
 
 	// Create tar.gz from directory
@@ -158,8 +164,62 @@ func configureDomain(client *api.Client, slug, domainName string) {
 	}
 }
 
+// isSourceDirectory checks if the deploy target looks like a project root
+// (not a build output directory).
+func isSourceDirectory(dir string) bool {
+	has := func(name string) bool {
+		_, err := os.Stat(filepath.Join(dir, name))
+		return err == nil
+	}
+	// Node/Bun project root (has package.json + node_modules)
+	if has("package.json") && has("node_modules") {
+		return true
+	}
+	// Go project root
+	if has("go.mod") {
+		return true
+	}
+	// Python project root
+	if has("requirements.txt") || has("pyproject.toml") || has("Pipfile") {
+		return true
+	}
+	return false
+}
+
+// checkSourceDirectory warns or errors when deploying from a source directory.
+// Static and PHP runtimes require a .hatchignore; others get a warning.
+func checkSourceDirectory(dir, rt string) error {
+	if !isSourceDirectory(dir) {
+		return nil
+	}
+
+	hatchignorePath := filepath.Join(dir, ".hatchignore")
+	_, err := os.Stat(hatchignorePath)
+	hasIgnore := err == nil
+
+	if (rt == "static" || rt == "php") && !hasIgnore {
+		return fmt.Errorf("--runtime %s requires a .hatchignore file when deploying from a project directory.\n\n"+
+			"Create one to control which files are included in the artifact:\n\n"+
+			"  # .hatchignore — files/dirs to exclude from deploy\n"+
+			"  node_modules/\n"+
+			"  src/\n"+
+			"  *.md\n"+
+			"  tests/\n\n"+
+			"Or generate one with: hatch init-ignore --runtime %s\n\n"+
+			"Then run 'hatch deploy' again.", rt, rt)
+	}
+
+	if !hasIgnore {
+		ui.Warn("deploy-target looks like a project root, not a build output directory.")
+		ui.Info("Consider creating a .hatchignore or pointing --deploy-target at your build output.")
+		ui.Info("Generate one with: hatch init-ignore")
+	}
+	return nil
+}
+
 // createTarGz creates a tar.gz archive of the given directory.
-// Returns the archive bytes and a list of excluded dotfile/dotfolder names.
+// Uses .hatchignore patterns if present, otherwise applies built-in defaults.
+// Returns the archive bytes and a list of excluded file/folder names.
 func createTarGz(dir string) ([]byte, []string, error) {
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
@@ -170,7 +230,18 @@ func createTarGz(dir string) ([]byte, []string, error) {
 		return nil, nil, fmt.Errorf("resolving directory: %w", err)
 	}
 
+	// Load .hatchignore or use defaults
+	matcher, err := ignore.LoadFile(filepath.Join(dir, ".hatchignore"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			matcher = ignore.DefaultMatcher()
+		} else {
+			return nil, nil, fmt.Errorf("reading .hatchignore: %w", err)
+		}
+	}
+
 	var excluded []string
+	excludedSet := make(map[string]bool)
 
 	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -182,17 +253,24 @@ func createTarGz(dir string) ([]byte, []string, error) {
 			return nil
 		}
 
-		// Skip all dotfiles and dot-prefixed directories
-		if strings.HasPrefix(filepath.Base(path), ".") {
+		rel, _ := filepath.Rel(dir, path)
+
+		if matcher.ShouldExclude(rel, info.IsDir()) {
+			label := rel
 			if info.IsDir() {
-				excluded = append(excluded, filepath.Base(path)+"/")
+				label += "/"
+				if !excludedSet[label] {
+					excludedSet[label] = true
+					excluded = append(excluded, label)
+				}
 				return filepath.SkipDir
 			}
-			excluded = append(excluded, filepath.Base(path))
+			if !excludedSet[label] {
+				excludedSet[label] = true
+				excluded = append(excluded, label)
+			}
 			return nil
 		}
-
-		rel, _ := filepath.Rel(dir, path)
 
 		// Handle symlinks
 		link := ""

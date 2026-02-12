@@ -115,8 +115,18 @@ needed to run the app. Hatch wraps it in a thin container and deploys it.
 
 Required flags:
   --deploy-target <dir>    Path to the build output directory
-  --runtime <runtime>      Base container image: node, python, go, or static
+  --runtime <runtime>      Base container image: node, python, go, rust, php, bun, or static
   --start-command <cmd>    Command to start your app (not needed for static)
+
+Artifact filtering:
+  Create a .hatchignore file in your deploy target to control which files
+  are excluded from the artifact (gitignore-style syntax). Safety defaults
+  (.git, .env, .DS_Store) are always applied.
+
+  Generate a starter file:  hatch init-ignore [--runtime <rt>]
+
+  For static/php runtimes deploying from a project root, a .hatchignore
+  is required. Other runtimes will warn but proceed.
 
 Platform constraints:
   - Container runs linux/amd64
