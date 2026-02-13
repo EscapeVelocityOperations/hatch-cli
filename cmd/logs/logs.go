@@ -5,7 +5,6 @@ import (
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
-	"github.com/EscapeVelocityOperations/hatch-cli/internal/git"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/resolve"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
 	"github.com/spf13/cobra"
@@ -19,17 +18,13 @@ var (
 
 // Deps holds injectable dependencies for testing.
 type Deps struct {
-	GetToken     func() (string, error)
-	HasRemote    func(name string) bool
-	GetRemoteURL func(name string) (string, error)
-	StreamLogs   func(token, slug string, lines int, follow bool, logType string, handler func(string)) error
+	GetToken   func() (string, error)
+	StreamLogs func(token, slug string, lines int, follow bool, logType string, handler func(string)) error
 }
 
 func defaultDeps() *Deps {
 	return &Deps{
-		GetToken:     auth.GetToken,
-		HasRemote:    git.HasRemote,
-		GetRemoteURL: git.GetRemoteURL,
+		GetToken: auth.GetToken,
 		StreamLogs: func(token, slug string, lines int, follow bool, logType string, handler func(string)) error {
 			return api.NewClient(token).StreamLogs(slug, lines, follow, logType, handler)
 		},
@@ -85,17 +80,8 @@ func resolveSlug(args []string) (string, error) {
 	if len(args) > 0 {
 		return args[0], nil
 	}
-	// Check .hatch.toml
 	if slug := resolve.SlugFromToml(); slug != "" {
 		return slug, nil
 	}
-	// Auto-detect from git remote
-	if !deps.HasRemote("hatch") {
-		return "", fmt.Errorf("no egg specified and no hatch git remote found. Usage: hatch logs <slug>")
-	}
-	url, err := deps.GetRemoteURL("hatch")
-	if err != nil {
-		return "", fmt.Errorf("reading hatch remote: %w", err)
-	}
-	return api.SlugFromRemote(url)
+	return "", fmt.Errorf("no egg specified. Usage: hatch logs <slug> (or set slug in .hatch.toml)")
 }

@@ -108,29 +108,19 @@ func TestRunDestroy_APIError(t *testing.T) {
 	})
 }
 
-func TestRunDestroy_AutoDetect(t *testing.T) {
+func TestRunDestroy_NoArg(t *testing.T) {
 	deps = &Deps{
-		GetToken:     func() (string, error) { return "tok123", nil },
-		HasRemote:    func(name string) bool { return true },
-		GetRemoteURL: func(name string) (string, error) { return "https://t@git.gethatch.eu/deploy/autoapp.git", nil },
-		ReadInput: func(prompt string) (string, error) {
-			return "autoapp\n", nil
-		},
-		DeleteApp: func(token, slug string) error {
-			if slug != "autoapp" {
-				t.Fatalf("expected slug 'autoapp', got %q", slug)
-			}
-			return nil
-		},
+		GetToken: func() (string, error) { return "tok123", nil },
 	}
 	defer func() { deps = defaultDeps() }()
 
-	captureOutput(func() {
-		err := runDestroy(nil, nil)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
+	err := runDestroy(nil, nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !contains(err.Error(), "no egg specified") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func TestRunDestroy_InputError(t *testing.T) {

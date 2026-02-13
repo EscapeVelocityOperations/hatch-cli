@@ -15,7 +15,6 @@ import (
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
-	"github.com/EscapeVelocityOperations/hatch-cli/internal/git"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/resolve"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
 	"github.com/gorilla/websocket"
@@ -39,12 +38,10 @@ type dbCreds struct {
 
 // Deps holds injectable dependencies for testing.
 type Deps struct {
-	GetToken     func() (string, error)
-	HasRemote    func(name string) bool
-	GetRemoteURL func(name string) (string, error)
-	DialWS       func(url string, header http.Header) (*websocket.Conn, *http.Response, error)
-	Listen       func(network, address string) (net.Listener, error)
-	RunPsql      func(host string, port int, creds *dbCreds, extraArgs []string) error
+	GetToken func() (string, error)
+	DialWS   func(url string, header http.Header) (*websocket.Conn, *http.Response, error)
+	Listen   func(network, address string) (net.Listener, error)
+	RunPsql  func(host string, port int, creds *dbCreds, extraArgs []string) error
 }
 
 func defaultDeps() *Deps {
@@ -54,9 +51,7 @@ func defaultDeps() *Deps {
 		},
 	}
 	return &Deps{
-		GetToken:     auth.GetToken,
-		HasRemote:    git.HasRemote,
-		GetRemoteURL: git.GetRemoteURL,
+		GetToken: auth.GetToken,
 		DialWS: func(url string, header http.Header) (*websocket.Conn, *http.Response, error) {
 			return dialer.Dial(url, header)
 		},
@@ -272,18 +267,10 @@ func resolveSlug(args []string) (string, error) {
 	if len(args) > 0 {
 		return args[0], nil
 	}
-	// Check .hatch.toml
 	if slug := resolve.SlugFromToml(); slug != "" {
 		return slug, nil
 	}
-	if !deps.HasRemote("hatch") {
-		return "", fmt.Errorf("no egg specified and no hatch git remote found. Usage: hatch db connect <slug>")
-	}
-	url, err := deps.GetRemoteURL("hatch")
-	if err != nil {
-		return "", fmt.Errorf("reading hatch remote: %w", err)
-	}
-	return api.SlugFromRemote(url)
+	return "", fmt.Errorf("no egg specified. Usage: hatch db connect <slug> (or set slug in .hatch.toml)")
 }
 
 func runPsql(host string, port int, creds *dbCreds, extraArgs []string) error {

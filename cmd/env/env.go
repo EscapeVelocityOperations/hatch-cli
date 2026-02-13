@@ -8,26 +8,22 @@ import (
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
-	"github.com/EscapeVelocityOperations/hatch-cli/internal/git"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/resolve"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
 	"github.com/spf13/cobra"
 )
 
 // Deps holds injectable dependencies for testing.
 type Deps struct {
-	GetToken     func() (string, error)
-	HasRemote    func(name string) bool
-	GetRemoteURL func(name string) (string, error)
-	GetEnvVars   func(token, slug string) ([]api.EnvVar, error)
-	SetEnvVar    func(token, slug, key, value string) error
-	UnsetEnvVar  func(token, slug, key string) error
+	GetToken    func() (string, error)
+	GetEnvVars  func(token, slug string) ([]api.EnvVar, error)
+	SetEnvVar   func(token, slug, key, value string) error
+	UnsetEnvVar func(token, slug, key string) error
 }
 
 func defaultDeps() *Deps {
 	return &Deps{
-		GetToken:     auth.GetToken,
-		HasRemote:    git.HasRemote,
-		GetRemoteURL: git.GetRemoteURL,
+		GetToken: auth.GetToken,
 		GetEnvVars: func(token, slug string) ([]api.EnvVar, error) {
 			return api.NewClient(token).GetEnvVars(slug)
 		},
@@ -247,7 +243,6 @@ func resolveSlug() (string, error) {
 			client := api.NewClient(token)
 			apps, err := client.ListApps()
 			if err == nil {
-				// Check if appSlug matches any app name or slug
 				for _, app := range apps {
 					if app.Name == appSlug || app.Slug == appSlug {
 						return app.Slug, nil
@@ -255,15 +250,10 @@ func resolveSlug() (string, error) {
 				}
 			}
 		}
-		// Fall back to using it directly as slug
 		return appSlug, nil
 	}
-	if !deps.HasRemote("hatch") {
-		return "", fmt.Errorf("no egg specified and no hatch git remote found. Use --app <slug>")
+	if slug := resolve.SlugFromToml(); slug != "" {
+		return slug, nil
 	}
-	url, err := deps.GetRemoteURL("hatch")
-	if err != nil {
-		return "", fmt.Errorf("reading hatch remote: %w", err)
-	}
-	return api.SlugFromRemote(url)
+	return "", fmt.Errorf("no egg specified. Use --app <slug> (or set slug in .hatch.toml)")
 }

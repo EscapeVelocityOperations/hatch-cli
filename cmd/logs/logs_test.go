@@ -62,32 +62,9 @@ func TestRunLogs_WithSlugArg(t *testing.T) {
 	}
 }
 
-func TestRunLogs_AutoDetectFromRemote(t *testing.T) {
+func TestRunLogs_NoArg(t *testing.T) {
 	deps = &Deps{
-		GetToken:     func() (string, error) { return "tok123", nil },
-		HasRemote:    func(name string) bool { return true },
-		GetRemoteURL: func(name string) (string, error) { return "https://tok@git.gethatch.eu/deploy/detected.git", nil },
-		StreamLogs: func(token, slug string, linesN int, followN bool, logType string, handler func(string)) error {
-			if slug != "detected" {
-				t.Fatalf("expected auto-detected slug 'detected', got %q", slug)
-			}
-			return nil
-		},
-	}
-	defer func() { deps = defaultDeps() }()
-
-	captureOutput(func() {
-		err := runLogs(nil, nil)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
-}
-
-func TestRunLogs_NoRemoteNoArg(t *testing.T) {
-	deps = &Deps{
-		GetToken:  func() (string, error) { return "tok123", nil },
-		HasRemote: func(name string) bool { return false },
+		GetToken: func() (string, error) { return "tok123", nil },
 	}
 	defer func() { deps = defaultDeps() }()
 

@@ -61,35 +61,9 @@ func TestRunOpen_WithSlug(t *testing.T) {
 	}
 }
 
-func TestRunOpen_AutoDetect(t *testing.T) {
-	openedURL := ""
+func TestRunOpen_NoArg(t *testing.T) {
 	deps = &Deps{
-		GetToken:     func() (string, error) { return "tok123", nil },
-		HasRemote:    func(name string) bool { return true },
-		GetRemoteURL: func(name string) (string, error) { return "https://t@git.gethatch.eu/deploy/detected.git", nil },
-		OpenBrowser: func(url string) error {
-			openedURL = url
-			return nil
-		},
-	}
-	defer func() { deps = defaultDeps() }()
-
-	captureOutput(func() {
-		err := runOpen(nil, nil)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
-
-	if openedURL != "https://detected.nest.gethatch.eu" {
-		t.Fatalf("expected URL 'https://detected.nest.gethatch.eu', got %q", openedURL)
-	}
-}
-
-func TestRunOpen_NoRemoteNoArg(t *testing.T) {
-	deps = &Deps{
-		GetToken:  func() (string, error) { return "tok123", nil },
-		HasRemote: func(name string) bool { return false },
+		GetToken: func() (string, error) { return "tok123", nil },
 	}
 	defer func() { deps = defaultDeps() }()
 

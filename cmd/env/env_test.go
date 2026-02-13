@@ -89,27 +89,20 @@ func TestRunList_Empty(t *testing.T) {
 	}
 }
 
-func TestRunList_AutoDetect(t *testing.T) {
+func TestRunList_NoSlug(t *testing.T) {
 	appSlug = ""
 	deps = &Deps{
-		GetToken:     func() (string, error) { return "tok123", nil },
-		HasRemote:    func(name string) bool { return true },
-		GetRemoteURL: func(name string) (string, error) { return "https://t@git.gethatch.eu/deploy/auto.git", nil },
-		GetEnvVars: func(token, slug string) ([]api.EnvVar, error) {
-			if slug != "auto" {
-				t.Fatalf("expected slug 'auto', got %q", slug)
-			}
-			return nil, nil
-		},
+		GetToken: func() (string, error) { return "tok123", nil },
 	}
 	defer func() { deps = defaultDeps() }()
 
-	captureOutput(func() {
-		err := runList(nil, nil)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
+	err := runList(nil, nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !contains(err.Error(), "no egg specified") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func TestRunSet_Success(t *testing.T) {

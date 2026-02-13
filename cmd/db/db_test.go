@@ -22,10 +22,9 @@ func TestRunConnect_NotLoggedIn(t *testing.T) {
 	}
 }
 
-func TestRunConnect_NoRemoteNoArg(t *testing.T) {
+func TestRunConnect_NoArg(t *testing.T) {
 	deps = &Deps{
-		GetToken:  func() (string, error) { return "tok123", nil },
-		HasRemote: func(name string) bool { return false },
+		GetToken: func() (string, error) { return "tok123", nil },
 	}
 	defer func() { deps = defaultDeps() }()
 
@@ -66,49 +65,12 @@ func TestResolveSlug_WithArg(t *testing.T) {
 	}
 }
 
-func TestResolveSlug_AutoDetect(t *testing.T) {
-	deps = &Deps{
-		HasRemote:    func(name string) bool { return true },
-		GetRemoteURL: func(name string) (string, error) { return "https://tok@git.gethatch.eu/deploy/detected.git", nil },
-	}
-	defer func() { deps = defaultDeps() }()
-
-	slug, err := resolveSlug(nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if slug != "detected" {
-		t.Fatalf("expected slug 'detected', got %q", slug)
-	}
-}
-
-func TestResolveSlug_NoRemoteNoArg(t *testing.T) {
-	deps = &Deps{
-		HasRemote: func(name string) bool { return false },
-	}
-	defer func() { deps = defaultDeps() }()
-
+func TestResolveSlug_NoArg(t *testing.T) {
 	_, err := resolveSlug(nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
 	if !strings.Contains(err.Error(), "no egg specified") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestResolveSlug_RemoteError(t *testing.T) {
-	deps = &Deps{
-		HasRemote:    func(name string) bool { return true },
-		GetRemoteURL: func(name string) (string, error) { return "", fmt.Errorf("git error") },
-	}
-	defer func() { deps = defaultDeps() }()
-
-	_, err := resolveSlug(nil)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !strings.Contains(err.Error(), "git error") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -185,12 +147,6 @@ func TestDefaultDeps(t *testing.T) {
 	d := defaultDeps()
 	if d.GetToken == nil {
 		t.Fatal("GetToken not set")
-	}
-	if d.HasRemote == nil {
-		t.Fatal("HasRemote not set")
-	}
-	if d.GetRemoteURL == nil {
-		t.Fatal("GetRemoteURL not set")
 	}
 	if d.DialWS == nil {
 		t.Fatal("DialWS not set")

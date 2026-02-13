@@ -102,27 +102,19 @@ func TestRunRestart_APIError(t *testing.T) {
 	})
 }
 
-func TestRunRestart_AutoDetect(t *testing.T) {
+func TestRunRestart_NoArg(t *testing.T) {
 	deps = &Deps{
-		GetToken:     func() (string, error) { return "tok123", nil },
-		HasRemote:    func(name string) bool { return true },
-		GetRemoteURL: func(name string) (string, error) { return "https://t@git.gethatch.eu/deploy/detected.git", nil },
-		Confirm:      func(prompt string) bool { return true },
-		RestartApp: func(token, slug string) error {
-			if slug != "detected" {
-				t.Fatalf("expected slug 'detected', got %q", slug)
-			}
-			return nil
-		},
+		GetToken: func() (string, error) { return "tok123", nil },
 	}
 	defer func() { deps = defaultDeps() }()
 
-	captureOutput(func() {
-		err := runRestart(nil, nil)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
+	err := runRestart(nil, nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !contains(err.Error(), "no egg specified") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func contains(s, substr string) bool {
