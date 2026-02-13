@@ -63,3 +63,25 @@ type APIKey struct {
 	CreatedAt  time.Time `json:"created_at"`
 	LastUsedAt time.Time `json:"last_used_at,omitempty"`
 }
+
+// BoostCredit represents a single boost credit.
+type BoostCredit struct {
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	GrantedAt string `json:"granted_at"`
+}
+
+// BoostCreditsResponse represents the response from GET /v1/boost-credits.
+type BoostCreditsResponse struct {
+	DayCredits  int64         `json:"day_credits"`
+	WeekCredits int64         `json:"week_credits"`
+	Credits     []BoostCredit `json:"credits"`
+}
+
+// RedeemCreditResponse represents the response from POST /v1/boost-credits/{id}/redeem.
+type RedeemCreditResponse struct {
+	CreditID       string `json:"credit_id"`
+	EggSlug        string `json:"egg_slug"`
+	Type           string `json:"type"`
+	BoostExpiresAt string `json:"boost_expires_at"`
+}

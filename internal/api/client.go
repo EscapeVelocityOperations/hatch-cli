@@ -700,3 +700,37 @@ func (c *Client) BoostCheckout(slug, duration string) (*BoostCheckoutResponse, e
 	}
 	return &result, nil
 }
+
+// ListBoostCredits returns the user's available boost credits.
+func (c *Client) ListBoostCredits() (*BoostCreditsResponse, error) {
+	resp, err := c.do("GET", "/boost-credits", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result BoostCreditsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return &result, nil
+}
+
+// RedeemBoostCredit applies a boost credit to an egg.
+func (c *Client) RedeemBoostCredit(creditID, eggSlug string) (*RedeemCreditResponse, error) {
+	if err := validateSlug(eggSlug); err != nil {
+		return nil, err
+	}
+	body := fmt.Sprintf(`{"egg_slug":%q}`, eggSlug)
+	resp, err := c.do("POST", "/boost-credits/"+creditID+"/redeem", strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result RedeemCreditResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return &result, nil
+}
