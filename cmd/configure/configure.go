@@ -11,6 +11,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Dependency injection for testing
+var readInputFn = readInput
+var loadCfgFn = config.Load
+var saveCfgFn = config.Save
+
+func readInput(prompt string) (string, error) {
+	fmt.Print(prompt)
+	reader := bufio.NewReader(os.Stdin)
+	return reader.ReadString('\n')
+}
+
 func NewCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "configure",
@@ -26,10 +37,8 @@ func runConfigure(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	fmt.Println("  Get your API token from: https://gethatch.eu/dashboard/tokens")
 	fmt.Println()
-	fmt.Print("  API Token: ")
 
-	reader := bufio.NewReader(os.Stdin)
-	token, err := reader.ReadString('\n')
+	token, err := readInputFn("  API Token: ")
 	if err != nil {
 		return fmt.Errorf("reading input: %w", err)
 	}
@@ -44,13 +53,13 @@ func runConfigure(cmd *cobra.Command, args []string) error {
 	}
 
 	// Load existing config to preserve other fields
-	cfg, err := config.Load()
+	cfg, err := loadCfgFn()
 	if err != nil {
 		cfg = &config.Config{}
 	}
 	cfg.Token = token
 
-	if err := config.Save(cfg); err != nil {
+	if err := saveCfgFn(cfg); err != nil {
 		return fmt.Errorf("saving config: %w", err)
 	}
 

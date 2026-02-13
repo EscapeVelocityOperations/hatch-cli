@@ -451,3 +451,109 @@ func TestCheckSourceDirectory_BuildOutputNoWarning(t *testing.T) {
 		t.Fatalf("expected no error for build output directory, got: %v", err)
 	}
 }
+
+func TestParseEntrypoint(t *testing.T) {
+	tests := []struct {
+		name     string
+		cmd      string
+		expected string
+	}{
+		{
+			name:     "node with file path",
+			cmd:      "node server/index.mjs",
+			expected: "server/index.mjs",
+		},
+		{
+			name:     "node with relative path",
+			cmd:      "node ./server/index.mjs",
+			expected: "server/index.mjs",
+		},
+		{
+			name:     "python with module flag",
+			cmd:      "python -m uvicorn main:app",
+			expected: "",
+		},
+		{
+			name:     "python with file",
+			cmd:      "python app.py",
+			expected: "app.py",
+		},
+		{
+			name:     "bun run - returns 'run' (not a flag)",
+			cmd:      "bun run index.ts",
+			expected: "run",
+		},
+		{
+			name:     "go run - returns 'run' (not a flag)",
+			cmd:      "go run main.go",
+			expected: "run",
+		},
+		{
+			name:     "direct executable",
+			cmd:      "./server",
+			expected: "",
+		},
+		{
+			name:     "single command",
+			cmd:      "node",
+			expected: "",
+		},
+		{
+			name:     "empty string",
+			cmd:      "",
+			expected: "",
+		},
+		{
+			name:     "command with flags",
+			cmd:      "node --experimental-modules server.js",
+			expected: "",
+		},
+		{
+			name:     "deno with flags first",
+			cmd:      "deno run --allow-net index.ts",
+			expected: "run",
+		},
+		{
+			name:     "java -jar flag",
+			cmd:      "java -jar app.jar",
+			expected: "",
+		},
+		{
+			name:     "dotnet run",
+			cmd:      "dotnet run",
+			expected: "run",
+		},
+		{
+			name:     "gunicorn with config",
+			cmd:      "gunicorn -c config.py app:app",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseEntrypoint(tt.cmd)
+			if got != tt.expected {
+				t.Errorf("parseEntrypoint(%q) = %q, want %q", tt.cmd, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestValidRuntimes(t *testing.T) {
+	// Test that all expected runtimes are valid
+	expectedRuntimes := []string{"node", "python", "go", "rust", "php", "bun", "static"}
+	for _, rt := range expectedRuntimes {
+		if !validRuntimes[rt] {
+			t.Errorf("expected runtime %q to be valid", rt)
+		}
+	}
+
+	// Test that some invalid runtimes are not valid
+	invalidRuntimes := []string{"java", "ruby", "nodejs", "invalid"}
+	for _, rt := range invalidRuntimes {
+		if validRuntimes[rt] {
+			t.Errorf("expected runtime %q to be invalid", rt)
+		}
+	}
+}
