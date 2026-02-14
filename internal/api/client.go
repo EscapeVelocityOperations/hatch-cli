@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bufio"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -522,15 +521,13 @@ func (c *Client) GetLogs(slug string, tail int, logType string) ([]string, error
 	}
 	defer resp.Body.Close()
 
-	var lines []string
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if data, ok := strings.CutPrefix(line, "data: "); ok {
-			lines = append(lines, data)
-		}
+	var result struct {
+		Lines []string `json:"lines"`
 	}
-	return lines, scanner.Err()
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parsing log response: %w", err)
+	}
+	return result.Lines, nil
 }
 
 // UploadArtifact uploads a pre-built tar.gz artifact for deployment.

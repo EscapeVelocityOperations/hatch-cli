@@ -812,8 +812,8 @@ func TestGetLogsHandler_Success(t *testing.T) {
 	setAuthToken("tok")
 	newMockServer(t, map[string]http.HandlerFunc{
 		"GET /v1/apps/myapp-a1b2/logs": func(w http.ResponseWriter, r *http.Request) {
-			// SSE-style lines
-			w.Write([]byte("data: [2024-01-01] Starting app\ndata: [2024-01-01] Listening on :8080\n"))
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"lines":["[2024-01-01] Starting app","[2024-01-01] Listening on :8080"]}`))
 		},
 	})
 
@@ -833,7 +833,8 @@ func TestGetLogsHandler_Empty(t *testing.T) {
 	setAuthToken("tok")
 	newMockServer(t, map[string]http.HandlerFunc{
 		"GET /v1/apps/myapp-a1b2/logs": func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte(""))
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"lines":[]}`))
 		},
 	})
 
@@ -872,7 +873,8 @@ func TestGetBuildLogsHandler_Success(t *testing.T) {
 			if r.URL.Query().Get("type") != "build" {
 				t.Error("expected type=build query parameter")
 			}
-			w.Write([]byte("data: Building image...\ndata: Build complete\n"))
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"lines":["Building image...","Build complete"]}`))
 		},
 	})
 
