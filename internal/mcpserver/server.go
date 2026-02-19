@@ -198,9 +198,9 @@ type RuntimeSpec struct {
 
 // DeployRequirements is the platform contract returned to agents.
 type DeployRequirements struct {
-	Platform    PlatformSpec           `json:"platform"`
-	DeployTarget DeployTargetSpec      `json:"deploy_target"`
-	Runtimes    map[string]RuntimeSpec `json:"runtimes"`
+	Platform     PlatformSpec           `json:"platform"`
+	DeployTarget DeployTargetSpec       `json:"deploy_target"`
+	Runtimes     map[string]RuntimeSpec `json:"runtimes"`
 }
 
 type PlatformSpec struct {
@@ -496,7 +496,28 @@ func createMCPTarGz(dir string) ([]byte, error) {
 			return err
 		}
 
-		rel, _ := filepath.Rel(dir, path)
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+
+		mode := info.Mode()
+		// Archive only directories and regular files.
+		// Skip sockets/symlinks/devices/fifos to avoid tar errors and unsafe artifacts.
+		if mode&os.ModeSocket != 0 ||
+			mode&os.ModeSymlink != 0 ||
+			mode&os.ModeNamedPipe != 0 ||
+			mode&os.ModeDevice != 0 ||
+			mode&os.ModeCharDevice != 0 ||
+			mode&os.ModeIrregular != 0 {
+			return nil
+		}
+		if !info.IsDir() && !mode.IsRegular() {
+			return nil
+		}
 
 		header, err := tar.FileInfoHeader(info, "")
 		if err != nil {
@@ -527,8 +548,12 @@ func createMCPTarGz(dir string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	tw.Close()
-	gzw.Close()
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+	if err := gzw.Close(); err != nil {
+		return nil, err
+	}
 
 	if buf.Len() > 500*1024*1024 {
 		return nil, fmt.Errorf("artifact too large (%.0f MB, max 500 MB)", float64(buf.Len())/1024/1024)
@@ -619,6 +644,10 @@ func getLogsTool() mcp.Tool {
 		mcp.WithNumber("lines",
 			mcp.Description("Number of recent log lines to return (default 50)"),
 		),
+		mcp.WithString("type",
+			mcp.Description("Log stream type: stdout, stderr, or both (default both)"),
+			mcp.Enum("stdout", "stderr", "both"),
+		),
 	)
 }
 
@@ -633,21 +662,60 @@ func getLogsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 		lines = 50
 	}
 
+	logType := strings.ToLower(strings.TrimSpace(req.GetString("type", "both")))
+	if logType == "" {
+		logType = "both"
+	}
+	if logType != "stdout" && logType != "stderr" && logType != "both" {
+		return toolError("failed to get logs: invalid type %q (valid: stdout, stderr, both)", logType)
+	}
+
 	client, err := newClient()
 	if err != nil {
 		return toolError("failed to get logs: %v", err)
 	}
 
-	logLines, err := client.GetLogs(slug, lines, "")
-	if err != nil {
-		return toolError("failed to get logs: %v", err)
+	var streamTypes []string
+	switch logType {
+	case "stdout":
+		streamTypes = []string{"stdout"}
+	case "stderr":
+		streamTypes = []string{"stderr"}
+	default:
+		streamTypes = []string{"stdout", "stderr"}
 	}
 
-	if len(logLines) == 0 {
+	var merged []string
+	for _, stream := range streamTypes {
+		logLines, err := client.GetLogs(slug, lines, stream)
+		if err != nil {
+			return toolError("failed to get logs: %v", err)
+		}
+		if len(logLines) == 0 {
+			continue
+		}
+		if len(streamTypes) == 1 {
+			merged = append(merged, logLines...)
+			continue
+		}
+		for _, line := range logLines {
+			merged = append(merged, fmt.Sprintf("[%s] %s", stream, line))
+		}
+	}
+
+	if len(merged) == 0 {
+		app, appErr := client.GetApp(slug)
+		if appErr == nil && app != nil {
+			return mcp.NewToolResultText(fmt.Sprintf(
+				"No recent logs found (checked: %s). App status: %s.",
+				strings.Join(streamTypes, ", "),
+				app.Status,
+			)), nil
+		}
 		return mcp.NewToolResultText("No recent logs found."), nil
 	}
 
-	return mcp.NewToolResultText(strings.Join(logLines, "\n")), nil
+	return mcp.NewToolResultText(strings.Join(merged, "\n")), nil
 }
 
 // --- get_status ---
@@ -1037,13 +1105,17 @@ func removeDomainHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 
 func getBuildLogsTool() mcp.Tool {
 	return mcp.NewTool("get_build_logs",
-		mcp.WithDescription("Get build logs for an app. Use to diagnose deploy failures."),
+		mcp.WithDescription("Get build/startup logs for an app from log streams (stderr/stdout). Use to diagnose deploy failures."),
 		mcp.WithString("app",
 			mcp.Required(),
 			mcp.Description("App slug (name) to get build logs for"),
 		),
 		mcp.WithNumber("lines",
 			mcp.Description("Number of recent build log lines to return (default 100)"),
+		),
+		mcp.WithString("type",
+			mcp.Description("Log stream type: stderr (default), stdout"),
+			mcp.Enum("stdout", "stderr"),
 		),
 	)
 }
@@ -1059,21 +1131,44 @@ func getBuildLogsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 		lines = 100
 	}
 
+	logType := strings.ToLower(strings.TrimSpace(req.GetString("type", "")))
+	if logType != "" && logType != "stdout" && logType != "stderr" {
+		return toolError("failed to get build logs: invalid type %q (valid: stdout, stderr)", logType)
+	}
+
 	client, err := newClient()
 	if err != nil {
 		return toolError("failed to get build logs: %v", err)
 	}
 
-	logLines, err := client.GetLogs(slug, lines, "build")
-	if err != nil {
-		return toolError("failed to get build logs: %v", err)
+	streamTypes := []string{"stderr", "stdout"}
+	if logType != "" {
+		streamTypes = []string{logType}
 	}
 
-	if len(logLines) == 0 {
+	var merged []string
+	for _, stream := range streamTypes {
+		logLines, err := client.GetLogs(slug, lines, stream)
+		if err != nil {
+			return toolError("failed to get build logs: %v", err)
+		}
+		if len(logLines) == 0 {
+			continue
+		}
+		if len(streamTypes) == 1 {
+			merged = append(merged, logLines...)
+			continue
+		}
+		for _, line := range logLines {
+			merged = append(merged, fmt.Sprintf("[%s] %s", stream, line))
+		}
+	}
+
+	if len(merged) == 0 {
 		return mcp.NewToolResultText("No build logs found."), nil
 	}
 
-	return mcp.NewToolResultText(strings.Join(logLines, "\n")), nil
+	return mcp.NewToolResultText(strings.Join(merged, "\n")), nil
 }
 
 // --- create_app ---
@@ -1363,6 +1458,14 @@ func bulkSetEnvTool() mcp.Tool {
 		mcp.WithString("app",
 			mcp.Required(),
 			mcp.Description("App slug (name) to set variables on"),
+		),
+		mcp.WithObject("vars",
+			mcp.Required(),
+			mcp.Description("Object map of environment variables to set. Example: {\"NODE_ENV\":\"production\",\"PORT\":\"8080\"}"),
+			mcp.MinProperties(1),
+			mcp.AdditionalProperties(map[string]any{
+				"type": "string",
+			}),
 		),
 	)
 }

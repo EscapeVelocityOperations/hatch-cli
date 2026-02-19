@@ -1,11 +1,18 @@
 package mcpserver
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -812,6 +819,9 @@ func TestGetLogsHandler_Success(t *testing.T) {
 	setAuthToken("tok")
 	newMockServer(t, map[string]http.HandlerFunc{
 		"GET /v1/apps/myapp-a1b2/logs": func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("type") != "stdout" {
+				t.Errorf("expected type=stdout query parameter, got: %q", r.URL.Query().Get("type"))
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"lines":["[2024-01-01] Starting app","[2024-01-01] Listening on :8080"]}`))
 		},
@@ -820,6 +830,7 @@ func TestGetLogsHandler_Success(t *testing.T) {
 	result, err := getLogsHandler(context.Background(), makeReq(map[string]interface{}{
 		"app":   "myapp-a1b2",
 		"lines": float64(50),
+		"type":  "stdout",
 	}))
 	text := assertSuccess(t, result, err)
 
@@ -833,8 +844,45 @@ func TestGetLogsHandler_Empty(t *testing.T) {
 	setAuthToken("tok")
 	newMockServer(t, map[string]http.HandlerFunc{
 		"GET /v1/apps/myapp-a1b2/logs": func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("type") != "stdout" {
+				t.Errorf("expected type=stdout query parameter, got: %q", r.URL.Query().Get("type"))
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"lines":[]}`))
+		},
+		"GET /v1/apps/myapp-a1b2": errorHandler(404, "app not found"),
+	})
+
+	result, err := getLogsHandler(context.Background(), makeReq(map[string]interface{}{
+		"app":  "myapp-a1b2",
+		"type": "stdout",
+	}))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, "No recent logs") {
+		t.Errorf("expected empty message, got: %s", text)
+	}
+}
+
+func TestGetLogsHandler_DefaultsToBothAndFallsBackToStderr(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+
+	var sawStdout, sawStderr bool
+	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/apps/myapp-a1b2/logs": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Query().Get("type") {
+			case "stdout":
+				sawStdout = true
+				w.Write([]byte(`{"lines":[]}`))
+			case "stderr":
+				sawStderr = true
+				w.Write([]byte(`{"lines":["startup crash"]}`))
+			default:
+				t.Errorf("unexpected type query param: %q", r.URL.Query().Get("type"))
+				w.Write([]byte(`{"lines":[]}`))
+			}
 		},
 	})
 
@@ -843,9 +891,47 @@ func TestGetLogsHandler_Empty(t *testing.T) {
 	}))
 	text := assertSuccess(t, result, err)
 
-	if !strings.Contains(text, "No recent logs") {
-		t.Errorf("expected empty message, got: %s", text)
+	if !sawStdout || !sawStderr {
+		t.Fatalf("expected both stdout and stderr log requests, saw stdout=%v stderr=%v", sawStdout, sawStderr)
 	}
+	if !strings.Contains(text, "[stderr] startup crash") {
+		t.Fatalf("expected stderr fallback output, got: %s", text)
+	}
+}
+
+func TestGetLogsHandler_NoLogsIncludesAppStatus(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	now := time.Now()
+
+	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/apps/myapp-a1b2/logs": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"lines":[]}`))
+		},
+		"GET /v1/apps/myapp-a1b2": jsonHandler(api.App{
+			Slug: "myapp-a1b2", Name: "myapp", Status: "failed",
+			URL:       "https://myapp-a1b2.nest.gethatch.eu",
+			CreatedAt: now, UpdatedAt: now,
+		}),
+	})
+
+	result, err := getLogsHandler(context.Background(), makeReq(map[string]interface{}{
+		"app": "myapp-a1b2",
+	}))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, "App status: failed") {
+		t.Fatalf("expected app status diagnostics, got: %s", text)
+	}
+}
+
+func TestGetLogsHandler_InvalidType(t *testing.T) {
+	result, err := getLogsHandler(context.Background(), makeReq(map[string]interface{}{
+		"app":  "myapp-a1b2",
+		"type": "build",
+	}))
+	assertError(t, result, err, "invalid type")
 }
 
 func TestGetLogsHandler_AuthFailure(t *testing.T) {
@@ -868,13 +954,20 @@ func TestGetBuildLogsHandler_MissingApp(t *testing.T) {
 func TestGetBuildLogsHandler_Success(t *testing.T) {
 	saveAndRestore(t)
 	setAuthToken("tok")
+	var sawStderr, sawStdout bool
 	newMockServer(t, map[string]http.HandlerFunc{
 		"GET /v1/apps/myapp-a1b2/logs": func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Query().Get("type") != "build" {
-				t.Error("expected type=build query parameter")
-			}
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"lines":["Building image...","Build complete"]}`))
+			switch r.URL.Query().Get("type") {
+			case "stderr":
+				sawStderr = true
+				w.Write([]byte(`{"lines":["Building image...","Build complete"]}`))
+			case "stdout":
+				sawStdout = true
+				w.Write([]byte(`{"lines":[]}`))
+			default:
+				t.Fatalf("expected type=stderr or stdout query parameter, got %q", r.URL.Query().Get("type"))
+			}
 		},
 	})
 
@@ -886,6 +979,47 @@ func TestGetBuildLogsHandler_Success(t *testing.T) {
 	if !strings.Contains(text, "Building image") {
 		t.Errorf("expected build log content, got: %s", text)
 	}
+	if !strings.Contains(text, "[stderr]") {
+		t.Errorf("expected stream tag in output, got: %s", text)
+	}
+	if !sawStderr || !sawStdout {
+		t.Fatalf("expected default fallback to query stderr and stdout, saw stderr=%v stdout=%v", sawStderr, sawStdout)
+	}
+}
+
+func TestGetBuildLogsHandler_ExplicitType(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/apps/myapp-a1b2/logs": func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("type") != "stdout" {
+				t.Fatalf("expected type=stdout query parameter, got %q", r.URL.Query().Get("type"))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"lines":["build output line"]}`))
+		},
+	})
+
+	result, err := getBuildLogsHandler(context.Background(), makeReq(map[string]interface{}{
+		"app":  "myapp-a1b2",
+		"type": "stdout",
+	}))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, "build output line") {
+		t.Fatalf("expected stdout build logs, got: %s", text)
+	}
+	if strings.Contains(text, "[stdout]") {
+		t.Fatalf("did not expect stream prefix for explicit type, got: %s", text)
+	}
+}
+
+func TestGetBuildLogsHandler_InvalidType(t *testing.T) {
+	result, err := getBuildLogsHandler(context.Background(), makeReq(map[string]interface{}{
+		"app":  "myapp-a1b2",
+		"type": "build",
+	}))
+	assertError(t, result, err, "invalid type")
 }
 
 func TestGetBuildLogsHandler_AuthFailure(t *testing.T) {
@@ -1056,7 +1190,7 @@ func TestGetAppDetailsHandler_Success(t *testing.T) {
 	newMockServer(t, map[string]http.HandlerFunc{
 		"GET /v1/apps/myapp-a1b2": jsonHandler(api.App{
 			Slug: "myapp-a1b2", Name: "myapp", Status: "running",
-			URL: "https://myapp-a1b2.nest.gethatch.eu",
+			URL:       "https://myapp-a1b2.nest.gethatch.eu",
 			CreatedAt: now, UpdatedAt: now,
 		}),
 	})
@@ -1100,6 +1234,40 @@ func TestHealthCheckHandler_InvalidSlug(t *testing.T) {
 // Integration tests would be needed for the actual health check.
 
 // --- bulk_set_env ---
+
+func TestBulkSetEnvTool_SchemaIncludesVarsObject(t *testing.T) {
+	tool := bulkSetEnvTool()
+
+	prop, ok := tool.InputSchema.Properties["vars"]
+	if !ok {
+		t.Fatal("expected vars property in schema")
+	}
+	propMap, ok := prop.(map[string]any)
+	if !ok {
+		t.Fatalf("expected vars property to be object schema, got %T", prop)
+	}
+	if propMap["type"] != "object" {
+		t.Fatalf("expected vars.type=object, got %#v", propMap["type"])
+	}
+	additional, ok := propMap["additionalProperties"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected vars.additionalProperties object, got %T", propMap["additionalProperties"])
+	}
+	if additional["type"] != "string" {
+		t.Fatalf("expected vars.additionalProperties.type=string, got %#v", additional["type"])
+	}
+
+	found := false
+	for _, req := range tool.InputSchema.Required {
+		if req == "vars" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected vars to be required in tool schema")
+	}
+}
 
 func TestBulkSetEnvHandler_MissingApp(t *testing.T) {
 	result, err := bulkSetEnvHandler(context.Background(), makeReq(map[string]interface{}{}))
@@ -1185,6 +1353,68 @@ func TestDeployAppHandler_NonStaticMissingStartCmd(t *testing.T) {
 		"runtime":       "node",
 	}))
 	assertError(t, result, err, "start_command is required")
+}
+
+func TestCreateMCPTarGz_SkipsUnixSocketEntries(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "mcp-tar-")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	regularFile := filepath.Join(dir, "app.txt")
+	if err := os.WriteFile(regularFile, []byte("hello"), 0644); err != nil {
+		t.Fatalf("failed to create regular file: %v", err)
+	}
+
+	socketPath := filepath.Join(dir, "app.sock")
+	l, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Skipf("could not create unix socket on this platform: %v", err)
+	}
+	defer l.Close()
+	defer os.Remove(socketPath)
+
+	artifact, err := createMCPTarGz(dir)
+	if err != nil {
+		t.Fatalf("createMCPTarGz returned error: %v", err)
+	}
+
+	gzr, err := gzip.NewReader(bytes.NewReader(artifact))
+	if err != nil {
+		t.Fatalf("failed to create gzip reader: %v", err)
+	}
+	defer gzr.Close()
+
+	tr := tar.NewReader(gzr)
+	var names []string
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("failed reading tar: %v", err)
+		}
+		names = append(names, strings.TrimSuffix(hdr.Name, "/"))
+	}
+
+	for _, name := range names {
+		if name == "app.sock" {
+			t.Fatalf("expected socket file to be skipped from archive, entries: %v", names)
+		}
+	}
+
+	foundRegular := false
+	for _, name := range names {
+		if name == "app.txt" {
+			foundRegular = true
+			break
+		}
+	}
+	if !foundRegular {
+		t.Fatalf("expected regular file in archive, entries: %v", names)
+	}
 }
 
 // --- skill resource ---
