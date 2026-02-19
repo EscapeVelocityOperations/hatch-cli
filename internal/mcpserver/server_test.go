@@ -934,6 +934,33 @@ func TestGetLogsHandler_InvalidType(t *testing.T) {
 	assertError(t, result, err, "invalid type")
 }
 
+func TestGetLogsHandler_NoRunningAllocationReturnsDiagnostic(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	now := time.Now()
+
+	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/apps/myapp-a1b2/logs": errorHandler(500, "no running allocation for myapp-a1b2"),
+		"GET /v1/apps/myapp-a1b2": jsonHandler(api.App{
+			Slug: "myapp-a1b2", Name: "myapp", Status: "failed",
+			URL:       "https://myapp-a1b2.nest.gethatch.eu",
+			CreatedAt: now, UpdatedAt: now,
+		}),
+	})
+
+	result, err := getLogsHandler(context.Background(), makeReq(map[string]interface{}{
+		"app": "myapp-a1b2",
+	}))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, "No running allocation") {
+		t.Fatalf("expected no running allocation diagnostics, got: %s", text)
+	}
+	if !strings.Contains(text, "App status: failed") {
+		t.Fatalf("expected failed status in diagnostics, got: %s", text)
+	}
+}
+
 func TestGetLogsHandler_AuthFailure(t *testing.T) {
 	saveAndRestore(t)
 	setNoAuth()
@@ -1020,6 +1047,33 @@ func TestGetBuildLogsHandler_InvalidType(t *testing.T) {
 		"type": "build",
 	}))
 	assertError(t, result, err, "invalid type")
+}
+
+func TestGetBuildLogsHandler_NoRunningAllocationReturnsDiagnostic(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	now := time.Now()
+
+	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/apps/myapp-a1b2/logs": errorHandler(500, "no running allocation for myapp-a1b2"),
+		"GET /v1/apps/myapp-a1b2": jsonHandler(api.App{
+			Slug: "myapp-a1b2", Name: "myapp", Status: "failed",
+			URL:       "https://myapp-a1b2.nest.gethatch.eu",
+			CreatedAt: now, UpdatedAt: now,
+		}),
+	})
+
+	result, err := getBuildLogsHandler(context.Background(), makeReq(map[string]interface{}{
+		"app": "myapp-a1b2",
+	}))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, "No running allocation") {
+		t.Fatalf("expected no running allocation diagnostics, got: %s", text)
+	}
+	if !strings.Contains(text, "App status: failed") {
+		t.Fatalf("expected failed status in diagnostics, got: %s", text)
+	}
 }
 
 func TestGetBuildLogsHandler_AuthFailure(t *testing.T) {

@@ -38,6 +38,25 @@ func toolError(format string, args ...interface{}) (*mcp.CallToolResult, error) 
 	return mcp.NewToolResultError(redactError(msg)), nil
 }
 
+func isNoRunningAllocationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no running allocation")
+}
+
+func noRunningAllocationResult(client *api.Client, slug string) (*mcp.CallToolResult, error) {
+	app, appErr := client.GetApp(slug)
+	if appErr == nil && app != nil {
+		return mcp.NewToolResultText(fmt.Sprintf(
+			"No running allocation for %s. App status: %s. The app likely crashed before or during startup.",
+			slug, app.Status,
+		)), nil
+	}
+	return mcp.NewToolResultText(fmt.Sprintf("No running allocation for %s.", slug)), nil
+}
+
 // validateProjectPath ensures directory paths are safe and not in restricted locations.
 func validateProjectPath(dir string) error {
 	abs, err := filepath.Abs(dir)
@@ -689,6 +708,9 @@ func getLogsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTool
 	for _, stream := range streamTypes {
 		logLines, err := client.GetLogs(slug, lines, stream)
 		if err != nil {
+			if isNoRunningAllocationError(err) {
+				return noRunningAllocationResult(client, slug)
+			}
 			return toolError("failed to get logs: %v", err)
 		}
 		if len(logLines) == 0 {
@@ -1150,6 +1172,9 @@ func getBuildLogsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	for _, stream := range streamTypes {
 		logLines, err := client.GetLogs(slug, lines, stream)
 		if err != nil {
+			if isNoRunningAllocationError(err) {
+				return noRunningAllocationResult(client, slug)
+			}
 			return toolError("failed to get build logs: %v", err)
 		}
 		if len(logLines) == 0 {
