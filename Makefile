@@ -4,7 +4,7 @@ COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
 DATE=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS=-ldflags "-X github.com/EscapeVelocityOperations/hatch-cli/cmd/root.version=$(VERSION) -X github.com/EscapeVelocityOperations/hatch-cli/cmd/root.commit=$(COMMIT) -X github.com/EscapeVelocityOperations/hatch-cli/cmd/root.date=$(DATE)"
 
-.PHONY: build install test lint release release-snapshot clean
+.PHONY: build install test test-cover lint check release release-snapshot clean
 
 build:
 	go build $(LDFLAGS) -o bin/$(BINARY_NAME) ./cmd/hatch
@@ -15,8 +15,13 @@ install:
 test:
 	go test ./...
 
+test-cover:
+	go test ./... -coverprofile=coverage.out
+
 lint:
 	golangci-lint run
+
+check: lint test-cover
 
 release:
 	goreleaser release --clean

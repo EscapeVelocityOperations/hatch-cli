@@ -36,8 +36,8 @@ func TestSendFiresHTTPRequest(t *testing.T) {
 		if r.Method != "POST" {
 			t.Errorf("expected POST, got %s", r.Method)
 		}
-		if r.URL.Path != "/v1/telemetry" {
-			t.Errorf("expected /v1/telemetry, got %s", r.URL.Path)
+		if r.URL.Path != "/telemetry" {
+			t.Errorf("expected /telemetry, got %s", r.URL.Path)
 		}
 		json.NewDecoder(r.Body).Decode(&received)
 		w.WriteHeader(http.StatusCreated)

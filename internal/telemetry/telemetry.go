@@ -71,7 +71,7 @@ func Send(command, args, errMsg, mode string) {
 		if !strings.HasPrefix(host, "http") {
 			host = "https://" + host
 		}
-		url := host + "/v1/telemetry"
+		url := host + "/telemetry"
 
 		client := &http.Client{Timeout: 3 * time.Second}
 		resp, err := client.Post(url, "application/json", bytes.NewReader(data))
