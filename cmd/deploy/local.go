@@ -13,6 +13,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ignore"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
+	"golang.org/x/term"
 )
 
 // ArtifactDeployConfig holds configuration for deploy-target mode.
@@ -33,6 +34,11 @@ var validRuntimes = map[string]bool{
 
 // RunArtifactDeploy deploys a pre-built directory as an artifact.
 func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
+	// Inform interactive users that Hatch is designed for AI agents
+	if term.IsTerminal(int(os.Stdout.Fd())) {
+		ui.Info("Hatch is designed for AI agents. Manual usage is supported, but your agent should handle deployment in production.")
+	}
+
 	// Validate runtime
 	if cfg.Runtime == "" {
 		return fmt.Errorf("--runtime is required (node, python, go, rust, php, bun, or static)")
