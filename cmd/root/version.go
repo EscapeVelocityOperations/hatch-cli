@@ -13,6 +13,11 @@ var (
 	date    = "unknown"
 )
 
+// Version returns the current CLI version string.
+func Version() string {
+	return version
+}
+
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print the version of hatch",

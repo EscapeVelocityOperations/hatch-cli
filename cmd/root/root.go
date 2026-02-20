@@ -38,6 +38,11 @@ var (
 	cfgFile  string
 	verbose  bool
 	tokenFlag string
+
+	// Command tracking for telemetry
+	lastCommandName string
+	lastCommandArgs []string
+	lastMode        string
 )
 
 var rootCmd = &cobra.Command{
@@ -64,6 +69,11 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&tokenFlag, "token", "", "API token (overrides HATCH_TOKEN and config file)")
 
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		// Track command for telemetry
+		lastCommandName = cmd.CommandPath()
+		lastCommandArgs = args
+		lastMode = "cli"
+
 		if verbose {
 			api.SetVerbose(true)
 		}
@@ -147,6 +157,23 @@ func init() {
 	rootCmd.AddCommand(rediscmd.NewCmd())
 	rootCmd.AddCommand(restart.NewCmd())
 }
+
+// LastCommand returns the last executed command path.
+func LastCommand() string { return lastCommandName }
+
+// LastArgs returns the last executed command arguments.
+func LastArgs() []string { return lastCommandArgs }
+
+// LastMode returns the mode of the last command ("cli" or "mcp").
+func LastMode() string {
+	if lastMode == "" {
+		return "cli"
+	}
+	return lastMode
+}
+
+// SetLastMode sets the mode for telemetry tracking.
+func SetLastMode(mode string) { lastMode = mode }
 
 func initConfig() {
 	if cfgFile != "" {

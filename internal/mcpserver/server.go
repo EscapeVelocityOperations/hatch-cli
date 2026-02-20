@@ -16,6 +16,7 @@ import (
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/telemetry"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -35,6 +36,7 @@ func redactError(msg string) string {
 // All error messages should use the format "failed to {action}: {detail}".
 func toolError(format string, args ...interface{}) (*mcp.CallToolResult, error) {
 	msg := fmt.Sprintf(format, args...)
+	telemetry.Send("mcp", "", msg, "mcp")
 	return mcp.NewToolResultError(redactError(msg)), nil
 }
 
