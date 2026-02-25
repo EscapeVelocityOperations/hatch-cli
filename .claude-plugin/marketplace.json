@@ -10,7 +10,7 @@
     {
       "name": "hatch",
       "description": "Deploy, manage, and monitor applications on Hatch PaaS directly from Claude Code.",
-      "version": "0.9.0",
+      "version": "0.10.6",
       "author": {
         "name": "Escape Velocity Operations",
         "email": "contact@gethatch.eu"
@@ -27,5 +27,5 @@
       ]
     }
   ],
-  "version": "0.9.0"
+  "version": "0.10.6"
 }
