@@ -1,14 +1,28 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+type roundTripperFunc func(req *http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
 
 func TestNewClient(t *testing.T) {
 	c := NewClient("test-token")
@@ -17,6 +31,40 @@ func TestNewClient(t *testing.T) {
 	}
 	if c.host != DefaultHost {
 		t.Fatalf("expected host %q, got %q", DefaultHost, c.host)
+	}
+	if c.httpClient.Timeout != defaultTimeout {
+		t.Fatalf("expected default timeout %s, got %s", defaultTimeout, c.httpClient.Timeout)
+	}
+}
+
+func TestUploadArtifact_UsesExtendedTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(20 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+	c.httpClient.Timeout = 1 * time.Millisecond
+
+	if err := c.UploadArtifact("myapp", bytes.NewReader([]byte("artifact")), "node", "node server.js"); err != nil {
+		t.Fatalf("expected upload to succeed with extended timeout, got error: %v", err)
+	}
+}
+
+func TestUploadArtifact_TimeoutErrorMessage(t *testing.T) {
+	c := NewClient("tok123")
+	c.httpClient.Transport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, timeoutError{}
+	})
+
+	err := c.UploadArtifact("myapp", bytes.NewReader([]byte("artifact")), "node", "node server.js")
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !strings.Contains(err.Error(), "upload timed out after") {
+		t.Fatalf("expected timeout message, got: %v", err)
 	}
 }
 

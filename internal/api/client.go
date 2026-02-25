@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -25,9 +27,10 @@ func SetVerbose(v bool) {
 }
 
 const (
-	DefaultHost = "https://api.gethatch.eu"
-	apiPath     = "/v1"
-	timeout     = 30 * time.Second
+	DefaultHost           = "https://api.gethatch.eu"
+	apiPath               = "/v1"
+	defaultTimeout        = 30 * time.Second
+	artifactUploadTimeout = 10 * time.Minute
 )
 
 var slugRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
@@ -109,14 +112,14 @@ func NewClient(token string) *Client {
 		IdleConnTimeout:       30 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		TLSNextProto: make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),
+		TLSNextProto:          make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),
 	}
 
 	return &Client{
 		host:  DefaultHost,
 		token: token,
 		httpClient: &http.Client{
-			Timeout:   timeout,
+			Timeout:   defaultTimeout,
 			Transport: transport,
 		},
 	}
@@ -557,8 +560,14 @@ func (c *Client) UploadArtifact(slug string, artifact io.Reader, runtime, startC
 	}
 	req.Header.Set("X-Artifact-Metadata", string(metadataJSON))
 
-	resp, err := c.httpClient.Do(req)
+	uploadClient := *c.httpClient
+	uploadClient.Timeout = artifactUploadTimeout
+
+	resp, err := uploadClient.Do(req)
 	if err != nil {
+		if isTimeoutError(err) {
+			return fmt.Errorf("upload timed out after %s: %w", artifactUploadTimeout, err)
+		}
 		return err
 	}
 	defer resp.Body.Close()
@@ -568,6 +577,11 @@ func (c *Client) UploadArtifact(slug string, artifact io.Reader, runtime, startC
 		return fmt.Errorf("upload failed (%d): %s", resp.StatusCode, RedactToken(strings.TrimSpace(string(data))))
 	}
 	return nil
+}
+
+func isTimeoutError(err error) bool {
+	var netErr net.Error
+	return errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout())
 }
 
 // ListKeys returns API keys for the authenticated user.
@@ -606,17 +620,17 @@ func (c *Client) GetAppStatus(slug string) (json.RawMessage, error) {
 
 // EnergyStatus represents energy information for the user's account.
 type EnergyStatus struct {
-	Tier               string   `json:"tier"`
-	DailyRemaining     int      `json:"daily_remaining_minutes"`
-	DailyLimit         int      `json:"daily_limit_minutes"`
-	WeeklyRemaining    int      `json:"weekly_remaining_minutes"`
-	WeeklyLimit        int      `json:"weekly_limit_minutes"`
-	ResetsAt           string   `json:"resets_at"`
-	EggsActive         int      `json:"eggs_active"`
-	EggsSleeping       int      `json:"eggs_sleeping"`
-	EggsLimit          int      `json:"eggs_limit"`
-	AlwaysOnEggs       []string `json:"always_on_eggs"`
-	BoostedEggs        []string `json:"boosted_eggs,omitempty"`
+	Tier            string   `json:"tier"`
+	DailyRemaining  int      `json:"daily_remaining_minutes"`
+	DailyLimit      int      `json:"daily_limit_minutes"`
+	WeeklyRemaining int      `json:"weekly_remaining_minutes"`
+	WeeklyLimit     int      `json:"weekly_limit_minutes"`
+	ResetsAt        string   `json:"resets_at"`
+	EggsActive      int      `json:"eggs_active"`
+	EggsSleeping    int      `json:"eggs_sleeping"`
+	EggsLimit       int      `json:"eggs_limit"`
+	AlwaysOnEggs    []string `json:"always_on_eggs"`
+	BoostedEggs     []string `json:"boosted_eggs,omitempty"`
 }
 
 // AppEnergy represents energy information for a specific app.
