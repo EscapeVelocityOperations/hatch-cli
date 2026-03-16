@@ -160,6 +160,7 @@ func TestRunDeploy_ArtifactMode_StaticSuccess(t *testing.T) {
 	deps = &Deps{
 		GetToken:     func() (string, error) { return "tok123", nil },
 		GetCwd:       func() (string, error) { return tmp, nil },
+		Confirm:      func(prompt string) bool { return true },
 		NewAPIClient: newMockAPIClient(&mockAPIClient{
 			uploadArtifactFn: func(slug string, artifact []byte, rt, sc string) error {
 				uploadedSlug = slug
@@ -235,6 +236,7 @@ func TestRunDeploy_CreateAppFailure(t *testing.T) {
 	deps = &Deps{
 		GetToken: func() (string, error) { return "tok123", nil },
 		GetCwd:   func() (string, error) { return tmp, nil },
+		Confirm:  func(prompt string) bool { return true },
 		NewAPIClient: newMockAPIClient(&mockAPIClient{
 			createAppFn: func(name string) (*api.App, error) {
 				return nil, fmt.Errorf("API error 500: internal server error")
@@ -260,6 +262,78 @@ func TestRunDeploy_CreateAppFailure(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+}
+
+func TestRunDeploy_CancelWhenUserDeclinesNewEgg(t *testing.T) {
+	tmp := t.TempDir()
+
+	deps = &Deps{
+		GetToken:     func() (string, error) { return "tok123", nil },
+		GetCwd:       func() (string, error) { return tmp, nil },
+		Confirm:      func(prompt string) bool { return false }, // user says no
+		NewAPIClient: newMockAPIClient(&mockAPIClient{}),
+	}
+	defer func() { deps = defaultDeps(); deployTarget = ""; runtime = ""; startCommand = "" }()
+
+	deployTarget = tmp
+	runtime = "static"
+
+	oldDir, _ := os.Getwd()
+	os.Chdir(tmp)
+	defer os.Chdir(oldDir)
+
+	captureOutput(func() {
+		err := runDeploy(nil, nil)
+		if err == nil {
+			t.Fatal("expected error when user cancels")
+		}
+		if !contains(err.Error(), "deploy cancelled") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestRunDeploy_NoConfirmWhenHatchTomlExists(t *testing.T) {
+	tmp := t.TempDir()
+
+	tomlContent := "[app]\nslug = \"existing-egg\"\nname = \"existing\"\n"
+	os.WriteFile(filepath.Join(tmp, ".hatch.toml"), []byte(tomlContent), 0644)
+
+	confirmCalled := false
+	var uploadedSlug string
+	deps = &Deps{
+		GetToken: func() (string, error) { return "tok123", nil },
+		GetCwd:   func() (string, error) { return tmp, nil },
+		Confirm:  func(prompt string) bool { confirmCalled = true; return false },
+		NewAPIClient: newMockAPIClient(&mockAPIClient{
+			uploadArtifactFn: func(slug string, artifact []byte, rt, sc string) error {
+				uploadedSlug = slug
+				return nil
+			},
+		}),
+	}
+	defer func() { deps = defaultDeps(); deployTarget = ""; runtime = "" }()
+
+	deployTarget = tmp
+	runtime = "static"
+
+	oldDir, _ := os.Getwd()
+	os.Chdir(tmp)
+	defer os.Chdir(oldDir)
+
+	captureOutput(func() {
+		err := runDeploy(nil, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	if confirmCalled {
+		t.Error("Confirm should not be called when .hatch.toml exists")
+	}
+	if uploadedSlug != "existing-egg" {
+		t.Fatalf("expected slug 'existing-egg', got %q", uploadedSlug)
+	}
 }
 
 func contains(s, substr string) bool {

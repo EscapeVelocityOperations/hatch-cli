@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -538,45 +539,68 @@ func (c *Client) UploadArtifact(slug string, artifact io.Reader, runtime, startC
 	if err := validateSlug(slug); err != nil {
 		return err
 	}
-	url := c.host + apiPath + "/apps/" + slug + "/artifact"
-	req, err := http.NewRequest("POST", url, artifact)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Content-Type", "application/gzip")
 
-	// hatch-api expects metadata as a single JSON header
-	metadata := struct {
+	// Buffer the artifact bytes so we can retry on transient failures.
+	data, err := io.ReadAll(artifact)
+	if err != nil {
+		return fmt.Errorf("reading artifact: %w", err)
+	}
+
+	metadataJSON, err := json.Marshal(struct {
 		Runtime      string `json:"runtime"`
 		StartCommand string `json:"startCommand"`
-	}{
-		Runtime:      runtime,
-		StartCommand: startCommand,
-	}
-	metadataJSON, err := json.Marshal(metadata)
+	}{Runtime: runtime, StartCommand: startCommand})
 	if err != nil {
 		return fmt.Errorf("marshaling metadata: %w", err)
 	}
-	req.Header.Set("X-Artifact-Metadata", string(metadataJSON))
 
 	uploadClient := *c.httpClient
 	uploadClient.Timeout = artifactUploadTimeout
 
-	resp, err := uploadClient.Do(req)
-	if err != nil {
-		if isTimeoutError(err) {
-			return fmt.Errorf("upload timed out after %s: %w", artifactUploadTimeout, err)
+	uploadURL := c.host + apiPath + "/apps/" + slug + "/artifact"
+	const maxRetries = 3
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(1<<uint(attempt-1)) * 2 * time.Second // 2s, 4s
+			time.Sleep(backoff)
 		}
-		return err
-	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 {
-		data, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("upload failed (%d): %s", resp.StatusCode, RedactToken(strings.TrimSpace(string(data))))
+		req, err := http.NewRequest("POST", uploadURL, bytes.NewReader(data))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.token)
+		req.Header.Set("Content-Type", "application/gzip")
+		req.Header.Set("X-Artifact-Metadata", string(metadataJSON))
+
+		resp, err := uploadClient.Do(req)
+		if err != nil {
+			lastErr = err
+			if isTimeoutError(err) {
+				lastErr = fmt.Errorf("upload timed out after %s (attempt %d/%d): %w", artifactUploadTimeout, attempt+1, maxRetries, err)
+			}
+			continue
+		}
+
+		if resp.StatusCode >= 500 {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			lastErr = fmt.Errorf("upload failed (%d): %s", resp.StatusCode, RedactToken(strings.TrimSpace(string(body))))
+			continue
+		}
+
+		if resp.StatusCode >= 400 {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			// 4xx errors are not retryable (bad request, auth failure, etc.)
+			return fmt.Errorf("upload failed (%d): %s", resp.StatusCode, RedactToken(strings.TrimSpace(string(body))))
+		}
+
+		resp.Body.Close()
+		return nil
 	}
-	return nil
+	return lastErr
 }
 
 func isTimeoutError(err error) bool {

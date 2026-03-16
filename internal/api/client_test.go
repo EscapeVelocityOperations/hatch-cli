@@ -68,6 +68,76 @@ func TestUploadArtifact_TimeoutErrorMessage(t *testing.T) {
 	}
 }
 
+func TestUploadArtifact_RetriesOnTransientError(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("service unavailable"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+
+	err := c.UploadArtifact("myapp", bytes.NewReader([]byte("artifact")), "node", "node server.js")
+	if err != nil {
+		t.Fatalf("expected success after retries, got: %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("expected 3 attempts, got %d", attempts)
+	}
+}
+
+func TestUploadArtifact_NoRetryOn4xx(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte("unauthorized"))
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+
+	err := c.UploadArtifact("myapp", bytes.NewReader([]byte("artifact")), "node", "node server.js")
+	if err == nil {
+		t.Fatal("expected error for 401")
+	}
+	if attempts != 1 {
+		t.Fatalf("expected exactly 1 attempt (no retry on 4xx), got %d", attempts)
+	}
+	if !strings.Contains(err.Error(), "upload failed (401)") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+func TestUploadArtifact_ExhaustsRetries(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte("bad gateway"))
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+
+	err := c.UploadArtifact("myapp", bytes.NewReader([]byte("artifact")), "node", "node server.js")
+	if err == nil {
+		t.Fatal("expected error after exhausting retries")
+	}
+	if attempts != 3 {
+		t.Fatalf("expected 3 attempts (maxRetries), got %d", attempts)
+	}
+}
+
 func TestListApps(t *testing.T) {
 	apps := []App{
 		{Slug: "myapp", Name: "myapp", Status: "running", URL: "https://myapp.gethatch.eu"},

@@ -1,10 +1,12 @@
 package deploy
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -68,6 +70,7 @@ type Deps struct {
 	GetToken     func() (string, error)
 	GetCwd       func() (string, error)
 	NewAPIClient func(token string) APIClient
+	Confirm      func(prompt string) bool
 }
 
 // realAPIClient wraps api.Client to implement APIClient interface.
@@ -90,7 +93,17 @@ func defaultDeps() *Deps {
 		NewAPIClient: func(token string) APIClient {
 			return &realAPIClient{client: api.NewClient(token)}
 		},
+		Confirm: confirmPrompt,
 	}
+}
+
+// confirmPrompt asks the user a yes/no question and returns true if they confirm.
+func confirmPrompt(prompt string) bool {
+	fmt.Printf("%s [y/N] ", prompt)
+	reader := bufio.NewReader(os.Stdin)
+	line, _ := reader.ReadString('\n')
+	answer := strings.TrimSpace(strings.ToLower(line))
+	return answer == "y" || answer == "yes"
 }
 
 var deps = defaultDeps()
@@ -223,7 +236,7 @@ func resolveApp(client APIClient, appSlug, appNameOverride, dir string) (string,
 		return hatchConfig.Slug, hatchConfig.Name, nil
 	}
 
-	// Create new app
+	// No .hatch.toml found — confirm before creating a new egg
 	name := appNameOverride
 	if name == "" {
 		if dir == "" || dir == "." {
@@ -232,6 +245,12 @@ func resolveApp(client APIClient, appSlug, appNameOverride, dir string) (string,
 		} else {
 			name = filepath.Base(dir)
 		}
+	}
+
+	ui.Warn("No .hatch.toml found. A new egg will be created.")
+	ui.Info("If you meant to deploy to an existing egg, cancel and use --name <slug> to specify it.")
+	if !deps.Confirm(fmt.Sprintf("Create a new egg named %q?", name)) {
+		return "", "", fmt.Errorf("deploy cancelled")
 	}
 
 	ui.Info(fmt.Sprintf("Creating new egg: %s", name))
