@@ -40,6 +40,7 @@ var deps = defaultDeps()
 
 var appSlug string
 var envFile string
+var showSecrets bool
 
 // NewCmd returns the env command with set/unset subcommands.
 func NewCmd() *cobra.Command {
@@ -50,6 +51,7 @@ func NewCmd() *cobra.Command {
 		RunE:  runList,
 	}
 	cmd.PersistentFlags().StringVarP(&appSlug, "app", "a", "", "egg slug (auto-detected from git remote if omitted)")
+	cmd.Flags().BoolVar(&showSecrets, "show-secrets", false, "show full values for sensitive variables (passwords, tokens, keys)")
 
 	setCmd := &cobra.Command{
 		Use:   "set [KEY=VALUE...]",
@@ -102,17 +104,19 @@ func runList(cmd *cobra.Command, args []string) error {
 
 	table := ui.NewTable(os.Stdout, "KEY", "VALUE")
 	for _, v := range vars {
-		// Mask sensitive values
+		// Mask sensitive values unless --show-secrets is set
 		displayValue := v.Value
-		sensitiveKeys := []string{"PASSWORD", "SECRET", "TOKEN", "KEY", "DSN", "DATABASE_URL", "API_KEY", "PRIVATE"}
-		for _, sk := range sensitiveKeys {
-			if strings.Contains(strings.ToUpper(v.Key), sk) {
-				if len(v.Value) > 8 {
-					displayValue = v.Value[:4] + "****" + v.Value[len(v.Value)-4:]
-				} else {
-					displayValue = "****"
+		if !showSecrets {
+			sensitiveKeys := []string{"PASSWORD", "SECRET", "TOKEN", "KEY", "DSN", "DATABASE_URL", "API_KEY", "PRIVATE"}
+			for _, sk := range sensitiveKeys {
+				if strings.Contains(strings.ToUpper(v.Key), sk) {
+					if len(v.Value) > 8 {
+						displayValue = v.Value[:4] + "****" + v.Value[len(v.Value)-4:]
+					} else {
+						displayValue = "****"
+					}
+					break
 				}
-				break
 			}
 		}
 		table.AddRow(v.Key, displayValue)

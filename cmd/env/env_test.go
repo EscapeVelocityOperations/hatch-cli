@@ -202,6 +202,84 @@ func TestRunUnset_Success(t *testing.T) {
 	}
 }
 
+func TestRunList_MasksSensitiveValues(t *testing.T) {
+	appSlug = "myapp"
+	showSecrets = false
+	defer func() { appSlug = ""; showSecrets = false }()
+
+	deps = &Deps{
+		GetToken: func() (string, error) { return "tok123", nil },
+		GetEnvVars: func(token, slug string) ([]api.EnvVar, error) {
+			return []api.EnvVar{
+				{Key: "DATABASE_URL", Value: "postgres://user:pass@host:5432/db"},
+				{Key: "API_KEY", Value: "sk-1234567890abcdef"},
+				{Key: "SHORT_SECRET", Value: "abc"},
+				{Key: "NODE_ENV", Value: "production"},
+			}, nil
+		},
+	}
+	defer func() { deps = defaultDeps() }()
+
+	output := captureOutput(func() {
+		err := runList(nil, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	// DATABASE_URL should be masked
+	if contains(output, "postgres://user:pass@host:5432/db") {
+		t.Fatalf("expected DATABASE_URL to be masked, got: %s", output)
+	}
+	if !contains(output, "post****2/db") {
+		t.Fatalf("expected masked DATABASE_URL in output, got: %s", output)
+	}
+	// Short secret should be fully masked
+	if contains(output, "abc") && !contains(output, "****") {
+		t.Fatalf("expected SHORT_SECRET to be masked, got: %s", output)
+	}
+	// Non-sensitive should be visible
+	if !contains(output, "production") {
+		t.Fatalf("expected NODE_ENV to be visible, got: %s", output)
+	}
+}
+
+func TestRunList_ShowSecrets(t *testing.T) {
+	appSlug = "myapp"
+	showSecrets = true
+	defer func() { appSlug = ""; showSecrets = false }()
+
+	deps = &Deps{
+		GetToken: func() (string, error) { return "tok123", nil },
+		GetEnvVars: func(token, slug string) ([]api.EnvVar, error) {
+			return []api.EnvVar{
+				{Key: "DATABASE_URL", Value: "postgres://user:pass@host:5432/db"},
+				{Key: "API_KEY", Value: "sk-1234567890abcdef"},
+				{Key: "NODE_ENV", Value: "production"},
+			}, nil
+		},
+	}
+	defer func() { deps = defaultDeps() }()
+
+	output := captureOutput(func() {
+		err := runList(nil, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	// With --show-secrets, all values should be visible
+	if !contains(output, "postgres://user:pass@host:5432/db") {
+		t.Fatalf("expected full DATABASE_URL with --show-secrets, got: %s", output)
+	}
+	if !contains(output, "sk-1234567890abcdef") {
+		t.Fatalf("expected full API_KEY with --show-secrets, got: %s", output)
+	}
+	if !contains(output, "production") {
+		t.Fatalf("expected NODE_ENV visible, got: %s", output)
+	}
+}
+
 func TestRunUnset_APIError(t *testing.T) {
 	appSlug = "myapp"
 	defer func() { appSlug = "" }()
