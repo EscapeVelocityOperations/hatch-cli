@@ -828,10 +828,13 @@ func setEnvHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 
 func getEnvTool() mcp.Tool {
 	return mcp.NewTool("get_env",
-		mcp.WithDescription("List all environment variables for an app."),
+		mcp.WithDescription("List all environment variables for an app. Sensitive values (passwords, tokens, keys, DSNs) are masked by default."),
 		mcp.WithString("app",
 			mcp.Required(),
 			mcp.Description("App slug (name) to list env vars for"),
+		),
+		mcp.WithBoolean("show_secrets",
+			mcp.Description("Show full values for sensitive variables (passwords, tokens, keys). Default: false"),
 		),
 	)
 }
@@ -841,6 +844,8 @@ func getEnvHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 	if err != nil {
 		return toolError("failed to get env vars: missing required parameter 'app'")
 	}
+
+	showSecrets := req.GetBool("show_secrets", false)
 
 	client, err := newClient()
 	if err != nil {
@@ -856,8 +861,33 @@ func getEnvHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolR
 		return mcp.NewToolResultText("No environment variables set."), nil
 	}
 
+	if !showSecrets {
+		vars = maskSensitiveEnvVars(vars)
+	}
+
 	data, _ := json.MarshalIndent(vars, "", "  ")
 	return mcp.NewToolResultText(string(data)), nil
+}
+
+// maskSensitiveEnvVars returns a copy of vars with sensitive values masked.
+// Matches the same keywords as the CLI's --show-secrets logic.
+func maskSensitiveEnvVars(vars []api.EnvVar) []api.EnvVar {
+	sensitiveKeys := []string{"PASSWORD", "SECRET", "TOKEN", "KEY", "DSN", "DATABASE_URL", "API_KEY", "PRIVATE"}
+	masked := make([]api.EnvVar, len(vars))
+	for i, v := range vars {
+		masked[i] = v
+		for _, sk := range sensitiveKeys {
+			if strings.Contains(strings.ToUpper(v.Key), sk) {
+				if len(v.Value) > 8 {
+					masked[i].Value = v.Value[:4] + "****" + v.Value[len(v.Value)-4:]
+				} else {
+					masked[i].Value = "****"
+				}
+				break
+			}
+		}
+	}
+	return masked
 }
 
 // --- add_domain ---
@@ -1445,10 +1475,13 @@ func setEnvVarHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 
 func listEnvVarsTool() mcp.Tool {
 	return mcp.NewTool("list_env_vars",
-		mcp.WithDescription("List all environment variables for an app. Alias for get_env with clearer naming."),
+		mcp.WithDescription("List all environment variables for an app. Alias for get_env with clearer naming. Sensitive values are masked by default."),
 		mcp.WithString("slug",
 			mcp.Required(),
 			mcp.Description("App slug (name) to list env vars for"),
+		),
+		mcp.WithBoolean("show_secrets",
+			mcp.Description("Show full values for sensitive variables (passwords, tokens, keys). Default: false"),
 		),
 	)
 }
@@ -1458,6 +1491,8 @@ func listEnvVarsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Call
 	if err != nil {
 		return toolError("failed to list env vars: missing required parameter 'slug'")
 	}
+
+	showSecrets := req.GetBool("show_secrets", false)
 
 	client, err := newClient()
 	if err != nil {
@@ -1471,6 +1506,10 @@ func listEnvVarsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Call
 
 	if len(vars) == 0 {
 		return mcp.NewToolResultText("No environment variables set."), nil
+	}
+
+	if !showSecrets {
+		vars = maskSensitiveEnvVars(vars)
 	}
 
 	data, _ := json.MarshalIndent(vars, "", "  ")

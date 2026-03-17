@@ -81,7 +81,7 @@ The deploy-target contents are extracted to /app/ in the container.
 | ` + "`get_logs`" + ` | Returns recent application logs |
 | ` + "`get_status`" + ` | App running status, URL, region |
 | ` + "`set_env`" + ` | Set environment variables |
-| ` + "`get_env`" + ` | List all environment variables |
+| ` + "`get_env`" + ` | List all environment variables (pass show_secrets: true to unmask) |
 | ` + "`add_domain`" + ` | Custom domain setup with DNS instructions |
 | ` + "`get_database_url`" + ` | Get DATABASE_URL for an app |
 `
