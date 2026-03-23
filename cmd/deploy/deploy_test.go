@@ -631,3 +631,80 @@ func TestValidRuntimes(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckBinaryArch(t *testing.T) {
+	dir := t.TempDir()
+
+	writeBin := func(name string, data []byte) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, data, 0755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	// Mach-O 64-bit big-endian magic
+	machoPath := writeBin("macho", append([]byte{0xfe, 0xed, 0xfa, 0xcf}, make([]byte, 20)...))
+	// Mach-O 64-bit little-endian magic (as seen on Apple Silicon)
+	machoLEPath := writeBin("machole", append([]byte{0xcf, 0xfa, 0xed, 0xfe}, make([]byte, 20)...))
+	// ELF amd64: magic + class(64) + endian(LE) + version + osabi + pad... + type(2) + machine(0x3E)
+	elfHeader := make([]byte, 20)
+	elfHeader[0], elfHeader[1], elfHeader[2], elfHeader[3] = 0x7f, 'E', 'L', 'F'
+	elfHeader[18], elfHeader[19] = 0x3E, 0x00 // EM_X86_64
+	elfPath := writeBin("elf-amd64", elfHeader)
+	// ELF arm64
+	elfArm := make([]byte, 20)
+	copy(elfArm, elfHeader)
+	elfArm[18], elfArm[19] = 0xB7, 0x00 // EM_AARCH64
+	elfArmPath := writeBin("elf-arm64", elfArm)
+	// PE (Windows)
+	pePath := writeBin("windows", append([]byte{'M', 'Z'}, make([]byte, 20)...))
+	// Script (not a binary)
+	scriptPath := writeBin("script.sh", []byte("#!/bin/bash\necho hi\n"))
+	// Empty file
+	emptyPath := writeBin("empty", []byte{})
+
+	tests := []struct {
+		name    string
+		path    string
+		runtime string
+		wantErr string
+	}{
+		{"macho-go", machoPath, "go", "macOS (Mach-O)"},
+		{"macho-le-rust", machoLEPath, "rust", "macOS (Mach-O)"},
+		{"elf-amd64-ok", elfPath, "go", ""},
+		{"elf-arm64-reject", elfArmPath, "go", "linux/arm64"},
+		{"pe-reject", pePath, "go", "Windows (PE)"},
+		{"script-ok", scriptPath, "go", ""},
+		{"empty-ok", emptyPath, "go", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkBinaryArch(tt.path, tt.runtime)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Errorf("expected no error, got: %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Errorf("expected error containing %q, got nil", tt.wantErr)
+				} else if !bytes.Contains([]byte(err.Error()), []byte(tt.wantErr)) {
+					t.Errorf("expected error containing %q, got: %v", tt.wantErr, err)
+				}
+			}
+		})
+	}
+
+	// Go-specific: error message should contain cross-compile command
+	err := checkBinaryArch(machoPath, "go")
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("CGO_ENABLED=0 GOOS=linux GOARCH=amd64")) {
+		t.Error("go runtime error should contain cross-compile instructions")
+	}
+
+	// Rust-specific: error message should contain cross command
+	err = checkBinaryArch(machoLEPath, "rust")
+	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("cross build")) {
+		t.Error("rust runtime error should contain cross build instructions")
+	}
+}

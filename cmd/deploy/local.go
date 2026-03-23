@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -68,6 +69,13 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 			entrypointPath := filepath.Join(cfg.DeployTarget, entrypoint)
 			if _, err := os.Stat(entrypointPath); os.IsNotExist(err) {
 				return fmt.Errorf("entrypoint file %q not found in deploy-target %q\n\nThe start-command references %q but that file does not exist in your deploy-target directory.\nCheck that your build output is complete.", entrypoint, cfg.DeployTarget, entrypoint)
+			}
+
+			// For compiled runtimes, check binary architecture
+			if cfg.Runtime == "go" || cfg.Runtime == "rust" {
+				if err := checkBinaryArch(entrypointPath, cfg.Runtime); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -348,4 +356,68 @@ func createTarGz(dir string) ([]byte, []string, error) {
 	}
 
 	return buf.Bytes(), excluded, nil
+}
+
+// checkBinaryArch reads the magic bytes of a binary file and rejects macOS
+// (Mach-O) or Windows (PE) binaries. Hatch containers run linux/amd64.
+func checkBinaryArch(path, runtime string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil // can't read, skip check
+	}
+	defer f.Close()
+
+	var magic [4]byte
+	if _, err := io.ReadFull(f, magic[:]); err != nil {
+		return nil // too small or unreadable, not a compiled binary
+	}
+
+	m := binary.BigEndian.Uint32(magic[:])
+
+	// Mach-O magic numbers (macOS binaries)
+	// 0xfeedface = 32-bit, 0xfeedfacf = 64-bit
+	// 0xcefaedfe / 0xcffaedfe = same in little-endian byte order
+	switch m {
+	case 0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe:
+		crossCmd := ""
+		switch runtime {
+		case "go":
+			crossCmd = "CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o <output> ."
+		case "rust":
+			crossCmd = "cross build --release --target x86_64-unknown-linux-gnu"
+		}
+		return fmt.Errorf("binary %q is a macOS (Mach-O) executable — it won't run on Hatch (linux/amd64)\n\n"+
+			"Cross-compile for Linux before deploying:\n\n"+
+			"  %s\n\n"+
+			"Then point --deploy-target at the directory containing the Linux binary.",
+			filepath.Base(path), crossCmd)
+	}
+
+	// PE magic (Windows: MZ header)
+	if magic[0] == 'M' && magic[1] == 'Z' {
+		return fmt.Errorf("binary %q is a Windows (PE) executable — it won't run on Hatch (linux/amd64)\n\n"+
+			"Cross-compile for Linux before deploying.", filepath.Base(path))
+	}
+
+	// ELF check: valid but verify it's amd64
+	if magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F' {
+		// Read ELF header: byte 18-19 = e_machine (little-endian)
+		var hdr [20]byte
+		if _, err := f.Seek(0, 0); err != nil {
+			return nil
+		}
+		if _, err := io.ReadFull(f, hdr[:]); err != nil {
+			return nil
+		}
+		machine := binary.LittleEndian.Uint16(hdr[18:20])
+		// 0x3E = EM_X86_64 (amd64), 0xB7 = EM_AARCH64 (arm64)
+		if machine == 0xB7 {
+			return fmt.Errorf("binary %q is compiled for linux/arm64 — Hatch requires linux/amd64\n\n"+
+				"Rebuild with GOARCH=amd64:\n\n"+
+				"  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o <output> .",
+				filepath.Base(path))
+		}
+	}
+
+	return nil
 }
