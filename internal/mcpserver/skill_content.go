@@ -50,7 +50,7 @@ The deploy-target directory should contain everything needed at runtime:
 | Bun/Elysia   | bun install        | .             | bun run index.ts             |
 | Static site  | npm run build      | dist          | (not needed)                 |
 
-IMPORTANT: Include node_modules if your Node.js app needs them at runtime.
+IMPORTANT: Include node_modules only if they contain no native addons (.node files). If native addons are present, deploy source + package.json + package-lock.json and let the platform run npm install.
 The deploy-target contents are extracted to /app/ in the container.
 
 ## Environment Variables (auto-injected)
@@ -68,6 +68,17 @@ The deploy-target contents are extracted to /app/ in the container.
 | Connection refused| Listening on localhost       | Bind to 0.0.0.0 not 127.0.0.1         |
 | Exit code 139     | Out of memory                | Reduce memory usage                    |
 | Missing module    | node_modules not in artifact | Include node_modules in deploy-target  |
+
+## Platform Requirements
+
+Hatch containers run **linux/amd64**. All binaries and native modules must target this platform.
+
+| Runtime | Requirement | How to fix |
+|---------|-------------|------------|
+| go | Cross-compile with CGO_ENABLED=0 GOOS=linux GOARCH=amd64 | Binary must be ELF x86_64 |
+| rust | Cross-compile with cross build --release --target x86_64-unknown-linux-gnu | Binary must be ELF x86_64 |
+| node/bun | Native addons (.node) must be linux/amd64 | Deploy without node_modules and let platform npm install, OR npm rebuild --platform=linux --arch=x64 |
+| python | C extensions (.so) must be linux/amd64 | Deploy without venv and let platform pip install, OR use manylinux2014_x86_64 wheels |
 
 ## MCP Tools
 
@@ -111,6 +122,9 @@ hatch deploy --deploy-target <build-dir> --runtime <node|python|go|rust|php|bun|
 ### Environment Variables (auto-injected)
 - ` + "`PORT`" + ` — Always 8080. Your app must listen on this port.
 - ` + "`DATABASE_URL`" + ` — PostgreSQL connection string (if provisioned via ` + "`hatch db`" + ` or MCP ` + "`add_database`" + `).
+
+### Platform
+Hatch runs **linux/amd64**. Go/Rust: cross-compile. Node.js: deploy without node_modules if native addons present. Python: deploy without venv.
 
 ### MCP Tools (via ` + "`hatch mcp`" + `)
 Use these tools to manage your deployment: ` + "`deploy_app`" + `, ` + "`get_logs`" + `, ` + "`get_status`" + `, ` + "`restart_app`" + `, ` + "`set_env`" + `, ` + "`add_database`" + `, ` + "`add_domain`" + `.

@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/archcheck"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ignore"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
 	"golang.org/x/term"
@@ -77,6 +77,13 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 					return err
 				}
 			}
+		}
+	}
+
+	// Check native dependencies for interpreted runtimes
+	if cfg.Runtime == "node" || cfg.Runtime == "bun" || cfg.Runtime == "python" {
+		if err := checkNativeDeps(cfg.DeployTarget, cfg.Runtime); err != nil {
+			return err
 		}
 	}
 
@@ -361,24 +368,10 @@ func createTarGz(dir string) ([]byte, []string, error) {
 // checkBinaryArch reads the magic bytes of a binary file and rejects macOS
 // (Mach-O) or Windows (PE) binaries. Hatch containers run linux/amd64.
 func checkBinaryArch(path, runtime string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil // can't read, skip check
-	}
-	defer f.Close()
+	arch := archcheck.DetectArch(path)
 
-	var magic [4]byte
-	if _, err := io.ReadFull(f, magic[:]); err != nil {
-		return nil // too small or unreadable, not a compiled binary
-	}
-
-	m := binary.BigEndian.Uint32(magic[:])
-
-	// Mach-O magic numbers (macOS binaries)
-	// 0xfeedface = 32-bit, 0xfeedfacf = 64-bit
-	// 0xcefaedfe / 0xcffaedfe = same in little-endian byte order
-	switch m {
-	case 0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe:
+	switch arch {
+	case archcheck.ArchMacOS:
 		crossCmd := ""
 		switch runtime {
 		case "go":
@@ -391,33 +384,32 @@ func checkBinaryArch(path, runtime string) error {
 			"  %s\n\n"+
 			"Then point --deploy-target at the directory containing the Linux binary.",
 			filepath.Base(path), crossCmd)
-	}
 
-	// PE magic (Windows: MZ header)
-	if magic[0] == 'M' && magic[1] == 'Z' {
+	case archcheck.ArchWindows:
 		return fmt.Errorf("binary %q is a Windows (PE) executable — it won't run on Hatch (linux/amd64)\n\n"+
 			"Cross-compile for Linux before deploying.", filepath.Base(path))
+
+	case archcheck.ArchLinuxARM64:
+		return fmt.Errorf("binary %q is compiled for linux/arm64 — Hatch requires linux/amd64\n\n"+
+			"Rebuild with GOARCH=amd64:\n\n"+
+			"  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o <output> .",
+			filepath.Base(path))
 	}
 
-	// ELF check: valid but verify it's amd64
-	if magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F' {
-		// Read ELF header: byte 18-19 = e_machine (little-endian)
-		var hdr [20]byte
-		if _, err := f.Seek(0, 0); err != nil {
-			return nil
-		}
-		if _, err := io.ReadFull(f, hdr[:]); err != nil {
-			return nil
-		}
-		machine := binary.LittleEndian.Uint16(hdr[18:20])
-		// 0x3E = EM_X86_64 (amd64), 0xB7 = EM_AARCH64 (arm64)
-		if machine == 0xB7 {
-			return fmt.Errorf("binary %q is compiled for linux/arm64 — Hatch requires linux/amd64\n\n"+
-				"Rebuild with GOARCH=amd64:\n\n"+
-				"  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o <output> .",
-				filepath.Base(path))
+	return nil
+}
+
+// checkNativeDeps scans for native modules with wrong architecture.
+func checkNativeDeps(dir, runtime string) error {
+	result, err := archcheck.CheckNativeDeps(dir, runtime)
+	if err != nil {
+		return err
+	}
+	if result != nil && len(result.BadFiles) > 0 {
+		ui.Warn(fmt.Sprintf("found %d/%d native module(s) compiled for wrong platform", len(result.BadFiles), result.Total))
+		for _, f := range result.BadFiles {
+			fmt.Println(ui.Dim("  - " + f))
 		}
 	}
-
 	return nil
 }

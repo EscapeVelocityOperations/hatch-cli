@@ -363,6 +363,12 @@ CONTAINER BEHAVIOR:
 - PORT env var is always 8080 — your app must listen on it
 - Your app must bind to 0.0.0.0 (not localhost)
 
+PLATFORM ARCHITECTURE:
+- Hatch runs linux/amd64. All binaries must target this platform.
+- Go/Rust: cross-compile with GOOS=linux GOARCH=amd64
+- Node/Bun: native addons (.node files) must be linux/amd64. Best practice: deploy source + lockfile without node_modules.
+- Python: C extensions (.so) must be linux/amd64. Best practice: deploy source + requirements.txt without venv.
+
 RUNTIME IMAGES:
 - "node"   → node:20-alpine (for Node.js/Nuxt/Next/Express apps)
 - "python" → python:3.12-slim (for Python/FastAPI/Django/Flask apps)
