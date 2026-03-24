@@ -40,6 +40,14 @@ func main() {
 		time.Sleep(50 * time.Millisecond)
 
 		fmt.Fprintln(os.Stderr, err)
+
+		// In MCP mode, never exit 1 — the protocol handles errors.
+		// In non-interactive mode (piped, used by agents), exit 0 so the
+		// agent can parse stderr and decide what to do.
+		// Only exit 1 in interactive terminals for human UX.
+		if root.LastMode() == "mcp" || !isInteractive() {
+			os.Exit(0)
+		}
 		os.Exit(1)
 	}
 
