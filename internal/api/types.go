@@ -4,13 +4,14 @@ import "time"
 
 // App represents a deployed application on Hatch.
 type App struct {
-	Slug      string    `json:"slug"`
-	Name      string    `json:"name"`
-	Status    string    `json:"status"`
-	URL       string    `json:"url"`
-	Region    string    `json:"region"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Slug         string    `json:"slug"`
+	Name         string    `json:"name"`
+	Status       string    `json:"status"`
+	StatusReason string    `json:"status_reason,omitempty"`
+	URL          string    `json:"url"`
+	Region       string    `json:"region"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // Deployment represents a deployment record.

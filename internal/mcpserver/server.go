@@ -51,10 +51,13 @@ func isNoRunningAllocationError(err error) bool {
 func noRunningAllocationResult(client *api.Client, slug string) (*mcp.CallToolResult, error) {
 	app, appErr := client.GetApp(slug)
 	if appErr == nil && app != nil {
-		return mcp.NewToolResultText(fmt.Sprintf(
-			"No running allocation for %s. App status: %s. The app likely crashed before or during startup.",
-			slug, app.Status,
-		)), nil
+		msg := fmt.Sprintf("No running allocation for %s. App status: %s.", slug, app.Status)
+		if app.StatusReason != "" {
+			msg += fmt.Sprintf("\nFailure reason: %s", app.StatusReason)
+		} else {
+			msg += " The app likely crashed before or during startup. Use get_logs or get_build_logs for details."
+		}
+		return mcp.NewToolResultText(msg), nil
 	}
 	return mcp.NewToolResultText(fmt.Sprintf("No running allocation for %s.", slug)), nil
 }
@@ -780,6 +783,10 @@ func getStatusHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		app.Name, app.Status, app.URL, app.Region,
 		app.CreatedAt.Format("2006-01-02 15:04:05"),
 		app.UpdatedAt.Format("2006-01-02 15:04:05"))
+
+	if app.StatusReason != "" {
+		result += fmt.Sprintf("\nStatus reason: %s", app.StatusReason)
+	}
 
 	return mcp.NewToolResultText(result), nil
 }
