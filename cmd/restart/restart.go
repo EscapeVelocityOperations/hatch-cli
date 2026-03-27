@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/energy"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/resolve"
@@ -82,6 +83,10 @@ func runRestart(cmd *cobra.Command, args []string) error {
 	}
 
 	ui.Success(fmt.Sprintf("Restarted %s", slug))
+
+	// Check energy after restart and warn if low
+	energy.CheckAfterCommand(api.NewClient(token), slug)
+
 	return nil
 }
 

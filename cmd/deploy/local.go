@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/energy"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/archcheck"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ignore"
@@ -134,6 +135,9 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 		realClient := api.NewClient(cfg.Token)
 		configureDomain(realClient, slug, cfg.Domain)
 	}
+
+	// Check energy after deploy and warn if low
+	energy.CheckAfterCommand(api.NewClient(cfg.Token), slug)
 
 	return nil
 }
