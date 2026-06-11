@@ -34,6 +34,9 @@ func NewCmd() *cobra.Command {
 			return showAccountEnergy(client)
 		},
 	}
+	// STUB(h-gbo48): `energy buy` lands in h-sjoev; registered here so the
+	// red suite drives the real command tree.
+	cmd.AddCommand(newBuyCmd())
 	return cmd
 }
 

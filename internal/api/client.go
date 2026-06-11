@@ -649,12 +649,31 @@ type EnergyStatus struct {
 	DailyLimit      int      `json:"daily_limit_minutes"`
 	WeeklyRemaining int      `json:"weekly_remaining_minutes"`
 	WeeklyLimit     int      `json:"weekly_limit_minutes"`
-	ResetsAt        string   `json:"resets_at"`
-	EggsActive      int      `json:"eggs_active"`
-	EggsSleeping    int      `json:"eggs_sleeping"`
-	EggsLimit       int      `json:"eggs_limit"`
-	AlwaysOnEggs    []string `json:"always_on_eggs"`
-	BoostedEggs     []string `json:"boosted_eggs,omitempty"`
+	// PackRemaining is the non-expiring purchased balance (energy packs,
+	// spec h-avt0u) — the 4th bucket after daily/weekly/bonus.
+	// STUB(h-gbo48): populated by hatch-api in h-1u5ky
+	PackRemaining int      `json:"pack_remaining_minutes"`
+	ResetsAt      string   `json:"resets_at"`
+	EggsActive    int      `json:"eggs_active"`
+	EggsSleeping  int      `json:"eggs_sleeping"`
+	EggsLimit     int      `json:"eggs_limit"`
+	AlwaysOnEggs  []string `json:"always_on_eggs"`
+	BoostedEggs   []string `json:"boosted_eggs,omitempty"`
+}
+
+// EnergyPackCheckoutResponse represents an energy-pack checkout session.
+// STUB(h-gbo48): implemented in h-sjoev/h-1u5ky
+type EnergyPackCheckoutResponse struct {
+	CheckoutURL string `json:"checkout_url"`
+	AmountEur   string `json:"amount_eur"`
+	Minutes     int    `json:"minutes"`
+}
+
+// EnergyPackCheckout creates a Stripe checkout session for an energy pack
+// purchase (single v1 SKU: 1000 min / €3).
+// STUB(h-gbo48): implemented in h-sjoev (impl-cli)
+func (c *Client) EnergyPackCheckout() (*EnergyPackCheckoutResponse, error) {
+	return nil, nil
 }
 
 // AppEnergy represents energy information for a specific app.
