@@ -769,3 +769,53 @@ func (c *Client) RedeemBoostCredit(creditID, eggSlug string) (*RedeemCreditRespo
 	}
 	return &result, nil
 }
+
+// EnableVolume provisions a persistent volume for an app (h-gcf5h).
+func (c *Client) EnableVolume(slug string, sizeMB int) error {
+	if err := validateSlug(slug); err != nil {
+		return err
+	}
+	body := fmt.Sprintf(`{"size_mb":%d}`, sizeMB)
+	resp, err := c.do("POST", "/apps/"+slug+"/volume", strings.NewReader(body))
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+// GetVolume fetches the app's volume status.
+func (c *Client) GetVolume(slug string) (*Volume, error) {
+	if err := validateSlug(slug); err != nil {
+		return nil, err
+	}
+	resp, err := c.do("GET", "/apps/"+slug+"/volume", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var v Volume
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return &v, nil
+}
+
+// DisableVolume detaches the app's volume; now=true deletes immediately
+// instead of after the 7-day grace period.
+func (c *Client) DisableVolume(slug string, now bool) error {
+	if err := validateSlug(slug); err != nil {
+		return err
+	}
+	path := "/apps/" + slug + "/volume"
+	if now {
+		path += "?now=true"
+	}
+	resp, err := c.do("DELETE", path, nil)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}

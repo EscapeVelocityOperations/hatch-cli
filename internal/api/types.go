@@ -86,3 +86,11 @@ type RedeemCreditResponse struct {
 	Type           string `json:"type"`
 	BoostExpiresAt string `json:"boost_expires_at"`
 }
+
+// Volume represents an app's persistent volume (h-gcf5h).
+type Volume struct {
+	SizeMB int    `json:"size_mb"`
+	UsedMB int    `json:"used_mb"`
+	Mount  string `json:"mount"`
+	Status string `json:"status"` // active | grace_deleting
+}

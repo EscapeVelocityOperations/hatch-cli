@@ -27,6 +27,7 @@ import (
 	mcpcmd "github.com/EscapeVelocityOperations/hatch-cli/cmd/mcp"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/open"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/restart"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/volume"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/config"
@@ -156,6 +157,7 @@ func init() {
 	rootCmd.AddCommand(open.NewCmd())
 	rootCmd.AddCommand(rediscmd.NewCmd())
 	rootCmd.AddCommand(restart.NewCmd())
+	rootCmd.AddCommand(volume.NewCmd())
 }
 
 // LastCommand returns the last executed command path.
