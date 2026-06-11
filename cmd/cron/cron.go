@@ -3,6 +3,10 @@
 package cron
 
 import (
+	"fmt"
+	"strings"
+	"time"
+
 	"github.com/spf13/cobra"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
@@ -26,27 +30,33 @@ type Deps struct {
 }
 
 // stubClient satisfies APIClient until the real client methods exist.
-// STUB(h-p7lvr): implemented in h-wb661 (impl-cli).
+// STUB(h-wb661): real api.Client cron methods are a follow-up wiring task
+// (red tests first) — until then the command group is not registered in the
+// root command, so this default is unreachable in production.
 type stubClient struct{}
 
 func (stubClient) CreateCron(slug, schedule, command string) (*api.CronJob, error) {
-	return nil, nil
+	return nil, fmt.Errorf("cron API client not wired yet")
 }
-func (stubClient) ListCrons(slug string) ([]api.CronJob, error)        { return nil, nil }
-func (stubClient) DeleteCron(slug, cronID string) error                { return nil }
+func (stubClient) ListCrons(slug string) ([]api.CronJob, error) {
+	return nil, fmt.Errorf("cron API client not wired yet")
+}
+func (stubClient) DeleteCron(slug, cronID string) error {
+	return fmt.Errorf("cron API client not wired yet")
+}
 func (stubClient) ListCronRuns(slug, cronID string) ([]api.CronRun, error) {
-	return nil, nil
+	return nil, fmt.Errorf("cron API client not wired yet")
 }
 func (stubClient) GetCronRunLogs(slug, cronID, runID string) (string, error) {
-	return "", nil
+	return "", fmt.Errorf("cron API client not wired yet")
 }
 
 func defaultDeps() *Deps {
 	return &Deps{
 		GetToken: auth.GetToken,
-		// STUB(h-p7lvr): real slug resolution (.hatch.toml / git remote) in h-wb661.
-		ResolveSlug: func() (string, error) { return "", nil },
-		// STUB(h-p7lvr): real api.Client wiring in h-wb661.
+		// STUB(h-wb661): real slug resolution (.hatch.toml / git remote) lands
+		// with the wiring follow-up.
+		ResolveSlug: func() (string, error) { return "", fmt.Errorf("no app detected") },
 		NewAPIClient: func(token string) APIClient { return stubClient{} },
 	}
 }
@@ -88,26 +98,153 @@ func NewCmd() *cobra.Command {
 	return cmd
 }
 
+// requireAuth returns the token or the canonical not-logged-in error.
+func requireAuth() (string, error) {
+	token, err := deps.GetToken()
+	if err != nil {
+		return "", fmt.Errorf("checking auth: %w", err)
+	}
+	if token == "" {
+		return "", fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
+	}
+	return token, nil
+}
+
 // runCronAdd handles `hatch cron add <schedule> -- <command>`.
-// STUB(h-p7lvr): implemented in h-wb661 (impl-cli).
 func runCronAdd(cmd *cobra.Command, args []string) error {
+	token, err := requireAuth()
+	if err != nil {
+		return err
+	}
+
+	// Exactly one arg (the schedule) before the mandatory `--`; everything
+	// after it is the user command, joined verbatim.
+	dash := cmd.ArgsLenAtDash()
+	if dash != 1 || len(args) < 2 {
+		return fmt.Errorf("usage: hatch cron add \"<schedule>\" -- <command>")
+	}
+	schedule := args[0]
+	command := strings.Join(args[1:], " ")
+
+	slug, err := deps.ResolveSlug()
+	if err != nil {
+		return err
+	}
+
+	job, err := deps.NewAPIClient(token).CreateCron(slug, schedule, command)
+	if err != nil {
+		return fmt.Errorf("creating cron: %w", err)
+	}
+	if job != nil {
+		fmt.Printf("Created cron %s on %s: %s → %s\n", job.ID, slug, job.Schedule, job.Command)
+	}
 	return nil
 }
 
 // runCronList handles `hatch cron list`.
-// STUB(h-p7lvr): implemented in h-wb661 (impl-cli).
 func runCronList(cmd *cobra.Command, args []string) error {
+	token, err := requireAuth()
+	if err != nil {
+		return err
+	}
+	slug, err := deps.ResolveSlug()
+	if err != nil {
+		return err
+	}
+
+	crons, err := deps.NewAPIClient(token).ListCrons(slug)
+	if err != nil {
+		return fmt.Errorf("listing crons: %w", err)
+	}
+	if len(crons) == 0 {
+		fmt.Printf("No cron jobs on %s.\n", slug)
+		return nil
+	}
+
+	fmt.Printf("%-10s  %-16s  %-30s  %-9s  %-22s  %-22s\n",
+		"ID", "SCHEDULE", "COMMAND", "STATE", "LAST RUN", "NEXT RUN")
+	for _, c := range crons {
+		state := "enabled"
+		if !c.Enabled {
+			state = "disabled"
+		}
+		lastRun := "-"
+		if c.LastRunStatus != "" {
+			lastRun = c.LastRunStatus
+			if c.LastRunAt != nil {
+				lastRun += " " + formatCronTime(*c.LastRunAt)
+			}
+		}
+		nextRun := "-"
+		if c.NextRunAt != nil {
+			nextRun = formatCronTime(*c.NextRunAt)
+		}
+		fmt.Printf("%-10s  %-16s  %-30s  %-9s  %-22s  %-22s\n",
+			c.ID, c.Schedule, c.Command, state, lastRun, nextRun)
+	}
 	return nil
 }
 
 // runCronRm handles `hatch cron rm <cron-id>`.
-// STUB(h-p7lvr): implemented in h-wb661 (impl-cli).
 func runCronRm(cmd *cobra.Command, args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: hatch cron rm <cron-id>")
+	}
+	token, err := requireAuth()
+	if err != nil {
+		return err
+	}
+	slug, err := deps.ResolveSlug()
+	if err != nil {
+		return err
+	}
+
+	if err := deps.NewAPIClient(token).DeleteCron(slug, args[0]); err != nil {
+		return fmt.Errorf("removing cron %s: %w", args[0], err)
+	}
+	fmt.Printf("Removed cron %s from %s.\n", args[0], slug)
 	return nil
 }
 
-// runCronLogs handles `hatch cron logs <cron-id> [--run <run-id>]`.
-// STUB(h-p7lvr): implemented in h-wb661 (impl-cli).
+// runCronLogs handles `hatch cron logs <cron-id> [--run <run-id>]`. Without
+// --run it shows the latest run, resolved client-side from the newest-first
+// runs listing.
 func runCronLogs(cmd *cobra.Command, args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: hatch cron logs <cron-id> [--run <run-id>]")
+	}
+	token, err := requireAuth()
+	if err != nil {
+		return err
+	}
+	slug, err := deps.ResolveSlug()
+	if err != nil {
+		return err
+	}
+	client := deps.NewAPIClient(token)
+	cronID := args[0]
+
+	runID := logsRunID
+	if runID == "" {
+		runs, err := client.ListCronRuns(slug, cronID)
+		if err != nil {
+			return fmt.Errorf("listing runs for cron %s: %w", cronID, err)
+		}
+		if len(runs) == 0 {
+			return fmt.Errorf("no runs yet for cron %s", cronID)
+		}
+		runID = runs[0].ID // newest first
+	}
+
+	logs, err := client.GetCronRunLogs(slug, cronID, runID)
+	if err != nil {
+		return fmt.Errorf("fetching logs for run %s: %w", runID, err)
+	}
+	fmt.Println(logs)
 	return nil
+}
+
+// formatCronTime renders run timestamps compactly in UTC.
+func formatCronTime(t time.Time) string {
+	return t.UTC().Format("2006-01-02 15:04 UTC")
 }
