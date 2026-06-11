@@ -26,6 +26,8 @@ type ArtifactDeployConfig struct {
 	Runtime      string
 	StartCommand string
 	AppSlug      string // Explicit slug (optional, reads .hatch.toml if empty)
+	PreviewRef   string // "pr-<n>" or "<n>": deploy to the parent's preview egg (h-qtie8)
+	JSONOutput   bool   // print a machine-readable JSON result instead of human output
 }
 
 // validRuntimes lists accepted runtime values.

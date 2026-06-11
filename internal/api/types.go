@@ -86,3 +86,14 @@ type RedeemCreditResponse struct {
 	Type           string `json:"type"`
 	BoostExpiresAt string `json:"boost_expires_at"`
 }
+
+// Preview is a PR preview environment of a parent app (h-qtie8).
+// Wire shape matches the API's preview responses.
+type Preview struct {
+	Slug      string    `json:"slug"`
+	PRNumber  int       `json:"pr_number"`
+	URL       string    `json:"url"`
+	Status    string    `json:"status"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Created   bool      `json:"created"`
+}

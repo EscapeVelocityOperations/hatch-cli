@@ -769,3 +769,22 @@ func (c *Client) RedeemBoostCredit(creditID, eggSlug string) (*RedeemCreditRespo
 	}
 	return &result, nil
 }
+
+// --- Previews (h-qtie8) — TDD-red stubs (h-6brzi): the impl step wires the
+// real POST/GET/DELETE /v1/apps/{slug}/previews calls. ---
+
+// CreatePreview creates or refreshes (update-in-place) the preview egg for
+// (parent app, PR number).
+func (c *Client) CreatePreview(parentSlug string, prNumber int) (*Preview, error) {
+	return nil, errors.New("not implemented")
+}
+
+// ListPreviews returns the parent app's active previews.
+func (c *Client) ListPreviews(parentSlug string) ([]Preview, error) {
+	return nil, errors.New("not implemented")
+}
+
+// DeletePreview tears down the preview for (parent app, PR number).
+func (c *Client) DeletePreview(parentSlug string, prNumber int) error {
+	return errors.New("not implemented")
+}

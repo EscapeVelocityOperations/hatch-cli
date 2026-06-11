@@ -14,6 +14,7 @@ import (
 // mockAPIClient implements the APIClient interface for testing.
 type mockAPIClient struct {
 	createAppFn      func(name string) (*api.App, error)
+	createPreviewFn  func(parentSlug string, prNumber int) (*api.Preview, error)
 	uploadArtifactFn func(slug string, artifact []byte, runtime, startCommand string) error
 }
 
