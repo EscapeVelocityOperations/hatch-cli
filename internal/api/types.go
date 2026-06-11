@@ -131,3 +131,14 @@ type CronRun struct {
 	StartedAt  time.Time `json:"started_at"`
 	FinishedAt time.Time `json:"finished_at"`
 }
+
+// Preview is a PR preview environment of a parent app (h-qtie8).
+// Wire shape matches the API's preview responses.
+type Preview struct {
+	Slug      string    `json:"slug"`
+	PRNumber  int       `json:"pr_number"`
+	URL       string    `json:"url"`
+	Status    string    `json:"status"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Created   bool      `json:"created"`
+}
