@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 )
 
 // watchInterval is the client-side re-poll cadence for `--watch`.
@@ -38,7 +41,16 @@ type Deps struct {
 var deps = defaultDeps()
 
 func defaultDeps() *Deps {
-	return &Deps{}
+	return &Deps{
+		GetToken: auth.GetToken,
+		GetMetrics: func(token, slug string) (AppMetrics, error) {
+			m, err := api.NewClient(token).GetMetrics(slug)
+			if err != nil {
+				return AppMetrics{}, err
+			}
+			return AppMetrics(m), nil
+		},
+	}
 }
 
 // NewCmd returns the `hatch stats` command.

@@ -29,6 +29,7 @@ import (
 	rediscmd "github.com/EscapeVelocityOperations/hatch-cli/cmd/redis"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/resources"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/restart"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/stats"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/config"
@@ -160,6 +161,7 @@ func init() {
 	rootCmd.AddCommand(rediscmd.NewCmd())
 	rootCmd.AddCommand(resources.NewCmd())
 	rootCmd.AddCommand(restart.NewCmd())
+	rootCmd.AddCommand(stats.NewCmd())
 }
 
 // LastCommand returns the last executed command path.
