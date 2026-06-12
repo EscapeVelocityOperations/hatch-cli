@@ -22,6 +22,19 @@ type AppResources struct {
 	CPUMHz   *int   `json:"cpu_mhz"`
 }
 
+// AppMetrics is the merged per-app metrics payload from
+// GET /v1/apps/{slug}/metrics (h-cqajs).
+type AppMetrics struct {
+	Status        string    `json:"status"`
+	UptimeSeconds int64     `json:"uptime_seconds"`
+	CPUPercent    float64   `json:"cpu_percent"`
+	MemoryMB      int       `json:"memory_mb"`
+	MemoryLimitMB int       `json:"memory_limit_mb"`
+	LastDeployAt  time.Time `json:"last_deploy_at"`
+	WakesToday    int       `json:"wakes_today"`
+	SampledAt     time.Time `json:"sampled_at"`
+}
+
 // Deployment represents a deployment record.
 type Deployment struct {
 	ID        string    `json:"id"`

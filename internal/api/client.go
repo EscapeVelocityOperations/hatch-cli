@@ -239,6 +239,25 @@ func (c *Client) SetResources(slug string, memoryMB, cpuMHz *int) (AppResources,
 	return res, nil
 }
 
+// GetMetrics fetches the merged per-app metrics payload (h-cqajs):
+// GET /v1/apps/{slug}/metrics.
+func (c *Client) GetMetrics(slug string) (AppMetrics, error) {
+	if err := validateSlug(slug); err != nil {
+		return AppMetrics{}, err
+	}
+	resp, err := c.do("GET", "/apps/"+slug+"/metrics", nil)
+	if err != nil {
+		return AppMetrics{}, err
+	}
+	defer resp.Body.Close()
+
+	var m AppMetrics
+	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+		return AppMetrics{}, fmt.Errorf("decoding response: %w", err)
+	}
+	return m, nil
+}
+
 // CreateApp creates a new app with the given name.
 // The server generates a unique slug (name + random suffix).
 func (c *Client) CreateApp(name string) (*App, error) {
