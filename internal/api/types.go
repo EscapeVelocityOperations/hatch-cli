@@ -14,6 +14,14 @@ type App struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
+// AppResources is the per-app resource override echoed by
+// PATCH /v1/apps/{slug}/resources (h-ek431). A nil field means "no override".
+type AppResources struct {
+	Slug     string `json:"slug"`
+	MemoryMB *int   `json:"memory_mb"`
+	CPUMHz   *int   `json:"cpu_mhz"`
+}
+
 // Deployment represents a deployment record.
 type Deployment struct {
 	ID        string    `json:"id"`
@@ -36,15 +44,15 @@ type LogEntry struct {
 
 // Addon represents a provisioned addon (database, storage, etc).
 type Addon struct {
-	Type              string `json:"type"`
-	Status            string `json:"status"`
-	URL               string `json:"url,omitempty"`
-	DatabaseURL       string `json:"database_url,omitempty"`
-	PostgresBytesUsed *int64 `json:"postgres_bytes_used,omitempty"`
-	PostgresRowsUsed  *int64 `json:"postgres_rows_used,omitempty"`
+	Type               string `json:"type"`
+	Status             string `json:"status"`
+	URL                string `json:"url,omitempty"`
+	DatabaseURL        string `json:"database_url,omitempty"`
+	PostgresBytesUsed  *int64 `json:"postgres_bytes_used,omitempty"`
+	PostgresRowsUsed   *int64 `json:"postgres_rows_used,omitempty"`
 	PostgresLimitBytes *int64 `json:"postgres_limit_bytes,omitempty"`
 	PostgresLimitRows  *int64 `json:"postgres_limit_rows,omitempty"`
-	WritesBlocked     *bool  `json:"postgres_writes_blocked,omitempty"`
+	WritesBlocked      *bool  `json:"postgres_writes_blocked,omitempty"`
 }
 
 // Domain represents a custom domain configuration.

@@ -15,18 +15,19 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/cron"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/db"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/deploy"
-	rediscmd "github.com/EscapeVelocityOperations/hatch-cli/cmd/redis"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/destroy"
-	"github.com/EscapeVelocityOperations/hatch-cli/cmd/initignore"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/domain"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/energy"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/env"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/initcmd"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/initignore"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/login"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/logout"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/logs"
 	mcpcmd "github.com/EscapeVelocityOperations/hatch-cli/cmd/mcp"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/open"
+	rediscmd "github.com/EscapeVelocityOperations/hatch-cli/cmd/redis"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/resources"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/restart"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
@@ -36,8 +37,8 @@ import (
 )
 
 var (
-	cfgFile  string
-	verbose  bool
+	cfgFile   string
+	verbose   bool
 	tokenFlag string
 
 	// Command tracking for telemetry
@@ -47,9 +48,9 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "hatch",
-	Short: "Hatch CLI - Developer tools for Hatch",
-	Long:  "Hatch is a command-line interface for deploying and managing eggs on the Hatch platform.",
+	Use:          "hatch",
+	Short:        "Hatch CLI - Developer tools for Hatch",
+	Long:         "Hatch is a command-line interface for deploying and managing eggs on the Hatch platform.",
 	SilenceUsage: true,
 }
 
@@ -157,6 +158,7 @@ func init() {
 	rootCmd.AddCommand(mcpcmd.NewCmd())
 	rootCmd.AddCommand(open.NewCmd())
 	rootCmd.AddCommand(rediscmd.NewCmd())
+	rootCmd.AddCommand(resources.NewCmd())
 	rootCmd.AddCommand(restart.NewCmd())
 }
 
