@@ -46,23 +46,7 @@ func showAccountEnergy(client *api.Client) error {
 		return fmt.Errorf("getting energy status: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "\n")
-	fmt.Fprintf(os.Stderr, "  Energy Status\n")
-	fmt.Fprintf(os.Stderr, "  ─────────────────────────────\n")
-	fmt.Fprintf(os.Stderr, "  Daily:   %d/%d min remaining\n", energy.DailyRemaining, energy.DailyLimit)
-	fmt.Fprintf(os.Stderr, "  Weekly:  %d/%d min remaining\n", energy.WeeklyRemaining, energy.WeeklyLimit)
-	fmt.Fprintf(os.Stderr, "  Resets:  %s\n", energy.ResetsAt)
-	fmt.Fprintf(os.Stderr, "\n")
-	fmt.Fprintf(os.Stderr, "  Eggs:    %d active, %d sleeping (limit: %d)\n",
-		energy.EggsActive, energy.EggsSleeping, energy.EggsLimit)
-
-	if len(energy.AlwaysOnEggs) > 0 {
-		fmt.Fprintf(os.Stderr, "  Always-on: %v\n", energy.AlwaysOnEggs)
-	}
-	if len(energy.BoostedEggs) > 0 {
-		fmt.Fprintf(os.Stderr, "  Boosted:   %v\n", energy.BoostedEggs)
-	}
-	fmt.Fprintf(os.Stderr, "\n")
+	writeAccountEnergy(os.Stderr, energy)
 	return nil
 }
 

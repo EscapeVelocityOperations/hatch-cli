@@ -671,9 +671,18 @@ type EnergyPackCheckoutResponse struct {
 
 // EnergyPackCheckout creates a Stripe checkout session for an energy pack
 // purchase (single v1 SKU: 1000 min / €3).
-// STUB(h-gbo48): implemented in h-sjoev (impl-cli)
 func (c *Client) EnergyPackCheckout() (*EnergyPackCheckoutResponse, error) {
-	return nil, nil
+	resp, err := c.do("POST", "/billing/energy-pack/checkout", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result EnergyPackCheckoutResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return &result, nil
 }
 
 // AppEnergy represents energy information for a specific app.

@@ -1,11 +1,13 @@
 package energy
 
-// STUB(h-gbo48) file: minimal seams for the energy-pack red suite (feature
-// h-vlmt8, spec h-avt0u). Implemented in h-sjoev (impl-cli). Zero logic by
-// design — the tests in energy_pack_test.go fail on assertions until impl.
+// Energy packs (feature h-vlmt8, spec h-avt0u): purchasable non-expiring
+// minutes. `hatch energy` shows the pack bucket; `hatch energy buy` opens a
+// Stripe checkout (mirrors cmd/boost's flow).
 
 import (
+	"fmt"
 	"io"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -32,16 +34,48 @@ func defaultDeps() *Deps {
 var deps = defaultDeps()
 
 // writeAccountEnergy renders the account energy summary — all four buckets
-// (daily, weekly, bonus where applicable, pack) — to w. showAccountEnergy
-// adopts this seam in impl so the rendering is testable.
-// STUB(h-gbo48): implemented in h-sjoev
+// (daily, weekly, bonus via the api response, pack) — to w.
+// showAccountEnergy renders through this seam.
 func writeAccountEnergy(w io.Writer, energy *api.EnergyStatus) {
+	fmt.Fprintf(w, "\n")
+	fmt.Fprintf(w, "  Energy Status\n")
+	fmt.Fprintf(w, "  ─────────────────────────────\n")
+	fmt.Fprintf(w, "  Daily:   %d/%d min remaining\n", energy.DailyRemaining, energy.DailyLimit)
+	fmt.Fprintf(w, "  Weekly:  %d/%d min remaining\n", energy.WeeklyRemaining, energy.WeeklyLimit)
+	fmt.Fprintf(w, "  Pack:    %d min (never expires)\n", energy.PackRemaining)
+	fmt.Fprintf(w, "  Resets:  %s\n", energy.ResetsAt)
+	fmt.Fprintf(w, "\n")
+	fmt.Fprintf(w, "  Eggs:    %d active, %d sleeping (limit: %d)\n",
+		energy.EggsActive, energy.EggsSleeping, energy.EggsLimit)
+
+	if len(energy.AlwaysOnEggs) > 0 {
+		fmt.Fprintf(w, "  Always-on: %v\n", energy.AlwaysOnEggs)
+	}
+	if len(energy.BoostedEggs) > 0 {
+		fmt.Fprintf(w, "  Boosted:   %v\n", energy.BoostedEggs)
+	}
+	fmt.Fprintf(w, "\n")
 }
 
 // runBuy executes `hatch energy buy`: creates a pack checkout session and
 // prints the URL (mirrors cmd/boost's flow).
-// STUB(h-gbo48): implemented in h-sjoev
 func runBuy(cmd *cobra.Command, args []string) error {
+	token, err := deps.GetToken()
+	if err != nil {
+		return fmt.Errorf("not logged in: %w (run 'hatch login' first)", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "  Creating energy pack checkout...\n")
+
+	result, err := deps.CreatePackCheckout(token)
+	if err != nil {
+		return fmt.Errorf("creating energy pack checkout: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "  Energy pack: %d min for €%s — minutes never expire.\n", result.Minutes, result.AmountEur)
+	fmt.Fprintf(os.Stderr, "  Complete payment in your browser:\n")
+	fmt.Fprintf(os.Stderr, "  %s\n\n", result.CheckoutURL)
+	fmt.Fprintf(os.Stderr, "  Minutes are credited as soon as payment confirms.\n")
 	return nil
 }
 
