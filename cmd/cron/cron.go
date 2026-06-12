@@ -11,6 +11,7 @@ import (
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/resolve"
 )
 
 // APIClient is the interface for the cron endpoints of the Hatch API.
@@ -29,36 +30,22 @@ type Deps struct {
 	NewAPIClient func(token string) APIClient
 }
 
-// stubClient satisfies APIClient until the real client methods exist.
-// STUB(h-wb661): real api.Client cron methods are a follow-up wiring task
-// (red tests first) — until then the command group is not registered in the
-// root command, so this default is unreachable in production.
-type stubClient struct{}
-
-func (stubClient) CreateCron(slug, schedule, command string) (*api.CronJob, error) {
-	return nil, fmt.Errorf("cron API client not wired yet")
-}
-func (stubClient) ListCrons(slug string) ([]api.CronJob, error) {
-	return nil, fmt.Errorf("cron API client not wired yet")
-}
-func (stubClient) DeleteCron(slug, cronID string) error {
-	return fmt.Errorf("cron API client not wired yet")
-}
-func (stubClient) ListCronRuns(slug, cronID string) ([]api.CronRun, error) {
-	return nil, fmt.Errorf("cron API client not wired yet")
-}
-func (stubClient) GetCronRunLogs(slug, cronID, runID string) (string, error) {
-	return "", fmt.Errorf("cron API client not wired yet")
-}
-
 func defaultDeps() *Deps {
 	return &Deps{
-		GetToken: auth.GetToken,
-		// STUB(h-wb661): real slug resolution (.hatch.toml / git remote) lands
-		// with the wiring follow-up.
-		ResolveSlug: func() (string, error) { return "", fmt.Errorf("no app detected") },
-		NewAPIClient: func(token string) APIClient { return stubClient{} },
+		GetToken:     auth.GetToken,
+		ResolveSlug:  resolveSlug,
+		NewAPIClient: func(token string) APIClient { return api.NewClient(token) },
 	}
+}
+
+// resolveSlug detects the target egg from .hatch.toml in the working directory
+// (h-t3ju6: replaces the h-wb661 stub). Cron has no --app flag, so the app is
+// taken from the directory the user runs in, like `hatch destroy`/`hatch redis`.
+func resolveSlug() (string, error) {
+	if slug := resolve.SlugFromToml(); slug != "" {
+		return slug, nil
+	}
+	return "", fmt.Errorf("no egg detected. Run 'hatch cron' from an app directory with a .hatch.toml")
 }
 
 var deps = defaultDeps()
