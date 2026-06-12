@@ -86,3 +86,27 @@ type RedeemCreditResponse struct {
 	Type           string `json:"type"`
 	BoostExpiresAt string `json:"boost_expires_at"`
 }
+
+// CronJob represents a scheduled command on an app. The list endpoint
+// enriches each cron with its last run and the computed next run.
+// STUB(h-p7lvr): implemented in h-wb661 (impl-cli).
+type CronJob struct {
+	ID            string     `json:"id"`
+	Schedule      string     `json:"schedule"`
+	Command       string     `json:"command"`
+	Enabled       bool       `json:"enabled"`
+	CreatedAt     time.Time  `json:"created_at"`
+	LastRunStatus string     `json:"last_run_status,omitempty"`
+	LastRunAt     *time.Time `json:"last_run_at,omitempty"`
+	NextRunAt     *time.Time `json:"next_run_at,omitempty"`
+}
+
+// CronRun represents one execution of a cron job.
+// STUB(h-p7lvr): implemented in h-wb661 (impl-cli).
+type CronRun struct {
+	ID         string    `json:"id"`
+	Status     string    `json:"status"` // running|success|failed|skipped_depleted
+	ExitCode   int       `json:"exit_code"`
+	StartedAt  time.Time `json:"started_at"`
+	FinishedAt time.Time `json:"finished_at"`
+}

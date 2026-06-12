@@ -534,6 +534,28 @@ func (c *Client) GetLogs(slug string, tail int, logType string) ([]string, error
 	return result.Lines, nil
 }
 
+// GetCronRunLogs fetches one cron run's logs as plain text (AC #1
+// 'hatch cron logs'). The API proxies them from the control plane's view of the
+// run's Nomad allocation.
+func (c *Client) GetCronRunLogs(slug, cronID, runID string) (string, error) {
+	if err := validateSlug(slug); err != nil {
+		return "", err
+	}
+	path := fmt.Sprintf("/apps/%s/crons/%s/runs/%s/logs",
+		slug, url.PathEscape(cronID), url.PathEscape(runID))
+	resp, err := c.do("GET", path, nil)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading run logs: %w", err)
+	}
+	return string(data), nil
+}
+
 // UploadArtifact uploads a pre-built tar.gz artifact for deployment.
 func (c *Client) UploadArtifact(slug string, artifact io.Reader, runtime, startCommand string) error {
 	if err := validateSlug(slug); err != nil {

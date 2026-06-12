@@ -53,6 +53,39 @@ func TestUploadArtifact_UsesExtendedTimeout(t *testing.T) {
 	}
 }
 
+// G-006 (h-ya0fo, review h-l9gzs MEDIUM, AC #1 'hatch cron logs'): the client
+// fetches a run's logs as plain text from the API's run-logs endpoint. This is
+// the CLI half of the end-to-end logs path (the cmd layer renders what this
+// returns).
+func TestGetCronRunLogs(t *testing.T) {
+	var gotPath, gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("run log line 1\nrun log line 2\n"))
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+
+	logs, err := c.GetCronRunLogs("demo-app", "c1", "run-2")
+	if err != nil {
+		t.Fatalf("GetCronRunLogs: %v", err)
+	}
+	if gotPath != "/v1/apps/demo-app/crons/c1/runs/run-2/logs" {
+		t.Errorf("GET path = %q, want /v1/apps/demo-app/crons/c1/runs/run-2/logs", gotPath)
+	}
+	if gotAuth != "Bearer tok123" {
+		t.Errorf("Authorization = %q, want Bearer tok123", gotAuth)
+	}
+	if logs != "run log line 1\nrun log line 2\n" {
+		t.Errorf("logs = %q, want the two log lines", logs)
+	}
+}
+
 func TestUploadArtifact_TimeoutErrorMessage(t *testing.T) {
 	c := NewClient("tok123")
 	c.httpClient.Transport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
