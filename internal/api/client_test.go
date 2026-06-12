@@ -470,3 +470,138 @@ func TestCreateApp(t *testing.T) {
 		t.Fatalf("expected name 'myapp', got %q", result.Name)
 	}
 }
+
+// h-t3ju6 GAP-2: the real *Client cron methods (the cmd/cron APIClient
+// interface) issue the HTTP calls the control plane already serves
+// (POST/GET/DELETE /apps/{slug}/crons + runs). Until these exist the cron
+// command is wired to a stub that returns "cron API client not wired yet".
+
+func TestCreateCron(t *testing.T) {
+	var gotMethod, gotPath, gotAuth string
+	var body createCronBody
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath, gotAuth = r.Method, r.URL.Path, r.Header.Get("Authorization")
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(CronJob{ID: "cron-1", Schedule: body.Schedule, Command: body.Command, Enabled: true})
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+
+	job, err := c.CreateCron("demo-app", "*/5 * * * *", "echo hi")
+	if err != nil {
+		t.Fatalf("CreateCron: %v", err)
+	}
+	if gotMethod != "POST" {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/v1/apps/demo-app/crons" {
+		t.Errorf("path = %q, want /v1/apps/demo-app/crons", gotPath)
+	}
+	if gotAuth != "Bearer tok123" {
+		t.Errorf("auth = %q, want Bearer tok123", gotAuth)
+	}
+	if body.Schedule != "*/5 * * * *" || body.Command != "echo hi" {
+		t.Errorf("body = %+v, want schedule=*/5 * * * * command=echo hi", body)
+	}
+	if job == nil || job.ID != "cron-1" || job.Schedule != "*/5 * * * *" || job.Command != "echo hi" {
+		t.Errorf("returned job = %+v, want id=cron-1 schedule/command echoed", job)
+	}
+}
+
+// createCronBody mirrors the POST /apps/{slug}/crons request the API expects,
+// so the test can assert the client sends schedule+command.
+type createCronBody struct {
+	Schedule string `json:"schedule"`
+	Command  string `json:"command"`
+}
+
+func TestListCrons(t *testing.T) {
+	var gotMethod, gotPath string
+	lastRun := time.Date(2026, 6, 10, 3, 0, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		json.NewEncoder(w).Encode([]CronJob{
+			{ID: "cron-1", Schedule: "*/5 * * * *", Command: "echo hi", Enabled: true, LastRunStatus: "success", LastRunAt: &lastRun},
+			{ID: "cron-2", Schedule: "0 4 * * *", Command: "npm run cleanup", Enabled: false},
+		})
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+
+	crons, err := c.ListCrons("demo-app")
+	if err != nil {
+		t.Fatalf("ListCrons: %v", err)
+	}
+	if gotMethod != "GET" {
+		t.Errorf("method = %q, want GET", gotMethod)
+	}
+	if gotPath != "/v1/apps/demo-app/crons" {
+		t.Errorf("path = %q, want /v1/apps/demo-app/crons", gotPath)
+	}
+	if len(crons) != 2 {
+		t.Fatalf("got %d crons, want 2", len(crons))
+	}
+	if crons[0].ID != "cron-1" || crons[0].LastRunStatus != "success" {
+		t.Errorf("cron[0] = %+v, want id=cron-1 last_run_status=success", crons[0])
+	}
+	if crons[1].Enabled {
+		t.Errorf("cron[1].Enabled = true, want false")
+	}
+}
+
+func TestDeleteCron(t *testing.T) {
+	var gotMethod, gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+
+	if err := c.DeleteCron("demo-app", "cron-1"); err != nil {
+		t.Fatalf("DeleteCron: %v", err)
+	}
+	if gotMethod != "DELETE" {
+		t.Errorf("method = %q, want DELETE", gotMethod)
+	}
+	if gotPath != "/v1/apps/demo-app/crons/cron-1" {
+		t.Errorf("path = %q, want /v1/apps/demo-app/crons/cron-1", gotPath)
+	}
+}
+
+func TestListCronRuns(t *testing.T) {
+	var gotMethod, gotPath string
+	started := time.Date(2026, 6, 11, 12, 0, 0, 0, time.UTC)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		json.NewEncoder(w).Encode([]CronRun{
+			{ID: "run-2", Status: "success", StartedAt: started},
+			{ID: "run-1", Status: "failed", StartedAt: started.Add(-time.Hour)},
+		})
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+
+	runs, err := c.ListCronRuns("demo-app", "cron-1")
+	if err != nil {
+		t.Fatalf("ListCronRuns: %v", err)
+	}
+	if gotMethod != "GET" {
+		t.Errorf("method = %q, want GET", gotMethod)
+	}
+	if gotPath != "/v1/apps/demo-app/crons/cron-1/runs" {
+		t.Errorf("path = %q, want /v1/apps/demo-app/crons/cron-1/runs", gotPath)
+	}
+	if len(runs) != 2 || runs[0].ID != "run-2" {
+		t.Fatalf("runs = %+v, want 2 with run-2 first", runs)
+	}
+}

@@ -534,6 +534,84 @@ func (c *Client) GetLogs(slug string, tail int, logType string) ([]string, error
 	return result.Lines, nil
 }
 
+// CreateCron schedules a command on an app (POST /apps/{slug}/crons). The
+// control plane validates the 5-field schedule and registers a Nomad
+// batch+Periodic job; the created cron is returned.
+func (c *Client) CreateCron(slug, schedule, command string) (*CronJob, error) {
+	if err := validateSlug(slug); err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(struct {
+		Schedule string `json:"schedule"`
+		Command  string `json:"command"`
+	}{Schedule: schedule, Command: command})
+	if err != nil {
+		return nil, fmt.Errorf("marshaling request: %w", err)
+	}
+	resp, err := c.do("POST", "/apps/"+slug+"/crons", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var job CronJob
+	if err := json.NewDecoder(resp.Body).Decode(&job); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return &job, nil
+}
+
+// ListCrons returns the app's cron jobs (GET /apps/{slug}/crons), each
+// enriched by the API with its last run and computed next run.
+func (c *Client) ListCrons(slug string) ([]CronJob, error) {
+	if err := validateSlug(slug); err != nil {
+		return nil, err
+	}
+	resp, err := c.do("GET", "/apps/"+slug+"/crons", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var crons []CronJob
+	if err := json.NewDecoder(resp.Body).Decode(&crons); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return crons, nil
+}
+
+// DeleteCron removes a cron job from an app (DELETE /apps/{slug}/crons/{id}).
+func (c *Client) DeleteCron(slug, cronID string) error {
+	if err := validateSlug(slug); err != nil {
+		return err
+	}
+	resp, err := c.do("DELETE", "/apps/"+slug+"/crons/"+url.PathEscape(cronID), nil)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+// ListCronRuns returns a cron job's run history, newest first
+// (GET /apps/{slug}/crons/{id}/runs).
+func (c *Client) ListCronRuns(slug, cronID string) ([]CronRun, error) {
+	if err := validateSlug(slug); err != nil {
+		return nil, err
+	}
+	resp, err := c.do("GET", "/apps/"+slug+"/crons/"+url.PathEscape(cronID)+"/runs", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var runs []CronRun
+	if err := json.NewDecoder(resp.Body).Decode(&runs); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return runs, nil
+}
+
 // GetCronRunLogs fetches one cron run's logs as plain text (AC #1
 // 'hatch cron logs'). The API proxies them from the control plane's view of the
 // run's Nomad allocation.
