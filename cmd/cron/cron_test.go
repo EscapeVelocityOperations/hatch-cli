@@ -148,6 +148,56 @@ func TestCronAdd(t *testing.T) {
 		}
 	})
 
+	// G-004 (h-ya0fo, review h-l9gzs MEDIUM): a command argument that contains
+	// spaces (or shell metacharacters) must keep its boundary. Joining argv with
+	// a bare space collapses `sh -c 'echo a b'` into `sh -c echo a b`, which the
+	// server then runs as `/bin/sh -c "sh -c echo a b"` — the inner command loses
+	// its argument. Each argv element is shell-quoted so the stored command
+	// round-trips through `/bin/sh -c`.
+	t.Run("preserves quoted argument boundaries", func(t *testing.T) {
+		var gotCommand string
+		mock := &mockAPIClient{
+			createCronFn: func(slug, schedule, command string) (*api.CronJob, error) {
+				gotCommand = command
+				return &api.CronJob{ID: "cron-3", Schedule: schedule, Command: command, Enabled: true}, nil
+			},
+		}
+		defer setTestDeps(mock)()
+
+		captureOutput(func() {
+			if err := execCron("add", "*/5 * * * *", "--", "sh", "-c", "echo a b"); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+
+		want := "sh -c 'echo a b'"
+		if gotCommand != want {
+			t.Errorf("CreateCron command = %q, want %q", gotCommand, want)
+		}
+	})
+
+	t.Run("quotes shell metacharacters", func(t *testing.T) {
+		var gotCommand string
+		mock := &mockAPIClient{
+			createCronFn: func(slug, schedule, command string) (*api.CronJob, error) {
+				gotCommand = command
+				return &api.CronJob{ID: "cron-4", Schedule: schedule, Command: command, Enabled: true}, nil
+			},
+		}
+		defer setTestDeps(mock)()
+
+		captureOutput(func() {
+			if err := execCron("add", "0 3 * * *", "--", "sh", "-c", "rm -rf tmp; echo done"); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+
+		want := "sh -c 'rm -rf tmp; echo done'"
+		if gotCommand != want {
+			t.Errorf("CreateCron command = %q, want %q", gotCommand, want)
+		}
+	})
+
 	t.Run("missing -- is a usage error", func(t *testing.T) {
 		createCalled := false
 		mock := &mockAPIClient{

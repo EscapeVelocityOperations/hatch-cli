@@ -124,7 +124,7 @@ func runCronAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("usage: hatch cron add \"<schedule>\" -- <command>")
 	}
 	schedule := args[0]
-	command := strings.Join(args[1:], " ")
+	command := joinCommand(args[1:])
 
 	slug, err := deps.ResolveSlug()
 	if err != nil {
@@ -247,4 +247,42 @@ func runCronLogs(cmd *cobra.Command, args []string) error {
 // formatCronTime renders run timestamps compactly in UTC.
 func formatCronTime(t time.Time) string {
 	return t.UTC().Format("2006-01-02 15:04 UTC")
+}
+
+// shellSafe reports whether s can appear unquoted in a /bin/sh command: it
+// holds only characters with no shell significance, so quoting would add noise.
+func shellSafe(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case strings.ContainsRune("-_./:=@%+,", r):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// shellQuote renders one argument so /bin/sh parses it back as the exact same
+// string. Safe arguments pass through; anything else is single-quoted, with
+// embedded single quotes escaped as '\''.
+func shellQuote(s string) string {
+	if shellSafe(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// joinCommand reassembles the post-`--` argv into one command string that
+// round-trips through `/bin/sh -c`, preserving each argument's boundary
+// (spaces, metacharacters) instead of collapsing them with a bare space.
+func joinCommand(args []string) string {
+	quoted := make([]string, len(args))
+	for i, a := range args {
+		quoted[i] = shellQuote(a)
+	}
+	return strings.Join(quoted, " ")
 }
