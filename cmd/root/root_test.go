@@ -159,6 +159,22 @@ func TestPersistentPreRun_ConfigLoadErrorDoesNotBlock(t *testing.T) {
 	}
 }
 
+// TestCronCommandRegistered proves `cron` is wired into the root command
+// (h-t3ju6 GAP-1). Without the registration, `hatch cron ...` fails with
+// cobra's "unknown command" and the smoke (h-i79sn) cannot pass.
+func TestCronCommandRegistered(t *testing.T) {
+	var found bool
+	for _, c := range rootCmd.Commands() {
+		if c.Name() == "cron" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("cron command is not registered on root; 'hatch cron ...' would be 'unknown command'")
+	}
+}
+
 func TestRootCmdStructure(t *testing.T) {
 	// Test that rootCmd has expected properties
 	if rootCmd.Use != "hatch" {
