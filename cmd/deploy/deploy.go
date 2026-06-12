@@ -180,6 +180,8 @@ Examples:
 	cmd.Flags().StringVar(&deployTarget, "deploy-target", "", "path to the build output directory (required)")
 	cmd.Flags().StringVar(&runtime, "runtime", "", "base container image: node, python, go, or static (required)")
 	cmd.Flags().StringVar(&startCommand, "start-command", "", "command to start the app (required for non-static runtimes)")
+	cmd.Flags().StringVar(&previewRef, "preview", "", "deploy a PR preview of the parent egg: pr-<n> or <n> (h-qtie8)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "print a machine-readable JSON result (for CI/GitHub Actions)")
 	return cmd
 }
 

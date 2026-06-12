@@ -915,21 +915,55 @@ func (c *Client) RedeemBoostCredit(creditID, eggSlug string) (*RedeemCreditRespo
 	return &result, nil
 }
 
-// --- Previews (h-qtie8) — TDD-red stubs (h-6brzi): the impl step wires the
-// real POST/GET/DELETE /v1/apps/{slug}/previews calls. ---
+// --- Previews (h-qtie8) ---
 
 // CreatePreview creates or refreshes (update-in-place) the preview egg for
 // (parent app, PR number).
 func (c *Client) CreatePreview(parentSlug string, prNumber int) (*Preview, error) {
-	return nil, errors.New("not implemented")
+	if err := validateSlug(parentSlug); err != nil {
+		return nil, err
+	}
+	body := fmt.Sprintf(`{"pr_number":%d}`, prNumber)
+	resp, err := c.do("POST", "/apps/"+parentSlug+"/previews", strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var preview Preview
+	if err := json.NewDecoder(resp.Body).Decode(&preview); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return &preview, nil
 }
 
 // ListPreviews returns the parent app's active previews.
 func (c *Client) ListPreviews(parentSlug string) ([]Preview, error) {
-	return nil, errors.New("not implemented")
+	if err := validateSlug(parentSlug); err != nil {
+		return nil, err
+	}
+	resp, err := c.do("GET", "/apps/"+parentSlug+"/previews", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var previews []Preview
+	if err := json.NewDecoder(resp.Body).Decode(&previews); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return previews, nil
 }
 
 // DeletePreview tears down the preview for (parent app, PR number).
 func (c *Client) DeletePreview(parentSlug string, prNumber int) error {
-	return errors.New("not implemented")
+	if err := validateSlug(parentSlug); err != nil {
+		return err
+	}
+	resp, err := c.do("DELETE", fmt.Sprintf("/apps/%s/previews/%d", parentSlug, prNumber), nil)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
 }
