@@ -213,6 +213,32 @@ func (c *Client) GetApp(slug string) (*App, error) {
 	return &app, nil
 }
 
+// SetResources overrides an app's CPU/memory (h-ek431):
+// PATCH /v1/apps/{slug}/resources. A nil field clears that override.
+func (c *Client) SetResources(slug string, memoryMB, cpuMHz *int) (AppResources, error) {
+	if err := validateSlug(slug); err != nil {
+		return AppResources{}, err
+	}
+	body, err := json.Marshal(struct {
+		MemoryMB *int `json:"memory_mb"`
+		CPUMHz   *int `json:"cpu_mhz"`
+	}{MemoryMB: memoryMB, CPUMHz: cpuMHz})
+	if err != nil {
+		return AppResources{}, fmt.Errorf("encoding request: %w", err)
+	}
+	resp, err := c.do("PATCH", "/apps/"+slug+"/resources", bytes.NewReader(body))
+	if err != nil {
+		return AppResources{}, err
+	}
+	defer resp.Body.Close()
+
+	var res AppResources
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return AppResources{}, fmt.Errorf("decoding response: %w", err)
+	}
+	return res, nil
+}
+
 // CreateApp creates a new app with the given name.
 // The server generates a unique slug (name + random suffix).
 func (c *Client) CreateApp(name string) (*App, error) {
