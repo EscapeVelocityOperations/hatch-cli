@@ -175,6 +175,19 @@ func TestCronCommandRegistered(t *testing.T) {
 	}
 }
 
+func TestPacksCommandRegistered(t *testing.T) {
+	var found bool
+	for _, c := range rootCmd.Commands() {
+		if c.Name() == "packs" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("packs command is not registered on root; 'hatch packs ...' would be 'unknown command'")
+	}
+}
+
 func TestRootCmdStructure(t *testing.T) {
 	// Test that rootCmd has expected properties
 	if rootCmd.Use != "hatch" {
