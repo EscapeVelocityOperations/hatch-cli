@@ -8,10 +8,14 @@ package stats
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/spf13/cobra"
 )
+
+// watchInterval is the client-side re-poll cadence for `--watch`.
+const watchInterval = 5 * time.Second
 
 // AppMetrics mirrors the API's merged metrics payload (v1 fields).
 type AppMetrics struct {
@@ -54,5 +58,48 @@ func NewCmd() *cobra.Command {
 }
 
 func runStats(slug string, watch bool) error {
-	return errors.New("not implemented") // TODO(impl-cli)
+	token, err := deps.GetToken()
+	if err != nil || token == "" {
+		return errors.New("not logged in — run `hatch login` first")
+	}
+
+	render := func() error {
+		m, err := deps.GetMetrics(token, slug)
+		if err != nil {
+			return err
+		}
+		printMetricsTable(slug, m)
+		return nil
+	}
+
+	if !watch {
+		return render()
+	}
+	for {
+		if err := render(); err != nil {
+			return err
+		}
+		time.Sleep(watchInterval)
+	}
+}
+
+// printMetricsTable renders the one-shot per-app metrics table to stdout.
+func printMetricsTable(slug string, m AppMetrics) {
+	uptime := time.Duration(m.UptimeSeconds) * time.Second
+	fmt.Printf("App: %s\n", slug)
+	fmt.Printf("  Status        %s\n", m.Status)
+	fmt.Printf("  CPU           %.1f%%\n", m.CPUPercent)
+	fmt.Printf("  Memory        %d MB / %d MB\n", m.MemoryMB, m.MemoryLimitMB)
+	fmt.Printf("  Uptime        %s\n", uptime)
+	fmt.Printf("  Wakes today   %d\n", m.WakesToday)
+	fmt.Printf("  Last deploy   %s\n", formatTime(m.LastDeployAt))
+	fmt.Printf("  Sampled       %s\n", formatTime(m.SampledAt))
+}
+
+// formatTime renders a timestamp for the table, or "—" when unset.
+func formatTime(t time.Time) string {
+	if t.IsZero() {
+		return "—"
+	}
+	return t.UTC().Format("2006-01-02 15:04:05 MST")
 }
