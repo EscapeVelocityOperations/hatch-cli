@@ -62,6 +62,7 @@ func readHatchConfig(dir string) (*HatchConfig, error) {
 // APIClient is the interface for the Hatch API.
 type APIClient interface {
 	CreateApp(name string) (*api.App, error)
+	CreatePreview(parentSlug string, prNumber int) (*api.Preview, error)
 	UploadArtifact(slug string, artifact []byte, runtime, startCommand string) error
 }
 
@@ -80,6 +81,10 @@ type realAPIClient struct {
 
 func (r *realAPIClient) CreateApp(name string) (*api.App, error) {
 	return r.client.CreateApp(name)
+}
+
+func (r *realAPIClient) CreatePreview(parentSlug string, prNumber int) (*api.Preview, error) {
+	return r.client.CreatePreview(parentSlug, prNumber)
 }
 
 func (r *realAPIClient) UploadArtifact(slug string, artifact []byte, runtime, startCommand string) error {
@@ -114,6 +119,8 @@ var (
 	deployTarget string
 	runtime      string
 	startCommand string
+	previewRef   string // --preview pr-<n> | <n> (h-qtie8)
+	jsonOut      bool   // --json machine-readable result
 )
 
 func NewCmd() *cobra.Command {
@@ -173,6 +180,8 @@ Examples:
 	cmd.Flags().StringVar(&deployTarget, "deploy-target", "", "path to the build output directory (required)")
 	cmd.Flags().StringVar(&runtime, "runtime", "", "base container image: node, python, go, or static (required)")
 	cmd.Flags().StringVar(&startCommand, "start-command", "", "command to start the app (required for non-static runtimes)")
+	cmd.Flags().StringVar(&previewRef, "preview", "", "deploy a PR preview of the parent egg: pr-<n> or <n> (h-qtie8)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "print a machine-readable JSON result (for CI/GitHub Actions)")
 	return cmd
 }
 
@@ -201,6 +210,8 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		DeployTarget: deployTarget,
 		Runtime:      runtime,
 		StartCommand: startCommand,
+		PreviewRef:   previewRef,
+		JSONOutput:   jsonOut,
 	})
 }
 

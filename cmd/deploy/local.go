@@ -4,10 +4,12 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
@@ -26,6 +28,8 @@ type ArtifactDeployConfig struct {
 	Runtime      string
 	StartCommand string
 	AppSlug      string // Explicit slug (optional, reads .hatch.toml if empty)
+	PreviewRef   string // "pr-<n>" or "<n>": deploy to the parent's preview egg (h-qtie8)
+	JSONOutput   bool   // print a machine-readable JSON result instead of human output
 }
 
 // validRuntimes lists accepted runtime values.
@@ -92,6 +96,15 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 		return err
 	}
 
+	// Validate the preview ref before any artifact or API work.
+	previewPR := 0
+	if cfg.PreviewRef != "" {
+		previewPR, err = parsePreviewRef(cfg.PreviewRef)
+		if err != nil {
+			return err
+		}
+	}
+
 	// Create tar.gz from directory
 	ui.Info("Creating artifact from " + cfg.DeployTarget)
 	artifact, excluded, err := createTarGz(cfg.DeployTarget)
@@ -103,8 +116,15 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 	}
 	ui.Info(fmt.Sprintf("Artifact size: %.2f MB", float64(len(artifact))/1024/1024))
 
-	// Resolve app
 	client := deps.NewAPIClient(cfg.Token)
+
+	// Preview deploy (h-qtie8): resolve the PARENT egg, create/refresh the
+	// preview for the PR, and upload the artifact to the PREVIEW slug.
+	if previewPR > 0 {
+		return runPreviewDeploy(client, cfg, artifact, previewPR)
+	}
+
+	// Resolve app
 	slug, name, err := resolveApp(client, cfg.AppSlug, cfg.AppName, ".")
 	if err != nil {
 		return err
@@ -135,6 +155,63 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 		configureDomain(realClient, slug, cfg.Domain)
 	}
 
+	return nil
+}
+
+// parsePreviewRef parses a --preview ref: "pr-<n>" or a bare "<n>", n > 0.
+func parsePreviewRef(ref string) (int, error) {
+	n, err := strconv.Atoi(strings.TrimPrefix(ref, "pr-"))
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("invalid preview ref %q: want pr-<number> or <number> (positive PR number)", ref)
+	}
+	return n, nil
+}
+
+// runPreviewDeploy creates/refreshes the preview egg for (parent, PR) and
+// uploads the artifact to the preview slug. The parent comes from
+// --app/.hatch.toml — a preview never creates its parent.
+func runPreviewDeploy(client APIClient, cfg ArtifactDeployConfig, artifact []byte, pr int) error {
+	parentSlug := cfg.AppSlug
+	if parentSlug == "" {
+		hatchConfig, err := readHatchConfig(".")
+		if err != nil {
+			return fmt.Errorf("reading .hatch.toml: %w", err)
+		}
+		if hatchConfig == nil {
+			return fmt.Errorf("preview deploys need a parent egg: run from a directory with .hatch.toml or pass --app")
+		}
+		parentSlug = hatchConfig.Slug
+	}
+
+	ui.Info(fmt.Sprintf("Creating preview for %s PR #%d", parentSlug, pr))
+	preview, err := client.CreatePreview(parentSlug, pr)
+	if err != nil {
+		return fmt.Errorf("creating preview: %w", err)
+	}
+
+	sp := ui.NewSpinner("Uploading artifact to preview...")
+	sp.Start()
+	err = client.UploadArtifact(preview.Slug, artifact, cfg.Runtime, cfg.StartCommand)
+	sp.Stop()
+	if err != nil {
+		return fmt.Errorf("uploading artifact: %w", err)
+	}
+
+	if cfg.JSONOutput {
+		out, err := json.Marshal(map[string]any{
+			"slug":      preview.Slug,
+			"url":       preview.URL,
+			"pr_number": preview.PRNumber,
+		})
+		if err != nil {
+			return fmt.Errorf("encoding json result: %w", err)
+		}
+		fmt.Println(string(out))
+		return nil
+	}
+
+	ui.Success("Preview deployed!")
+	ui.Info(fmt.Sprintf("Preview URL: %s", preview.URL))
 	return nil
 }
 

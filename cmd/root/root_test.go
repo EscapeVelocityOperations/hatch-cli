@@ -207,6 +207,17 @@ func TestRootCmdStructure(t *testing.T) {
 	}
 }
 
+// The preview command group (hatch preview list|rm, h-qtie8) must be
+// registered on the root command.
+func TestPreviewCommandRegistered(t *testing.T) {
+	for _, c := range rootCmd.Commands() {
+		if c.Name() == "preview" {
+			return
+		}
+	}
+	t.Fatal("preview command not registered on root")
+}
+
 // captureExec executes the root command with given args and returns output
 func captureExec(args []string) (string, error) {
 	// Create a test command with isolated state
