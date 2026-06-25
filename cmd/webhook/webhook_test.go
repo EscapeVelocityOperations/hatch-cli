@@ -7,7 +7,22 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 )
+
+// TestCLIWebhook_MarksActive (h-4knyl rework): the API has no disabled state, so
+// every webhook it returns must map to Active=true — otherwise `hatch webhook
+// list` renders live webhooks as "disabled".
+func TestCLIWebhook_MarksActive(t *testing.T) {
+	w := cliWebhook(api.Webhook{ID: "wh_1", URL: "https://x.test", Events: []string{"deploy"}})
+	if !w.Active {
+		t.Error(`api webhooks must map to Active=true — else "hatch webhook list" shows live webhooks as "disabled" (h-4knyl)`)
+	}
+	if w.ID != "wh_1" || w.URL != "https://x.test" || len(w.Events) != 1 {
+		t.Errorf("mapping wrong: %+v", w)
+	}
+}
 
 // mockAPIClient implements APIClient (cmd/deploy fake-API pattern).
 type mockAPIClient struct {
@@ -182,5 +197,17 @@ func TestWebhookTest_TriggersPing(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(out), "ping") {
 		t.Errorf("test output must mention the ping delivery, got:\n%s", out)
+	}
+}
+
+// TestDefaultDeps_APIClientWired (h-4knyl): defaultDeps must now wire a real
+// API client (the endpoints are live), not the old nil stub that fails loudly.
+func TestDefaultDeps_APIClientWired(t *testing.T) {
+	d := defaultDeps()
+	if d.NewAPIClient == nil {
+		t.Fatal("defaultDeps().NewAPIClient is nil — webhook commands not wired to the API (h-4knyl)")
+	}
+	if c := d.NewAPIClient("tok"); c == nil {
+		t.Fatal("NewAPIClient returned a nil APIClient")
 	}
 }

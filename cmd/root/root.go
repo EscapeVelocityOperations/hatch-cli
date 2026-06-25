@@ -33,6 +33,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/restart"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/stats"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/volume"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/webhook"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/config"
@@ -168,6 +169,7 @@ func init() {
 	rootCmd.AddCommand(restart.NewCmd())
 	rootCmd.AddCommand(stats.NewCmd())
 	rootCmd.AddCommand(volume.NewCmd())
+	rootCmd.AddCommand(webhook.Cmd)
 }
 
 // LastCommand returns the last executed command path.

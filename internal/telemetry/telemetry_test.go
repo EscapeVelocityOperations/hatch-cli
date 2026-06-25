@@ -32,6 +32,11 @@ func TestRedact(t *testing.T) {
 
 func TestSendFiresHTTPRequest(t *testing.T) {
 	var received Event
+	// done carries the happens-before edge: the handler closes it after writing
+	// `received`, and the test reads `received` only after <-done. A time.Sleep
+	// establishes no such edge, so -race flagged both the `received` write/read
+	// and the deferred APIHost restore vs Send's goroutine read (h-wy0a7).
+	done := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			t.Errorf("expected POST, got %s", r.Method)
@@ -39,8 +44,9 @@ func TestSendFiresHTTPRequest(t *testing.T) {
 		if r.URL.Path != "/telemetry" {
 			t.Errorf("expected /telemetry, got %s", r.URL.Path)
 		}
-		json.NewDecoder(r.Body).Decode(&received)
+		_ = json.NewDecoder(r.Body).Decode(&received)
 		w.WriteHeader(http.StatusCreated)
+		close(done) // received is fully written; release the test
 	}))
 	defer server.Close()
 
@@ -50,8 +56,11 @@ func TestSendFiresHTTPRequest(t *testing.T) {
 
 	Send("hatch deploy", "--runtime node", "deploy failed: timeout", "cli")
 
-	// Wait for goroutine
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-done: // deterministic synchronization; replaces time.Sleep
+	case <-time.After(2 * time.Second):
+		t.Fatal("telemetry request not received within 2s")
+	}
 
 	if received.Command != "hatch deploy" {
 		t.Errorf("expected command 'hatch deploy', got %q", received.Command)
@@ -76,7 +85,8 @@ func TestSendEmptyErrorIsNoop(t *testing.T) {
 	defer func() { APIHost = oldHost }()
 
 	Send("hatch deploy", "", "", "cli")
-	time.Sleep(100 * time.Millisecond)
+	// No goroutine is spawned for an empty error, so `called` is touched only by
+	// this goroutine — no wait needed (the old time.Sleep was dead weight).
 
 	if called {
 		t.Error("expected no HTTP request for empty error")
