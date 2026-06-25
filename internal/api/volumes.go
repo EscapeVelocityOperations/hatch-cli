@@ -8,11 +8,12 @@ import (
 
 // Volume mirrors the API's volume payload (GET /v1/apps/{slug}/volume).
 type Volume struct {
-	SizeMB    int    `json:"size_mb"`
-	UsedMB    int    `json:"used_mb"`
-	Status    string `json:"status"` // active | grace_deleting
-	Mount     string `json:"mount"`
-	OverQuota bool   `json:"over_quota"`
+	SizeMB      int    `json:"size_mb"`
+	UsedMB      int    `json:"used_mb"`
+	Status      string `json:"status"` // active | grace_deleting
+	Mount       string `json:"mount"`
+	DeleteAfter string `json:"delete_after,omitempty"` // RFC3339, set while grace_deleting
+	OverQuota   bool   `json:"over_quota"`
 }
 
 // EnableVolume provisions a persistent volume for slug, capped at the app's tier

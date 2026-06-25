@@ -16,10 +16,12 @@ import (
 
 // VolumeInfo mirrors the API's volume status payload.
 type VolumeInfo struct {
-	SizeMB int
-	UsedMB int
-	Mount  string
-	Status string // active | grace_deleting
+	SizeMB      int
+	UsedMB      int
+	Mount       string
+	Status      string // active | grace_deleting
+	DeleteAfter string // RFC3339, set while grace_deleting
+	OverQuota   bool
 }
 
 // Deps are the injectable dependencies, following the domain cmd pattern.
@@ -43,7 +45,7 @@ func defaultDeps() *Deps {
 			if err != nil {
 				return VolumeInfo{}, err
 			}
-			return VolumeInfo{SizeMB: v.SizeMB, UsedMB: v.UsedMB, Mount: v.Mount, Status: v.Status}, nil
+			return VolumeInfo{SizeMB: v.SizeMB, UsedMB: v.UsedMB, Mount: v.Mount, Status: v.Status, DeleteAfter: v.DeleteAfter, OverQuota: v.OverQuota}, nil
 		},
 		DisableVolume: func(token, slug string, now bool) error {
 			return api.NewClient(token).DisableVolume(slug, now)
@@ -169,6 +171,12 @@ func runStatus(slug string) error {
 	fmt.Printf("  Used:   %d MB\n", v.UsedMB)
 	fmt.Printf("  Mount:  %s\n", v.Mount)
 	fmt.Printf("  Status: %s\n", v.Status)
+	if v.DeleteAfter != "" {
+		fmt.Printf("  Deletes after: %s (grace period — re-enable to keep the data)\n", v.DeleteAfter)
+	}
+	if v.OverQuota {
+		fmt.Printf("  ⚠ Over quota (%d/%d MB) — new deploys are blocked until usage is back under the cap\n", v.UsedMB, v.SizeMB)
+	}
 	return nil
 }
 

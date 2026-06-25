@@ -2,9 +2,52 @@ package volume
 
 import (
 	"errors"
+	"io"
+	"os"
 	"strings"
 	"testing"
 )
+
+// captureStdout runs fn with os.Stdout redirected and returns what it printed.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	defer func() { os.Stdout = old }()
+	fn()
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+	return string(out)
+}
+
+// TestRunStatus_ShowsDeleteAfterAndOverQuota (h-62x9d rework): a grace-deleting,
+// over-quota volume must surface both the deletion date and the over-quota
+// warning — the status command previously dropped both fields.
+func TestRunStatus_ShowsDeleteAfterAndOverQuota(t *testing.T) {
+	deps = &Deps{
+		GetToken: func() (string, error) { return "tok", nil },
+		GetVolume: func(token, slug string) (VolumeInfo, error) {
+			return VolumeInfo{
+				SizeMB: 1024, UsedMB: 2048, Mount: "/data", Status: "grace_deleting",
+				DeleteAfter: "2026-07-01T00:00:00Z", OverQuota: true,
+			}, nil
+		},
+	}
+	defer func() { deps = defaultDeps() }()
+
+	out := captureStdout(t, func() {
+		if err := runStatus("test-app"); err != nil {
+			t.Fatalf("runStatus: %v", err)
+		}
+	})
+	if !strings.Contains(out, "2026-07-01T00:00:00Z") {
+		t.Errorf("status must show the delete_after date, got:\n%s", out)
+	}
+	if !strings.Contains(strings.ToLower(out), "over quota") {
+		t.Errorf("status must show the over-quota warning, got:\n%s", out)
+	}
+}
 
 // h-gcf5h TDD-red (h-poo35): `hatch volume enable|status|disable` behavior
 // against injected deps, following the domain cmd test pattern.
