@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/resolve"
 	"github.com/spf13/cobra"
@@ -47,13 +48,42 @@ func defaultDeps() *Deps {
 	return &Deps{
 		GetToken: auth.GetToken,
 		GetCwd:   os.Getwd,
-		// NewAPIClient stays nil until the hatch-api webhook endpoints
-		// (feature h-2o06e) land and an *api.Client adapter is wired —
-		// tracked as a follow-up. resolveApp() guards on nil so an un-wired
-		// invocation fails loudly with a clear message instead of panicking.
-		NewAPIClient: nil,
+		// Wired to the live hatch-api webhook endpoints (h-4knyl): the CRUD +
+		// /test routes shipped under /v1/apps/{slug}/webhooks. resolveApp() still
+		// guards on nil so a test that injects a nil client fails loudly.
+		NewAPIClient: func(token string) APIClient {
+			return &realAPIClient{client: api.NewClient(token)}
+		},
 	}
 }
+
+// realAPIClient adapts *api.Client to the webhook APIClient surface, mapping the
+// api package's Webhook to this package's CLI-facing Webhook.
+type realAPIClient struct{ client *api.Client }
+
+func (r *realAPIClient) CreateWebhook(slug, url string, events []string) (*Webhook, string, error) {
+	wh, err := r.client.CreateWebhook(slug, url, events)
+	if err != nil {
+		return nil, "", err
+	}
+	return &Webhook{ID: wh.ID, URL: wh.URL, Events: wh.Events}, wh.Secret, nil
+}
+
+func (r *realAPIClient) ListWebhooks(slug string) ([]Webhook, error) {
+	whs, err := r.client.ListWebhooks(slug)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Webhook, 0, len(whs))
+	for _, wh := range whs {
+		out = append(out, Webhook{ID: wh.ID, URL: wh.URL, Events: wh.Events})
+	}
+	return out, nil
+}
+
+func (r *realAPIClient) DeleteWebhook(slug, id string) error { return r.client.DeleteWebhook(slug, id) }
+
+func (r *realAPIClient) TestWebhook(slug, id string) error { return r.client.TestWebhook(slug, id) }
 
 // Cmd is the `hatch webhook` command group.
 var Cmd = &cobra.Command{

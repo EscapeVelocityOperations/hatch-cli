@@ -184,3 +184,15 @@ func TestWebhookTest_TriggersPing(t *testing.T) {
 		t.Errorf("test output must mention the ping delivery, got:\n%s", out)
 	}
 }
+
+// TestDefaultDeps_APIClientWired (h-4knyl): defaultDeps must now wire a real
+// API client (the endpoints are live), not the old nil stub that fails loudly.
+func TestDefaultDeps_APIClientWired(t *testing.T) {
+	d := defaultDeps()
+	if d.NewAPIClient == nil {
+		t.Fatal("defaultDeps().NewAPIClient is nil — webhook commands not wired to the API (h-4knyl)")
+	}
+	if c := d.NewAPIClient("tok"); c == nil {
+		t.Fatal("NewAPIClient returned a nil APIClient")
+	}
+}
