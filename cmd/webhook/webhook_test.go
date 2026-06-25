@@ -7,7 +7,22 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 )
+
+// TestCLIWebhook_MarksActive (h-4knyl rework): the API has no disabled state, so
+// every webhook it returns must map to Active=true — otherwise `hatch webhook
+// list` renders live webhooks as "disabled".
+func TestCLIWebhook_MarksActive(t *testing.T) {
+	w := cliWebhook(api.Webhook{ID: "wh_1", URL: "https://x.test", Events: []string{"deploy"}})
+	if !w.Active {
+		t.Error(`api webhooks must map to Active=true — else "hatch webhook list" shows live webhooks as "disabled" (h-4knyl)`)
+	}
+	if w.ID != "wh_1" || w.URL != "https://x.test" || len(w.Events) != 1 {
+		t.Errorf("mapping wrong: %+v", w)
+	}
+}
 
 // mockAPIClient implements APIClient (cmd/deploy fake-API pattern).
 type mockAPIClient struct {

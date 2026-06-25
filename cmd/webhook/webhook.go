@@ -61,12 +61,21 @@ func defaultDeps() *Deps {
 // api package's Webhook to this package's CLI-facing Webhook.
 type realAPIClient struct{ client *api.Client }
 
+// cliWebhook maps an api.Webhook to the CLI view. The API has no disabled state
+// — webhooks are created active and only ever deleted — so every webhook the API
+// returns is active. Without Active=true, `hatch webhook list` rendered every
+// live webhook as "disabled" (h-4knyl rework: webhook-list-active-disabled).
+func cliWebhook(wh api.Webhook) Webhook {
+	return Webhook{ID: wh.ID, URL: wh.URL, Events: wh.Events, Active: true}
+}
+
 func (r *realAPIClient) CreateWebhook(slug, url string, events []string) (*Webhook, string, error) {
 	wh, err := r.client.CreateWebhook(slug, url, events)
 	if err != nil {
 		return nil, "", err
 	}
-	return &Webhook{ID: wh.ID, URL: wh.URL, Events: wh.Events}, wh.Secret, nil
+	cw := cliWebhook(*wh)
+	return &cw, wh.Secret, nil
 }
 
 func (r *realAPIClient) ListWebhooks(slug string) ([]Webhook, error) {
@@ -76,7 +85,7 @@ func (r *realAPIClient) ListWebhooks(slug string) ([]Webhook, error) {
 	}
 	out := make([]Webhook, 0, len(whs))
 	for _, wh := range whs {
-		out = append(out, Webhook{ID: wh.ID, URL: wh.URL, Events: wh.Events})
+		out = append(out, cliWebhook(wh))
 	}
 	return out, nil
 }
