@@ -32,6 +32,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/resources"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/restart"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/stats"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/volume"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/webhook"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
@@ -167,6 +168,7 @@ func init() {
 	rootCmd.AddCommand(resources.NewCmd())
 	rootCmd.AddCommand(restart.NewCmd())
 	rootCmd.AddCommand(stats.NewCmd())
+	rootCmd.AddCommand(volume.NewCmd())
 	rootCmd.AddCommand(webhook.Cmd)
 }
 
