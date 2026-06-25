@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 )
 
 // captureStdout runs fn with os.Stdout redirected and returns what it printed.
@@ -159,5 +161,23 @@ func TestRunDisable_NowFlag(t *testing.T) {
 	}
 	if !gotNow {
 		t.Fatal("DisableVolume called with now=false, want now=true")
+	}
+}
+
+// TestToVolumeInfo_CarriesAllStatusFields (h-62x9d rework): the api.Volume ->
+// VolumeInfo mapping must carry DeleteAfter + OverQuota (and the rest) — the
+// previous regression guard injected deps.GetVolume directly and so never
+// exercised this seam (volume-status-regression-guard-bypasses-seam).
+func TestToVolumeInfo_CarriesAllStatusFields(t *testing.T) {
+	v := api.Volume{SizeMB: 1024, UsedMB: 2048, Mount: "/data", Status: "grace_deleting", DeleteAfter: "2026-07-01T00:00:00Z", OverQuota: true}
+	got := toVolumeInfo(v)
+	if got.SizeMB != 1024 || got.UsedMB != 2048 || got.Mount != "/data" || got.Status != "grace_deleting" {
+		t.Errorf("base fields wrong: %+v", got)
+	}
+	if got.DeleteAfter != "2026-07-01T00:00:00Z" {
+		t.Errorf("DeleteAfter dropped in mapping: %+v", got)
+	}
+	if !got.OverQuota {
+		t.Errorf("OverQuota dropped in mapping: %+v", got)
 	}
 }

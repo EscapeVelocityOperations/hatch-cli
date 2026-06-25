@@ -45,11 +45,26 @@ func defaultDeps() *Deps {
 			if err != nil {
 				return VolumeInfo{}, err
 			}
-			return VolumeInfo{SizeMB: v.SizeMB, UsedMB: v.UsedMB, Mount: v.Mount, Status: v.Status, DeleteAfter: v.DeleteAfter, OverQuota: v.OverQuota}, nil
+			return toVolumeInfo(v), nil
 		},
 		DisableVolume: func(token, slug string, now bool) error {
 			return api.NewClient(token).DisableVolume(slug, now)
 		},
+	}
+}
+
+// toVolumeInfo maps the API volume payload to the CLI view, carrying every field
+// the status command renders — DeleteAfter (grace-deletion date) and OverQuota
+// included. Extracted so the mapping itself is unit-tested, not bypassed by a
+// deps fake (h-62x9d rework: volume-status-regression-guard-bypasses-seam).
+func toVolumeInfo(v api.Volume) VolumeInfo {
+	return VolumeInfo{
+		SizeMB:      v.SizeMB,
+		UsedMB:      v.UsedMB,
+		Mount:       v.Mount,
+		Status:      v.Status,
+		DeleteAfter: v.DeleteAfter,
+		OverQuota:   v.OverQuota,
 	}
 }
 
