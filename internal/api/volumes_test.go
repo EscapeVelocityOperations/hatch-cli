@@ -57,7 +57,10 @@ func TestGetVolume(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod, gotPath = r.Method, r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"size_mb":1024,"used_mb":37,"status":"active","mount":"/data","over_quota":false}`))
+		// Includes delete_after + over_quota so this exercises the actual JSON
+		// wire decode (and the json tags) for every status field, not just the
+		// in-Go mapping (h-62x9d: volume-status-contract-test-dodges-wire-decode).
+		_, _ = w.Write([]byte(`{"size_mb":1024,"used_mb":2048,"status":"grace_deleting","mount":"/data","delete_after":"2026-07-01T00:00:00Z","over_quota":true}`))
 	}))
 	defer server.Close()
 
@@ -71,8 +74,14 @@ func TestGetVolume(t *testing.T) {
 	if gotMethod != "GET" || gotPath != "/v1/apps/my-app/volume" {
 		t.Errorf("request = %s %s, want GET /v1/apps/my-app/volume", gotMethod, gotPath)
 	}
-	if v.SizeMB != 1024 || v.UsedMB != 37 || v.Status != "active" || v.Mount != "/data" {
-		t.Errorf("volume = %+v, want {1024 37 active /data ...}", v)
+	if v.SizeMB != 1024 || v.UsedMB != 2048 || v.Status != "grace_deleting" || v.Mount != "/data" {
+		t.Errorf("volume base fields = %+v", v)
+	}
+	if v.DeleteAfter != "2026-07-01T00:00:00Z" {
+		t.Errorf("delete_after did not decode from the wire: %q (check the json tag)", v.DeleteAfter)
+	}
+	if !v.OverQuota {
+		t.Errorf("over_quota did not decode from the wire: %+v (check the json tag)", v)
 	}
 }
 
