@@ -697,6 +697,59 @@ func TestAddDomainHandler_Success(t *testing.T) {
 	}
 }
 
+// h-tzj2 / h-ma74 item 1: for an UNVERIFIED domain, add_domain must surface the
+// _hatch-verify TXT record + token + the verify step (the MCP path previously
+// printed only the CNAME, so MCP users never verified → domain stuck forever).
+func TestAddDomainHandler_SurfacesVerification(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	newMockServer(t, map[string]http.HandlerFunc{
+		"POST /v1/apps/myapp-a1b2/domains": jsonHandler(api.Domain{
+			Domain:            "example.com",
+			Status:            "pending_verification",
+			Verified:          false,
+			VerificationToken: "deadbeefcafe0001",
+			CNAME:             "myapp-a1b2.nest.gethatch.eu",
+		}),
+	})
+
+	result, err := addDomainHandler(context.Background(), makeReq(map[string]interface{}{
+		"app":    "myapp-a1b2",
+		"domain": "example.com",
+	}))
+	text := assertSuccess(t, result, err)
+
+	for _, want := range []string{"_hatch-verify.example.com", "deadbeefcafe0001", "verify"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("add_domain output for an unverified domain must contain %q; got:\n%s", want, text)
+		}
+	}
+}
+
+// h-tzj2: a verified return (or empty token) must NOT show the verification block.
+func TestAddDomainHandler_VerifiedOmitsVerification(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	newMockServer(t, map[string]http.HandlerFunc{
+		"POST /v1/apps/myapp-a1b2/domains": jsonHandler(api.Domain{
+			Domain:   "example.com",
+			Status:   "active",
+			Verified: true,
+			CNAME:    "myapp-a1b2.nest.gethatch.eu",
+		}),
+	})
+
+	result, err := addDomainHandler(context.Background(), makeReq(map[string]interface{}{
+		"app":    "myapp-a1b2",
+		"domain": "example.com",
+	}))
+	text := assertSuccess(t, result, err)
+
+	if strings.Contains(text, "_hatch-verify") {
+		t.Errorf("a verified domain must NOT show the verification block; got:\n%s", text)
+	}
+}
+
 func TestAddDomainHandler_AuthFailure(t *testing.T) {
 	saveAndRestore(t)
 	setNoAuth()

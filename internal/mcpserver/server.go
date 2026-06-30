@@ -949,6 +949,25 @@ func addDomainHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		cname = slug + ".nest.gethatch.eu"
 	}
 
+	// Surface the ownership-verification step for an unverified domain (h-tzj2 /
+	// h-ma74 item 1). Hatch only provisions the cert AFTER the domain is verified
+	// via a DNS TXT record; without this block MCP users published only the CNAME
+	// and the domain stayed pending_verification forever (the docs.proxyninja.fr
+	// incident). Mirrors the CLI `hatch domain add` output.
+	verification := ""
+	if !d.Verified && d.VerificationToken != "" {
+		verification = fmt.Sprintf(`
+Ownership verification (REQUIRED — without it the domain stays
+pending_verification and never gets a TLS cert). Also add this DNS TXT record:
+
+  Type   Host                     Value
+  TXT    _hatch-verify.%s   %s
+
+Then run the verify step:
+  hatch domain verify %s --app %s
+`, domain, d.VerificationToken, domain, slug)
+	}
+
 	result := fmt.Sprintf(`Domain %s configured for %s.
 Status: %s
 
@@ -958,12 +977,13 @@ Add a CNAME record pointing %s to %s
   Type   Name    Value
   CNAME  @       %s
   CNAME  www     %s
-
+%s
 For apex domains (e.g. example.com without www), CNAME records are not
 allowed by the DNS spec. Use ALIAS or ANAME if your provider supports it
 (Cloudflare, Route 53, DNSimple). Otherwise use a www subdomain.
 
-SSL is provisioned automatically via Let's Encrypt once DNS propagates.
+SSL is provisioned automatically via Let's Encrypt once DNS propagates AND the
+domain is verified (see above).
 
 To verify DNS is configured correctly, run:
   dig +short CNAME %s
@@ -973,7 +993,7 @@ Or for apex domains with A records:
 The A record should resolve to the Hatch server IP.
 
 Tell the user to configure DNS, then re-run the dig command to confirm.`,
-		domain, slug, d.Status, domain, cname, cname, cname,
+		domain, slug, d.Status, domain, cname, cname, cname, verification,
 		domain, cname, domain)
 
 	return mcp.NewToolResultText(result), nil
