@@ -220,7 +220,6 @@ func TestAuthKeysSuccess(t *testing.T) {
 				{
 					ID:        "key-1",
 					Name:      "My Key",
-					Prefix:    "hk_abc",
 					CreatedAt: time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
 				},
 			}, nil

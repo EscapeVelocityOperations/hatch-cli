@@ -86,6 +86,40 @@ func TestGetCronRunLogs(t *testing.T) {
 	}
 }
 
+// h-urxw: ListKeys must hit the server's real route GET /v1/users/keys (the CLI
+// used /v1/keys which 404s) and decode the server shape {id,name,created_at,
+// last_used_at} — created_at/last_used_at are RFC3339 strings parsed into time.Time.
+func TestListKeys(t *testing.T) {
+	var gotPath, gotMethod string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`[{"id":"k1","name":"My Key","created_at":"2026-01-15T00:00:00Z","last_used_at":"2026-02-01T00:00:00Z"}]`))
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+
+	keys, err := c.ListKeys()
+	if err != nil {
+		t.Fatalf("ListKeys: %v", err)
+	}
+	if gotMethod != http.MethodGet {
+		t.Errorf("method = %q, want GET", gotMethod)
+	}
+	if gotPath != "/v1/users/keys" {
+		t.Errorf("path = %q, want /v1/users/keys (the server only serves /v1/users/keys)", gotPath)
+	}
+	if len(keys) != 1 || keys[0].ID != "k1" || keys[0].Name != "My Key" {
+		t.Fatalf("keys = %+v, want one key k1/My Key", keys)
+	}
+	if keys[0].CreatedAt.IsZero() {
+		t.Errorf("CreatedAt not parsed from the RFC3339 string")
+	}
+}
+
 func TestUploadArtifact_TimeoutErrorMessage(t *testing.T) {
 	c := NewClient("tok123")
 	c.httpClient.Transport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {

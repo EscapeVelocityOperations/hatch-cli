@@ -78,10 +78,12 @@ type Domain struct {
 }
 
 // APIKey represents an API key for the user.
+// APIKey mirrors the server's keyResponse (hatch-api handlers/users.go). The
+// server does NOT return a key prefix (h-urxw); created_at/last_used_at are
+// RFC3339 strings that unmarshal into time.Time.
 type APIKey struct {
 	ID         string    `json:"id"`
 	Name       string    `json:"name"`
-	Prefix     string    `json:"prefix"`
 	CreatedAt  time.Time `json:"created_at"`
 	LastUsedAt time.Time `json:"last_used_at,omitempty"`
 }
