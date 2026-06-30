@@ -768,6 +768,32 @@ func (c *Client) ListKeys() ([]APIKey, error) {
 	return keys, nil
 }
 
+// CreateKey mints a new deploy token (HATCH_TOKEN) for the authenticated user via
+// POST /v1/users/keys. The server returns the plaintext token ONCE — it cannot be
+// retrieved later — so the caller must surface it to the user immediately.
+func (c *Client) CreateKey(name string) (string, error) {
+	reqBody, err := json.Marshal(map[string]string{"name": name})
+	if err != nil {
+		return "", fmt.Errorf("encoding request: %w", err)
+	}
+	resp, err := c.do("POST", "/users/keys", bytes.NewReader(reqBody))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var created struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		return "", fmt.Errorf("decoding response: %w", err)
+	}
+	if created.Token == "" {
+		return "", fmt.Errorf("server did not return a token")
+	}
+	return created.Token, nil
+}
+
 // GetAppStatus returns the raw JSON status response for an app.
 // This includes app info, last deployment status, and custom domains.
 func (c *Client) GetAppStatus(slug string) (json.RawMessage, error) {
