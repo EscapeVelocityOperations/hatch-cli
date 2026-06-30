@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
@@ -33,6 +35,7 @@ type Deps struct {
 	SaveToken     func(token string) error
 	ClearToken    func() error
 	ListKeys      func(token string) ([]api.APIKey, error)
+	CreateKey     func(token, name string) (string, error)
 	GetTokenSource func() string
 }
 
@@ -49,6 +52,9 @@ func defaultDeps() *Deps {
 		ClearToken:  auth.ClearToken,
 		ListKeys: func(token string) ([]api.APIKey, error) {
 			return api.NewClient(token).ListKeys()
+		},
+		CreateKey: func(token, name string) (string, error) {
+			return api.NewClient(token).CreateKey(name)
 		},
 		GetTokenSource: getTokenSource,
 	}
@@ -100,12 +106,26 @@ func newStatusCmd() *cobra.Command {
 }
 
 func newKeysCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "keys",
 		Short: "List your API keys",
-		Long:  "List all API keys associated with your account.",
+		Long:  "List all API keys associated with your account, or create a CI deploy token.",
 		RunE:  runKeys,
 	}
+	cmd.AddCommand(newKeysCreateCmd())
+	return cmd
+}
+
+func newKeysCreateCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "create",
+		Short: "Create a CI deploy token (HATCH_TOKEN)",
+		Long: "Mint a new deploy token for non-interactive / CI use. The plaintext token is " +
+			"shown ONCE and cannot be retrieved later — store it as your CI's HATCH_TOKEN secret.",
+		RunE: runKeysCreate,
+	}
+	c.Flags().String("name", "", "Name for the key (default: ci-<owner>-<repo> from the git remote)")
+	return c
 }
 
 func runLogin(cmd *cobra.Command, args []string) error {
@@ -219,6 +239,60 @@ func runKeys(cmd *cobra.Command, args []string) error {
 	}
 	table.Render()
 	return nil
+}
+
+func runKeysCreate(cmd *cobra.Command, args []string) error {
+	token, err := deps.GetToken()
+	if err != nil {
+		return fmt.Errorf("checking auth: %w", err)
+	}
+	if token == "" {
+		return fmt.Errorf("not logged in. Run 'hatch auth login', set HATCH_TOKEN, or use --token")
+	}
+
+	name, _ := cmd.Flags().GetString("name")
+	if name == "" {
+		name = defaultCIKeyName()
+	}
+
+	created, err := deps.CreateKey(token, name)
+	if err != nil {
+		return fmt.Errorf("creating key: %w", err)
+	}
+
+	// Print the token EXACTLY ONCE — the server cannot return it again.
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "Created deploy token %q\n\n", name)
+	fmt.Fprintf(out, "  %s\n", created)
+	fmt.Fprintln(out, "  Save this now — store it as the HATCH_TOKEN secret in your CI; it cannot be retrieved later.")
+	return nil
+}
+
+// defaultCIKeyName suggests a CI-friendly token name derived from the git origin
+// remote (ci-<owner>-<repo>), falling back to a generic name outside a repo. A
+// token name is non-unique metadata, so the fallback is harmless.
+func defaultCIKeyName() string {
+	if out, err := exec.Command("git", "remote", "get-url", "origin").Output(); err == nil {
+		if owner, repo, ok := parseGitOwnerRepo(string(out)); ok {
+			return "ci-" + owner + "-" + repo
+		}
+	}
+	return "ci-deploy"
+}
+
+// parseGitOwnerRepo extracts owner/repo from a git remote URL
+// (git@host:owner/repo.git or https://host/owner/repo.git).
+func parseGitOwnerRepo(remote string) (owner, repo string, ok bool) {
+	remote = strings.TrimSuffix(strings.TrimSpace(remote), ".git")
+	remote = strings.ReplaceAll(remote, ":", "/")
+	parts := strings.Split(remote, "/")
+	if len(parts) >= 2 {
+		owner, repo = parts[len(parts)-2], parts[len(parts)-1]
+		if owner != "" && repo != "" {
+			return owner, repo, true
+		}
+	}
+	return "", "", false
 }
 
 // getTokenSource returns a human-readable description of where the token comes from.

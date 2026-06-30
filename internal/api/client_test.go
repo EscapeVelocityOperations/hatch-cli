@@ -120,6 +120,52 @@ func TestListKeys(t *testing.T) {
 	}
 }
 
+// h-nd8a: CreateKey mints a CI deploy token (HATCH_TOKEN) by POSTing the name to
+// the server's mint endpoint (POST /v1/users/keys) and returns the one-time token
+// from the response.
+func TestCreateKey(t *testing.T) {
+	var gotPath, gotMethod, gotAuth, gotCT string
+	var gotBody struct {
+		Name string `json:"name"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		gotAuth = r.Header.Get("Authorization")
+		gotCT = r.Header.Get("Content-Type")
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"token":"hatch_secret_abc123"}`))
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+
+	token, err := c.CreateKey("ci-acme-repo")
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/v1/users/keys" {
+		t.Errorf("path = %q, want /v1/users/keys", gotPath)
+	}
+	if gotAuth != "Bearer tok123" {
+		t.Errorf("Authorization = %q, want Bearer tok123", gotAuth)
+	}
+	if gotCT != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", gotCT)
+	}
+	if gotBody.Name != "ci-acme-repo" {
+		t.Errorf("request body name = %q, want ci-acme-repo", gotBody.Name)
+	}
+	if token != "hatch_secret_abc123" {
+		t.Errorf("token = %q, want hatch_secret_abc123", token)
+	}
+}
+
 func TestUploadArtifact_TimeoutErrorMessage(t *testing.T) {
 	c := NewClient("tok123")
 	c.httpClient.Transport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -273,6 +274,48 @@ func TestAuthKeysAPIError(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+// h-nd8a: `hatch auth keys create` mints a token and prints it EXACTLY ONCE with
+// the CI storage instruction (the plaintext can never be retrieved again).
+func TestAuthKeysCreate_PrintsTokenOnceWithInstruction(t *testing.T) {
+	var gotToken, gotName string
+	calls := 0
+	restore := setMockDeps(&Deps{
+		GetToken: func() (string, error) { return "test-token", nil },
+		CreateKey: func(token, name string) (string, error) {
+			calls++
+			gotToken, gotName = token, name
+			return "hatch_ci_secret_xyz", nil
+		},
+	})
+	defer restore()
+
+	cmd := NewCmd()
+	cmd.SetArgs([]string{"keys", "create", "--name", "ci-acme"})
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	out := buf.String()
+	if calls != 1 {
+		t.Errorf("CreateKey called %d times, want 1", calls)
+	}
+	if gotName != "ci-acme" {
+		t.Errorf("name = %q, want ci-acme", gotName)
+	}
+	if gotToken != "test-token" {
+		t.Errorf("auth token = %q, want test-token", gotToken)
+	}
+	if n := strings.Count(out, "hatch_ci_secret_xyz"); n != 1 {
+		t.Errorf("token printed %d times, want exactly 1\noutput:\n%s", n, out)
+	}
+	if !strings.Contains(out, "HATCH_TOKEN") || !strings.Contains(out, "cannot be retrieved later") {
+		t.Errorf("missing CI storage instruction in output:\n%s", out)
 	}
 }
 
