@@ -753,9 +753,10 @@ func isTimeoutError(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout())
 }
 
-// ListKeys returns API keys for the authenticated user.
+// ListKeys returns API keys for the authenticated user. The server route is
+// /v1/users/keys (h-urxw — the CLI previously hit /v1/keys, which 404s).
 func (c *Client) ListKeys() ([]APIKey, error) {
-	resp, err := c.do("GET", "/keys", nil)
+	resp, err := c.do("GET", "/users/keys", nil)
 	if err != nil {
 		return nil, err
 	}

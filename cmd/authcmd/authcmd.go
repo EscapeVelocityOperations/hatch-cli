@@ -224,7 +224,8 @@ func runKeys(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	table := ui.NewTable(os.Stdout, "NAME", "PREFIX", "CREATED", "LAST USED")
+	// No PREFIX column: the server's key list does not return a prefix (h-urxw).
+	table := ui.NewTable(os.Stdout, "NAME", "CREATED", "LAST USED")
 	for _, k := range keys {
 		lastUsed := "Never"
 		if !k.LastUsedAt.IsZero() {
@@ -232,7 +233,6 @@ func runKeys(cmd *cobra.Command, args []string) error {
 		}
 		table.AddRow(
 			k.Name,
-			k.Prefix+"...",
 			k.CreatedAt.Format("2006-01-02"),
 			lastUsed,
 		)
