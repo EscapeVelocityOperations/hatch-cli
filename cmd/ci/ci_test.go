@@ -164,3 +164,88 @@ func TestCI_OverwriteGuard(t *testing.T) {
 		t.Error("--yes must write the file")
 	}
 }
+
+// h-mkyo: by default `hatch ci` PRINTS the secret-wiring command (never runs it).
+func TestCI_SecretGuidance_DefaultPrintsCommand(t *testing.T) {
+	restore := setMockDeps(&Deps{
+		GitRemote: func() (string, error) { return "git@github.com:acme/repo.git", nil },
+		Getwd:     func() (string, error) { return "", os.ErrNotExist },
+		Stat:      func(string) bool { return false },
+		WriteFile: func(string, []byte) error { return nil },
+	})
+	defer restore()
+	cmd := NewCmd()
+	cmd.SetArgs([]string{"--provider", "github", "--runtime", "static"})
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "gh secret set HATCH_TOKEN") {
+		t.Errorf("default must print the secret-wiring command; got:\n%s", buf.String())
+	}
+}
+
+// --set-secret --token runs the provider CLI via the injected runner.
+func TestCI_SetSecret_RunsViaRunner(t *testing.T) {
+	var ranBin string
+	var ranArgs []string
+	restore := setMockDeps(&Deps{
+		GitRemote: func() (string, error) { return "git@github.com:acme/repo.git", nil },
+		Getwd:     func() (string, error) { return "", os.ErrNotExist },
+		Stat:      func(string) bool { return false },
+		WriteFile: func(string, []byte) error { return nil },
+		LookPath:  func(string) bool { return true },
+		Run:       func(bin string, args ...string) error { ranBin = bin; ranArgs = args; return nil },
+	})
+	defer restore()
+	cmd := NewCmd()
+	cmd.SetArgs([]string{"--provider", "github", "--runtime", "node", "--token", "hatch_secret", "--set-secret"})
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if ranBin != "gh" {
+		t.Errorf("ran %q, want gh", ranBin)
+	}
+	joined := strings.Join(ranArgs, " ")
+	for _, want := range []string{"secret set HATCH_TOKEN", "hatch_secret", "acme/repo"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("gh args missing %q: %v", want, ranArgs)
+		}
+	}
+	if !strings.Contains(buf.String(), "Set the HATCH_TOKEN secret") {
+		t.Errorf("missing success message:\n%s", buf.String())
+	}
+}
+
+// --set-secret with the provider CLI not installed falls back to manual instructions.
+func TestCI_SetSecret_MissingCLI_Fallback(t *testing.T) {
+	ran := false
+	restore := setMockDeps(&Deps{
+		GitRemote: func() (string, error) { return "git@github.com:acme/repo.git", nil },
+		Getwd:     func() (string, error) { return "", os.ErrNotExist },
+		Stat:      func(string) bool { return false },
+		WriteFile: func(string, []byte) error { return nil },
+		LookPath:  func(string) bool { return false },
+		Run:       func(string, ...string) error { ran = true; return nil },
+	})
+	defer restore()
+	cmd := NewCmd()
+	cmd.SetArgs([]string{"--provider", "github", "--runtime", "node", "--token", "hatch_secret", "--set-secret"})
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if ran {
+		t.Error("must not run when the provider CLI is not installed")
+	}
+	if !strings.Contains(buf.String(), "not installed") {
+		t.Errorf("missing not-installed fallback:\n%s", buf.String())
+	}
+}

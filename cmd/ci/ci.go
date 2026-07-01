@@ -21,6 +21,8 @@ type Deps struct {
 	Getwd     func() (string, error)
 	WriteFile func(path string, content []byte) error // creates parent dirs
 	Stat      func(path string) bool                  // reports whether path exists
+	LookPath  func(bin string) bool                   // reports whether a binary is installed
+	Run       func(bin string, args ...string) error  // executes a command
 }
 
 func defaultDeps() *Deps {
@@ -42,6 +44,13 @@ func defaultDeps() *Deps {
 			_, err := os.Stat(path)
 			return err == nil
 		},
+		LookPath: func(bin string) bool {
+			_, err := exec.LookPath(bin)
+			return err == nil
+		},
+		Run: func(bin string, args ...string) error {
+			return exec.Command(bin, args...).Run()
+		},
 	}
 }
 
@@ -55,6 +64,8 @@ type ciOptions struct {
 	startCommand string
 	printOnly    bool
 	overwrite    bool
+	token        string
+	setSecret    bool
 }
 
 // NewCmd returns the `hatch ci` command.
@@ -78,6 +89,8 @@ func NewCmd() *cobra.Command {
 	f.StringVar(&opts.startCommand, "start-command", "", "Start command for the app")
 	f.BoolVar(&opts.printOnly, "print", false, "Print the generated workflow to stdout only (no file writes)")
 	f.BoolVar(&opts.overwrite, "yes", false, "Allow overwriting an existing CI workflow file")
+	f.StringVar(&opts.token, "token", "", "HATCH_TOKEN value to wire as the CI secret (mint with: hatch auth keys create)")
+	f.BoolVar(&opts.setSecret, "set-secret", false, "Run the provider CLI (gh/glab) to set the HATCH_TOKEN secret (default: print the command only)")
 	return cmd
 }
 
@@ -125,18 +138,55 @@ func runCI(cmd *cobra.Command, opts ciOptions) error {
 
 	if opts.printOnly {
 		fmt.Fprintf(out, "\n--- %s ---\n%s", wf.Path, wf.Content)
+	} else {
+		if deps.Stat(wf.Path) && !opts.overwrite {
+			return fmt.Errorf("%s already exists — re-run with --yes to overwrite", wf.Path)
+		}
+		if err := deps.WriteFile(wf.Path, []byte(wf.Content)); err != nil {
+			return fmt.Errorf("writing %s: %w", wf.Path, err)
+		}
+		fmt.Fprintf(out, "\nWrote %s (review + commit it; nothing was committed or pushed).\n", wf.Path)
+	}
+
+	return wireSecret(cmd, opts, provider)
+}
+
+// wireSecret prints (or, under --set-secret, runs) the provider command that sets
+// the HATCH_TOKEN CI secret. Default is print-only — it never silently pushes a
+// secret; --set-secret runs it only after confirming the provider CLI is
+// installed, and falls back to manual instructions on any failure.
+func wireSecret(cmd *cobra.Command, opts ciOptions, provider string) error {
+	out := cmd.OutOrStdout()
+	ownerRepo := ""
+	if remote, err := deps.GitRemote(); err == nil {
+		ownerRepo = detect.OwnerRepoFromRemote(remote)
+	}
+	bin, args, ok := detect.SecretCommand(provider, ownerRepo, opts.token)
+	if !ok {
 		return nil
 	}
 
-	if deps.Stat(wf.Path) && !opts.overwrite {
-		return fmt.Errorf("%s already exists — re-run with --yes to overwrite", wf.Path)
-	}
-	if err := deps.WriteFile(wf.Path, []byte(wf.Content)); err != nil {
-		return fmt.Errorf("writing %s: %w", wf.Path, err)
+	if !opts.setSecret {
+		fmt.Fprintln(out, "\nWire the HATCH_TOKEN secret in your CI:")
+		fmt.Fprintf(out, "  %s\n", detect.SecretCommandString(provider, ownerRepo, opts.token))
+		if opts.token == "" {
+			fmt.Fprintln(out, "  (mint the token with `hatch auth keys create` — shown once — then pass it as --token, or run the command above.)")
+		}
+		return nil
 	}
 
-	fmt.Fprintf(out, "\nWrote %s\n", wf.Path)
-	fmt.Fprintln(out, "Next: review + commit it, then add HATCH_TOKEN as a CI secret")
-	fmt.Fprintln(out, "(mint one with: hatch auth keys create). Nothing was committed or pushed.")
+	if opts.token == "" {
+		return fmt.Errorf("--set-secret needs the token value: pass --token <HATCH_TOKEN> (mint with: hatch auth keys create)")
+	}
+	manual := detect.SecretCommandString(provider, ownerRepo, "<HATCH_TOKEN>")
+	if !deps.LookPath(bin) {
+		fmt.Fprintf(out, "\n%s is not installed — set the secret manually in your repo settings, or run:\n  %s\n", bin, manual)
+		return nil
+	}
+	if err := deps.Run(bin, args...); err != nil {
+		fmt.Fprintf(out, "\n%s failed (is it authenticated? try `%s auth login`). Set it manually:\n  %s\n", bin, bin, manual)
+		return nil
+	}
+	fmt.Fprintf(out, "\nSet the HATCH_TOKEN secret via %s.\n", bin)
 	return nil
 }
