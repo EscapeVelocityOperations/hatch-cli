@@ -1621,3 +1621,271 @@ func TestTokenRedactionInAPIErrors(t *testing.T) {
 		t.Error("expected redacted token placeholder")
 	}
 }
+
+// --- share_app (ADR-0022 P3) ---
+
+func TestShareAppHandler_MissingParams(t *testing.T) {
+	result, err := shareAppHandler(context.Background(), makeReq(map[string]interface{}{}))
+	assertError(t, result, err, "missing required parameter")
+}
+
+func TestShareAppHandler_Success(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	newMockServer(t, map[string]http.HandlerFunc{
+		"POST /v1/apps/myapp-a1b2/collaborators": jsonHandler(api.Collaborator{
+			ID: "c1", Email: "friend@example.com", Status: "pending",
+		}),
+	})
+
+	result, err := shareAppHandler(context.Background(), makeReq(map[string]interface{}{
+		"app": "myapp-a1b2", "email": "friend@example.com",
+	}))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, "friend@example.com") {
+		t.Errorf("expected invitee email in output, got: %s", text)
+	}
+	if !strings.Contains(strings.ToLower(text), "secret") && !strings.Contains(strings.ToLower(text), "environment variable") {
+		t.Errorf("expected secrets-trust framing in output, got: %s", text)
+	}
+}
+
+func TestShareAppHandler_AuthFailure(t *testing.T) {
+	saveAndRestore(t)
+	setNoAuth()
+
+	result, err := shareAppHandler(context.Background(), makeReq(map[string]interface{}{
+		"app": "myapp-a1b2", "email": "friend@example.com",
+	}))
+	assertError(t, result, err, "not authenticated")
+}
+
+func TestShareAppHandler_MaxReached(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	newMockServer(t, map[string]http.HandlerFunc{
+		"POST /v1/apps/myapp-a1b2/collaborators": errorHandler(409, `{"error":"maximum collaborators per egg reached"}`),
+	})
+
+	result, err := shareAppHandler(context.Background(), makeReq(map[string]interface{}{
+		"app": "myapp-a1b2", "email": "friend@example.com",
+	}))
+	assertError(t, result, err, "maximum collaborators")
+}
+
+// --- list_collaborators (ADR-0022 P3) ---
+
+func TestListCollaboratorsHandler_MissingApp(t *testing.T) {
+	result, err := listCollaboratorsHandler(context.Background(), makeReq(map[string]interface{}{}))
+	assertError(t, result, err, "missing required parameter")
+}
+
+func TestListCollaboratorsHandler_Success(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/apps/myapp-a1b2/collaborators": jsonHandler([]api.Collaborator{
+			{ID: "c1", Email: "friend@example.com", Status: "accepted"},
+		}),
+	})
+
+	result, err := listCollaboratorsHandler(context.Background(), makeReq(map[string]interface{}{
+		"app": "myapp-a1b2",
+	}))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, "friend@example.com") {
+		t.Errorf("expected collaborator email in output, got: %s", text)
+	}
+}
+
+func TestListCollaboratorsHandler_Empty(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/apps/myapp-a1b2/collaborators": jsonHandler([]api.Collaborator{}),
+	})
+
+	result, err := listCollaboratorsHandler(context.Background(), makeReq(map[string]interface{}{
+		"app": "myapp-a1b2",
+	}))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, "No collaborators") {
+		t.Errorf("expected empty message, got: %s", text)
+	}
+}
+
+func TestListCollaboratorsHandler_AuthFailure(t *testing.T) {
+	saveAndRestore(t)
+	setNoAuth()
+
+	result, err := listCollaboratorsHandler(context.Background(), makeReq(map[string]interface{}{
+		"app": "myapp-a1b2",
+	}))
+	assertError(t, result, err, "not authenticated")
+}
+
+// --- unshare_app (ADR-0022 P3) ---
+
+func TestUnshareAppHandler_MissingParams(t *testing.T) {
+	result, err := unshareAppHandler(context.Background(), makeReq(map[string]interface{}{}))
+	assertError(t, result, err, "missing required parameter")
+}
+
+func TestUnshareAppHandler_ByRawID(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	newMockServer(t, map[string]http.HandlerFunc{
+		"DELETE /v1/apps/myapp-a1b2/collaborators/c1": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		},
+	})
+
+	result, err := unshareAppHandler(context.Background(), makeReq(map[string]interface{}{
+		"app": "myapp-a1b2", "collaborator": "c1",
+	}))
+	assertSuccess(t, result, err)
+}
+
+func TestUnshareAppHandler_ByEmail(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	var gotDeletePath string
+	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/apps/myapp-a1b2/collaborators": jsonHandler([]api.Collaborator{
+			{ID: "c1", Email: "friend@example.com"},
+			{ID: "c2", Email: "other@example.com"},
+		}),
+		"DELETE /v1/apps/myapp-a1b2/collaborators/c1": func(w http.ResponseWriter, r *http.Request) {
+			gotDeletePath = r.URL.Path
+			w.WriteHeader(http.StatusNoContent)
+		},
+	})
+
+	result, err := unshareAppHandler(context.Background(), makeReq(map[string]interface{}{
+		"app": "myapp-a1b2", "collaborator": "friend@example.com",
+	}))
+	assertSuccess(t, result, err)
+
+	if gotDeletePath != "/v1/apps/myapp-a1b2/collaborators/c1" {
+		t.Errorf("delete path = %q, want c1's path", gotDeletePath)
+	}
+}
+
+func TestUnshareAppHandler_EmailNotFound(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/apps/myapp-a1b2/collaborators": jsonHandler([]api.Collaborator{
+			{ID: "c1", Email: "friend@example.com"},
+		}),
+	})
+
+	result, err := unshareAppHandler(context.Background(), makeReq(map[string]interface{}{
+		"app": "myapp-a1b2", "collaborator": "nobody@example.com",
+	}))
+	assertError(t, result, err, "no collaborator found")
+}
+
+func TestUnshareAppHandler_AuthFailure(t *testing.T) {
+	saveAndRestore(t)
+	setNoAuth()
+
+	result, err := unshareAppHandler(context.Background(), makeReq(map[string]interface{}{
+		"app": "myapp-a1b2", "collaborator": "c1",
+	}))
+	assertError(t, result, err, "not authenticated")
+}
+
+// --- list_pending_invites (ADR-0022 P3) ---
+
+func TestListPendingInvitesHandler_Success(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/invitations/pending": jsonHandler([]api.PendingInvite{
+			{ID: "c1", AppSlug: "their-app", AppName: "Their App", InvitedByEmail: "owner@example.com"},
+		}),
+	})
+
+	result, err := listPendingInvitesHandler(context.Background(), makeReq(map[string]interface{}{}))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, "their-app") || !strings.Contains(text, "owner@example.com") {
+		t.Errorf("expected invite details in output, got: %s", text)
+	}
+}
+
+func TestListPendingInvitesHandler_Empty(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/invitations/pending": jsonHandler([]api.PendingInvite{}),
+	})
+
+	result, err := listPendingInvitesHandler(context.Background(), makeReq(map[string]interface{}{}))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, "No pending invitations") {
+		t.Errorf("expected empty message, got: %s", text)
+	}
+}
+
+func TestListPendingInvitesHandler_AuthFailure(t *testing.T) {
+	saveAndRestore(t)
+	setNoAuth()
+
+	result, err := listPendingInvitesHandler(context.Background(), makeReq(map[string]interface{}{}))
+	assertError(t, result, err, "not authenticated")
+}
+
+// --- accept_invite (ADR-0022 P3) ---
+
+func TestAcceptInviteHandler_MissingParams(t *testing.T) {
+	result, err := acceptInviteHandler(context.Background(), makeReq(map[string]interface{}{}))
+	assertError(t, result, err, "missing required parameter")
+}
+
+func TestAcceptInviteHandler_Success(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	newMockServer(t, map[string]http.HandlerFunc{
+		"POST /v1/invitations/tok-abc/accept": jsonHandler(api.Collaborator{
+			ID: "c1", AppID: "a1", Status: "accepted",
+		}),
+	})
+
+	result, err := acceptInviteHandler(context.Background(), makeReq(map[string]interface{}{
+		"token": "tok-abc",
+	}))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, "accepted") {
+		t.Errorf("expected acceptance confirmation, got: %s", text)
+	}
+}
+
+func TestAcceptInviteHandler_WrongEmail(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	newMockServer(t, map[string]http.HandlerFunc{
+		"POST /v1/invitations/tok-abc/accept": errorHandler(403, `{"error":"this invitation was sent to a different email address"}`),
+	})
+
+	result, err := acceptInviteHandler(context.Background(), makeReq(map[string]interface{}{
+		"token": "tok-abc",
+	}))
+	assertError(t, result, err, "different email")
+}
+
+func TestAcceptInviteHandler_AuthFailure(t *testing.T) {
+	saveAndRestore(t)
+	setNoAuth()
+
+	result, err := acceptInviteHandler(context.Background(), makeReq(map[string]interface{}{
+		"token": "tok-abc",
+	}))
+	assertError(t, result, err, "not authenticated")
+}
