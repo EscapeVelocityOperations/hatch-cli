@@ -34,8 +34,7 @@ framing.
 
 - [x] T-001/T-002/T-003 — `internal/api/collaborators.go` (types + 6 `*Client` methods) + `collaborators_test.go` (RED confirmed: 7 compile errors before implementation).   ✅ green at TestInviteCollaborator(+MaxReachedError)/TestListCollaborators/TestRemoveCollaborator/TestListPendingInvites/TestAcceptInvite/TestDeclineInvite (607 suite: no regressions). Note: wrote the full implementation once before its test by mistake, caught it, deleted it, and redid RED→GREEN properly.
 - [x] T-004/T-005 — `cmd/collab/collab_test.go` (RED confirmed: 10 compile errors) + `cmd/collab/collab.go` — `hatch collab add <email>|ls|rm <email|id> --app <slug>` (flag-based slug, matching `domain`/`env`'s house convention rather than the bead's positional shorthand). `add`'s success output states the secrets-trust implication (ADR-0022 §"Sharing an egg shares its secrets"). `rm` resolves email→ID client-side (no server remove-by-email endpoint exists).   ✅ green, 14 tests (621 suite: no regressions)
-- [ ] T-006 — RED: `cmd/invite/invite_test.go` — table-driven tests for `ls`/`accept`/`decline`. Fails to compile.
-- [ ] T-007 — GREEN: `cmd/invite/invite.go` — `hatch invite ls|accept|decline [token]`.
+- [x] T-006/T-007 — `cmd/invite/invite_test.go` (RED confirmed: 10 compile errors) + `cmd/invite/invite.go` — `hatch invite ls|accept <token>|decline <token>` (no `--app` flag needed — invites aren't scoped to one egg by the caller, and the token uniquely identifies both).   ✅ green, 13 tests (634 suite: no regressions)
 - [ ] T-008 — Wire `collab.NewCmd()`/`invite.NewCmd()` into `cmd/root/root.go`.
 - [ ] T-009 — Full suite gate (`go build ./...`, `go vet ./...`, `gofmt -l`, `golangci-lint`, `go test ./... -race`), PR, route to reviewer.
 
