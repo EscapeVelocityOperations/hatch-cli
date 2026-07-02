@@ -33,8 +33,7 @@ framing.
 ## Micro-tasks
 
 - [x] T-001/T-002/T-003 — `internal/api/collaborators.go` (types + 6 `*Client` methods) + `collaborators_test.go` (RED confirmed: 7 compile errors before implementation).   ✅ green at TestInviteCollaborator(+MaxReachedError)/TestListCollaborators/TestRemoveCollaborator/TestListPendingInvites/TestAcceptInvite/TestDeclineInvite (607 suite: no regressions). Note: wrote the full implementation once before its test by mistake, caught it, deleted it, and redid RED→GREEN properly.
-- [ ] T-004 — RED: `cmd/collab/collab_test.go` — table-driven tests for `add`/`ls`/`rm` via injectable `Deps` (mirrors `cmd/domain`). Fails to compile.
-- [ ] T-005 — GREEN: `cmd/collab/collab.go` — `hatch collab add|ls|rm <slug> [email|id]`. `add`'s success output states the secrets-trust implication (ADR-0022 §"Sharing an egg shares its secrets" — must be surfaced in CLI copy). `rm` resolves email→ID client-side when given an email.
+- [x] T-004/T-005 — `cmd/collab/collab_test.go` (RED confirmed: 10 compile errors) + `cmd/collab/collab.go` — `hatch collab add <email>|ls|rm <email|id> --app <slug>` (flag-based slug, matching `domain`/`env`'s house convention rather than the bead's positional shorthand). `add`'s success output states the secrets-trust implication (ADR-0022 §"Sharing an egg shares its secrets"). `rm` resolves email→ID client-side (no server remove-by-email endpoint exists).   ✅ green, 14 tests (621 suite: no regressions)
 - [ ] T-006 — RED: `cmd/invite/invite_test.go` — table-driven tests for `ls`/`accept`/`decline`. Fails to compile.
 - [ ] T-007 — GREEN: `cmd/invite/invite.go` — `hatch invite ls|accept|decline [token]`.
 - [ ] T-008 — Wire `collab.NewCmd()`/`invite.NewCmd()` into `cmd/root/root.go`.
