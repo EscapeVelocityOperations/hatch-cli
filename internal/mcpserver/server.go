@@ -136,6 +136,9 @@ func NewServer() *server.MCPServer {
 	s.AddTool(deleteAppTool(), deleteAppHandler)
 	s.AddTool(checkAuthTool(), checkAuthHandler)
 
+	// Onboarding
+	s.AddTool(loginTool(), loginHandler)
+
 	// Energy operations
 	s.AddTool(checkEnergyTool(), checkEnergyHandler)
 	s.AddTool(getAppEnergyTool(), getAppEnergyHandler)

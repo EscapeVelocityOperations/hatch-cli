@@ -149,6 +149,13 @@ func TestNewServer(t *testing.T) {
 	}
 }
 
+func TestNewServer_HasLoginTool(t *testing.T) {
+	s := NewServer()
+	if s.GetTool("login") == nil {
+		t.Fatal("expected NewServer() to register a 'login' tool")
+	}
+}
+
 // --- get_platform_info ---
 
 func TestGetPlatformInfoHandler(t *testing.T) {
