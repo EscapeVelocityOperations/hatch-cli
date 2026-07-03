@@ -17,6 +17,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/telemetry"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/version"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -138,6 +139,7 @@ func NewServer() *server.MCPServer {
 
 	// Onboarding
 	s.AddTool(loginTool(), loginHandler)
+	s.AddTool(getStartedTool(), getStartedHandler)
 
 	// Energy operations
 	s.AddTool(checkEnergyTool(), checkEnergyHandler)
@@ -318,6 +320,45 @@ func getPlatformInfoHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	}
 
 	data, _ := json.MarshalIndent(reqs, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// --- get_started ---
+
+// GetStartedResult is an unauth-friendly orientation summary: where the
+// agent stands (auth status, CLI version) and what to do next.
+type GetStartedResult struct {
+	Authenticated bool   `json:"authenticated"`
+	CLIVersion    string `json:"cli_version"`
+	Quickstart    string `json:"quickstart"`
+	NextAction    string `json:"next_action"`
+}
+
+func getStartedTool() mcp.Tool {
+	return mcp.NewTool("get_started",
+		mcp.WithDescription("Orientation for a new session: whether you're authenticated, the CLI version, and the recommended next step. Works without authentication — call this first if you're unsure what to do."),
+	)
+}
+
+func getStartedHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// A token-read error is treated as "not authenticated" rather than
+	// failing the call — get_started must always return something useful,
+	// even when the config file is unreadable.
+	token, _ := getTokenFunc()
+	authenticated := token != ""
+
+	result := GetStartedResult{
+		Authenticated: authenticated,
+		CLIVersion:    version.Version(),
+		Quickstart:    "Call get_platform_info for supported runtimes, build your project, then call deploy_app with the build output directory, runtime, and start_command.",
+	}
+	if authenticated {
+		result.NextAction = "You're authenticated. Call get_platform_info, then deploy_app to ship your first app."
+	} else {
+		result.NextAction = "login"
+	}
+
+	data, _ := json.MarshalIndent(result, "", "  ")
 	return mcp.NewToolResultText(string(data)), nil
 }
 
