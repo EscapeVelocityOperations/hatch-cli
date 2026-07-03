@@ -40,7 +40,8 @@ jobs:
           COMMIT=$(git rev-parse --short HEAD)
           DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           PKG=github.com/EscapeVelocityOperations/hatch-cli/cmd/root
-          go build -ldflags="-s -w -X ${PKG}.version=${VERSION} -X ${PKG}.commit=${COMMIT} -X ${PKG}.date=${DATE}" -o hatch-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/hatch
+          VERSION_PKG=github.com/EscapeVelocityOperations/hatch-cli/internal/version
+          go build -ldflags="-s -w -X ${VERSION_PKG}.version=${VERSION} -X ${PKG}.commit=${COMMIT} -X ${PKG}.date=${DATE}" -o hatch-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/hatch
 
       - uses: actions/upload-artifact@v4
         with:
