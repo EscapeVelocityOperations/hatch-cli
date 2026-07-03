@@ -18,11 +18,8 @@
   ],
   "mcpServers": {
     "hatch": {
-      "command": "hatch",
-      "args": ["mcp"],
-      "env": {
-        "HATCH_TOKEN": ""
-      }
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hatch-mcp.sh",
+      "args": []
     }
   }
 }
