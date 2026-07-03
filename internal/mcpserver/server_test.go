@@ -205,6 +205,36 @@ func TestCheckAuthHandler_TokenError(t *testing.T) {
 	assertError(t, result, err, "disk read error")
 }
 
+// D2: the unauth error copy must point an agent at the login tool, the
+// HATCH_TOKEN env var, and the terminal fallback — not just "run 'hatch login'".
+func TestNewClient_UnauthErrorCopy(t *testing.T) {
+	saveAndRestore(t)
+	setNoAuth()
+
+	_, err := newClient()
+	if err == nil {
+		t.Fatal("expected error when not authenticated")
+	}
+	for _, want := range []string{"login' MCP tool", "HATCH_TOKEN", "'hatch login' in a terminal"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("expected newClient() unauth error to mention %q, got: %s", want, err.Error())
+		}
+	}
+}
+
+func TestCheckAuthHandler_UnauthErrorCopy(t *testing.T) {
+	saveAndRestore(t)
+	setNoAuth()
+
+	result, _ := checkAuthHandler(context.Background(), makeReq(nil))
+	text := resultText(t, result)
+	for _, want := range []string{"login' MCP tool", "HATCH_TOKEN", "'hatch login' in a terminal"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("expected check_auth unauth error to mention %q, got: %s", want, text)
+		}
+	}
+}
+
 func TestCheckAuthHandler_TokenRedaction(t *testing.T) {
 	saveAndRestore(t)
 	setAuthError(fmt.Errorf("bad token: hatch_secretABC123"))

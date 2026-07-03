@@ -209,7 +209,7 @@ func newClient() (*api.Client, error) {
 		return nil, fmt.Errorf("failed to read auth token: %w", err)
 	}
 	if token == "" {
-		return nil, fmt.Errorf("not authenticated - run 'hatch login', set HATCH_TOKEN, or use --token")
+		return nil, fmt.Errorf("not authenticated - call the 'login' MCP tool to sign in or create an account in the browser (alternatives: set HATCH_TOKEN, or run 'hatch login' in a terminal)")
 	}
 	return newAPIClient(token), nil
 }
@@ -1356,7 +1356,7 @@ func checkAuthHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	}
 
 	if token == "" {
-		return toolError("failed to check auth: not authenticated - run 'hatch login', set HATCH_TOKEN, or use --token")
+		return toolError("failed to check auth: not authenticated - call the 'login' MCP tool to sign in or create an account in the browser (alternatives: set HATCH_TOKEN, or run 'hatch login' in a terminal)")
 	}
 
 	// Determine token source
