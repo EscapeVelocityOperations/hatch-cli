@@ -1,11 +1,24 @@
 #!/bin/sh
 set -e
 
+# Redirect this script's own stdout to stderr for the rest of its run: when
+# invoked nested inside the hatch-mcp.sh bootstrap wrapper (D4), stdout is
+# inherited straight through to the live MCP JSON-RPC channel — any
+# installer banner/progress/prompt text landing there would corrupt the
+# protocol handshake for every first-time bootstrap-via-plugin user. This
+# covers every plain `echo`/`printf` in the script in one place, rather than
+# relying on each one to remember `>&2` individually. It does NOT break
+# ask()'s `$(ask ...)` return-value capture below: command substitution
+# always captures its own subshell's stdout, independent of this outer
+# redirect.
+exec >&2
+
 REPO="EscapeVelocityOperations/hatch-cli"
 BINARY_NAME="hatch"
 
-# Colors (disabled if not a terminal)
-if [ -t 1 ]; then
+# Colors (disabled if not a terminal). Checked against fd 2 (stderr), not
+# fd 1: that's the fd info/warn/ok/dim below actually write to.
+if [ -t 2 ]; then
     BOLD='\033[1m'
     DIM='\033[2m'
     GREEN='\033[32m'
@@ -16,10 +29,15 @@ else
     BOLD='' DIM='' GREEN='' YELLOW='' CYAN='' RESET=''
 fi
 
-info()  { printf "${CYAN}==>${RESET} ${BOLD}%s${RESET}\n" "$1"; }
-warn()  { printf "${YELLOW}  ⚠${RESET}  %s\n" "$1"; }
-ok()    { printf "${GREEN}  ✓${RESET}  %s\n" "$1"; }
-dim()   { printf "${DIM}     %s${RESET}\n" "$1"; }
+# All diagnostic/progress output goes to stderr, never stdout: when this
+# script runs nested inside the hatch-mcp.sh bootstrap wrapper (D4), stdout
+# is inherited straight through to the live MCP JSON-RPC channel — any
+# installer chatter landing there would corrupt the protocol handshake for
+# every first-time bootstrap-via-plugin user.
+info()  { printf "${CYAN}==>${RESET} ${BOLD}%s${RESET}\n" "$1" >&2; }
+warn()  { printf "${YELLOW}  ⚠${RESET}  %s\n" "$1" >&2; }
+ok()    { printf "${GREEN}  ✓${RESET}  %s\n" "$1" >&2; }
+dim()   { printf "${DIM}     %s${RESET}\n" "$1" >&2; }
 
 # Non-interactive detection (curl | sh, or the hatch-mcp.sh bootstrap wrapper,
 # has no TTY on stdin — and in the wrapper's case stdin is the live MCP stdio

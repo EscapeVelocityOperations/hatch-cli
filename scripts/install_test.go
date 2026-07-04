@@ -100,8 +100,37 @@ func TestInstallSh_GoodChecksum_Installs(t *testing.T) {
 	if info.Mode()&0111 == 0 {
 		t.Errorf("installed binary %s is not executable", installed)
 	}
-	if !strings.Contains(stdout, "Checksum verified") {
-		t.Errorf("expected stdout to confirm checksum verification, got:\n%s", stdout)
+	if !strings.Contains(stderr, "Checksum verified") {
+		t.Errorf("expected stderr to confirm checksum verification, got:\n%s", stderr)
+	}
+}
+
+// TestInstallSh_StdoutStaysClean reproduces the real D4 bootstrap-via-MCP
+// scenario one level further than TestInstallSh_NonInteractive_DoesNotHangOnOpenStdin:
+// hatch-mcp.sh runs `sh "$tmp_installer"` with stdout INHERITED — during a
+// real MCP-subprocess bootstrap, that stdout IS the live MCP JSON-RPC
+// channel Claude Code is reading from. install.sh's info()/warn()/ok()/dim()
+// helpers print with a bare `printf` (no `>&2`), so its entire installer
+// banner/progress UI lands on stdout — which would corrupt the MCP
+// handshake for every single first-time bootstrap, the exact case D4/D5
+// exist to support. This was invisible to the other tests in this file:
+// they check specific substrings are present somewhere in stdout/stderr,
+// never which fd carries them.
+func TestInstallSh_StdoutStaysClean(t *testing.T) {
+	stubBin := t.TempDir()
+	home := t.TempDir()
+	installDir := t.TempDir()
+
+	binary := "#!/bin/sh\necho ok\n"
+	checksums := fmt.Sprintf("%s  %s\n", sha256Hex(binary), releaseFilename())
+
+	stdout, _, err := runInstaller(t, stubBin, home, installDir, binary, checksums, false)
+	if err != nil {
+		t.Fatalf("install.sh failed: %v", err)
+	}
+
+	if strings.TrimSpace(stdout) != "" {
+		t.Errorf("install.sh wrote to stdout — this would corrupt the MCP stdio channel during a real bootstrap. stdout:\n%s", stdout)
 	}
 }
 
