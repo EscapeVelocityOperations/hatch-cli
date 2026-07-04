@@ -21,8 +21,22 @@ warn()  { printf "${YELLOW}  ⚠${RESET}  %s\n" "$1"; }
 ok()    { printf "${GREEN}  ✓${RESET}  %s\n" "$1"; }
 dim()   { printf "${DIM}     %s${RESET}\n" "$1"; }
 
+# Non-interactive detection (curl | sh, or the hatch-mcp.sh bootstrap wrapper,
+# has no TTY on stdin — and in the wrapper's case stdin is the live MCP stdio
+# stream, not simply closed: an unconditional `read` here would block on it
+# forever, or steal a line of live protocol traffic).
+INTERACTIVE=false
+if [ -t 0 ]; then
+    INTERACTIVE=true
+fi
+
 # Prompt with default value. Usage: ask "question" "default"
+# In non-interactive mode, returns default silently without touching stdin.
 ask() {
+    if [ "$INTERACTIVE" = false ]; then
+        echo "$2"
+        return
+    fi
     printf "${BOLD}%s${RESET} " "$1" >&2
     read -r answer
     echo "${answer:-$2}"
@@ -69,9 +83,41 @@ choose_install_dir() {
     esac
 }
 
+# Fail-closed sha256 verification (D5): aborts if there is no checksums.txt
+# entry for filename, or if it doesn't match bin_path's actual digest.
+# Handles both GNU coreutils (sha256sum, Linux) and macOS (shasum -a 256).
+verify_checksum() {
+    bin_path="$1"
+    filename="$2"
+    checksums_file="$3"
+
+    expected=$(awk -v f="$filename" '$2 == f { print $1 }' "$checksums_file")
+    if [ -z "$expected" ]; then
+        echo "Error: no checksum entry for ${filename} in checksums.txt — aborting" >&2
+        exit 1
+    fi
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "$bin_path" | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+        actual=$(shasum -a 256 "$bin_path" | awk '{print $1}')
+    else
+        echo "Error: sha256sum or shasum required for checksum verification — aborting" >&2
+        exit 1
+    fi
+
+    if [ "$actual" != "$expected" ]; then
+        echo "Error: checksum mismatch for ${filename} (expected ${expected}, got ${actual}) — aborting" >&2
+        exit 1
+    fi
+
+    ok "Checksum verified"
+}
+
 download_binary() {
     FILENAME="${BINARY_NAME}-${OS}-${ARCH}"
     URL="https://github.com/${REPO}/releases/latest/download/${FILENAME}"
+    CHECKSUMS_URL="https://github.com/${REPO}/releases/latest/download/checksums.txt"
 
     info "Downloading ${BINARY_NAME} for ${OS}/${ARCH}..."
 
@@ -80,12 +126,16 @@ download_binary() {
 
     if command -v curl >/dev/null 2>&1; then
         curl -fsSL -o "${TMPDIR}/${BINARY_NAME}" "$URL"
+        curl -fsSL -o "${TMPDIR}/checksums.txt" "$CHECKSUMS_URL"
     elif command -v wget >/dev/null 2>&1; then
         wget -qO "${TMPDIR}/${BINARY_NAME}" "$URL"
+        wget -qO "${TMPDIR}/checksums.txt" "$CHECKSUMS_URL"
     else
         echo "Error: curl or wget required" >&2
         exit 1
     fi
+
+    verify_checksum "${TMPDIR}/${BINARY_NAME}" "$FILENAME" "${TMPDIR}/checksums.txt"
 
     chmod +x "${TMPDIR}/${BINARY_NAME}"
 }

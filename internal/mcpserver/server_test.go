@@ -149,6 +149,73 @@ func TestNewServer(t *testing.T) {
 	}
 }
 
+func TestNewServer_HasLoginTool(t *testing.T) {
+	s := NewServer()
+	if s.GetTool("login") == nil {
+		t.Fatal("expected NewServer() to register a 'login' tool")
+	}
+}
+
+func TestNewServer_HasGetStartedTool(t *testing.T) {
+	s := NewServer()
+	if s.GetTool("get_started") == nil {
+		t.Fatal("expected NewServer() to register a 'get_started' tool")
+	}
+}
+
+// --- get_started ---
+
+func TestGetStartedHandler_Unauthenticated(t *testing.T) {
+	saveAndRestore(t)
+	setNoAuth()
+
+	result, err := getStartedHandler(context.Background(), makeReq(nil))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, `"authenticated": false`) {
+		t.Errorf("expected authenticated=false, got: %s", text)
+	}
+	if !strings.Contains(text, `"cli_version": "dev"`) {
+		t.Errorf("expected cli_version in output, got: %s", text)
+	}
+	if !strings.Contains(text, "deploy_app") {
+		t.Errorf("expected quickstart to mention deploy_app, got: %s", text)
+	}
+	if !strings.Contains(text, `"next_action": "login"`) {
+		t.Errorf("expected next_action=login when unauthenticated, got: %s", text)
+	}
+}
+
+func TestGetStartedHandler_Authenticated(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("hatch_tok")
+
+	result, err := getStartedHandler(context.Background(), makeReq(nil))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, `"authenticated": true`) {
+		t.Errorf("expected authenticated=true, got: %s", text)
+	}
+	if strings.Contains(text, `"next_action": "login"`) {
+		t.Errorf("expected deploy guidance (not 'login') as next_action when authenticated, got: %s", text)
+	}
+	if !strings.Contains(text, "deploy_app") {
+		t.Errorf("expected deploy guidance to mention deploy_app, got: %s", text)
+	}
+}
+
+func TestGetStartedHandler_TokenErrorTreatedAsUnauthenticated(t *testing.T) {
+	saveAndRestore(t)
+	setAuthError(fmt.Errorf("disk read error"))
+
+	result, err := getStartedHandler(context.Background(), makeReq(nil))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, `"authenticated": false`) {
+		t.Errorf("expected a token-read error to degrade to authenticated=false (get_started must never fail), got: %s", text)
+	}
+}
+
 // --- get_platform_info ---
 
 func TestGetPlatformInfoHandler(t *testing.T) {
@@ -196,6 +263,36 @@ func TestCheckAuthHandler_TokenError(t *testing.T) {
 
 	result, err := checkAuthHandler(context.Background(), makeReq(nil))
 	assertError(t, result, err, "disk read error")
+}
+
+// D2: the unauth error copy must point an agent at the login tool, the
+// HATCH_TOKEN env var, and the terminal fallback — not just "run 'hatch login'".
+func TestNewClient_UnauthErrorCopy(t *testing.T) {
+	saveAndRestore(t)
+	setNoAuth()
+
+	_, err := newClient()
+	if err == nil {
+		t.Fatal("expected error when not authenticated")
+	}
+	for _, want := range []string{"login' MCP tool", "HATCH_TOKEN", "'hatch login' in a terminal"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("expected newClient() unauth error to mention %q, got: %s", want, err.Error())
+		}
+	}
+}
+
+func TestCheckAuthHandler_UnauthErrorCopy(t *testing.T) {
+	saveAndRestore(t)
+	setNoAuth()
+
+	result, _ := checkAuthHandler(context.Background(), makeReq(nil))
+	text := resultText(t, result)
+	for _, want := range []string{"login' MCP tool", "HATCH_TOKEN", "'hatch login' in a terminal"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("expected check_auth unauth error to mention %q, got: %s", want, text)
+		}
+	}
 }
 
 func TestCheckAuthHandler_TokenRedaction(t *testing.T) {

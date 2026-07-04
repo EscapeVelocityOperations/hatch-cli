@@ -4,11 +4,26 @@ Command-line interface for deploying and managing applications on the [Hatch](ht
 
 ## Installation
 
-### Homebrew (macOS)
+### Claude Code plugin (recommended)
 
-```sh
-brew install EscapeVelocityOperations/tap/hatch
 ```
+/plugin marketplace add EscapeVelocityOperations/hatch-cli
+/plugin install hatch@hatch
+```
+
+Then just ask Claude to deploy — no separate install or auth step
+required. The plugin ships an MCP server wrapper that bootstraps the
+`hatch` binary automatically if it isn't already on your machine
+(installs to `~/.hatch/bin`, no sudo, never auto-updates after that).
+The first tool call that needs auth (e.g. `deploy_app`) will prompt you
+to run the `login` tool, which opens a browser for sign-in or account
+creation — or call `get_started` any time for an unauthenticated status
+check. Run `/hatch:onboard` for a guided walkthrough of your first
+deploy.
+
+Windows: the wrapper bootstrap script is POSIX-only — install the CLI
+manually (see below) and configure the MCP server by hand (see
+[AI Integration](#ai-integration)).
 
 ### Install script (Linux/macOS)
 
@@ -216,6 +231,11 @@ hatch open             # auto-detect from git remote
 
 ### AI Integration
 
+The [Claude Code plugin](#claude-code-plugin-recommended) is the
+easiest way to use Hatch from Claude — it configures the MCP server for
+you, including the no-binary bootstrap wrapper. Use the steps below for
+other MCP clients, Windows, or a manual setup.
+
 #### `hatch mcp`
 
 Start a Model Context Protocol (MCP) server over stdio. This exposes Hatch CLI tools for use by AI assistants like Claude.
@@ -236,6 +256,14 @@ Add to your AI assistant's MCP configuration:
   }
 }
 ```
+
+Two tools are agent-actionable without any prior setup: `login` (opens
+a browser for sign-in or account creation — never requires a
+pre-existing token) and `get_started` (auth status, CLI version, and a
+recommended next step; safe to call unauthenticated). Every other tool
+mirrors a CLI command above (`list_apps`, `deploy_app`, `get_status`,
+`get_logs`, and so on) and returns the same agent-actionable error
+naming `login` if you're not authenticated yet.
 
 ### Utility
 

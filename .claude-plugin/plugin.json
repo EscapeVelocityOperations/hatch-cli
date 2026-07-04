@@ -1,6 +1,6 @@
 {
   "name": "hatch",
-  "version": "0.12.0",
+  "version": "0.18.0",
   "description": "Hatch PaaS deployment and management tools for Claude Code",
   "author": {
     "name": "Escape Velocity Operations"
@@ -18,11 +18,8 @@
   ],
   "mcpServers": {
     "hatch": {
-      "command": "hatch",
-      "args": ["mcp"],
-      "env": {
-        "HATCH_TOKEN": ""
-      }
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hatch-mcp.sh",
+      "args": []
     }
   }
 }

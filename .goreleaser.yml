@@ -5,7 +5,7 @@ builds:
     binary: hatch
     ldflags:
       - -s -w
-      - -X github.com/EscapeVelocityOperations/hatch-cli/cmd/root.version={{.Version}}
+      - -X github.com/EscapeVelocityOperations/hatch-cli/internal/version.version={{.Version}}
       - -X github.com/EscapeVelocityOperations/hatch-cli/cmd/root.commit={{.Commit}}
       - -X github.com/EscapeVelocityOperations/hatch-cli/cmd/root.date={{.Date}}
     goos:

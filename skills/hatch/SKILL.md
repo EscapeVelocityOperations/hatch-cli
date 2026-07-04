@@ -1,25 +1,9 @@
-package mcpserver
+---
+name: hatch
+description: Deploy, manage, and monitor applications on Hatch PaaS. Use when the user asks to deploy to hatch, host a project on hatch, or manage an app at gethatch.eu.
+---
 
-import "fmt"
-
-//go:generate go run gen_skill.go
-
-// skillFrontmatterDescription carries the trigger phrases Claude Code
-// matches against to decide when to load the hatch skill.
-const skillFrontmatterDescription = "Deploy, manage, and monitor applications on Hatch PaaS. Use when the user asks to deploy to hatch, host a project on hatch, or manage an app at gethatch.eu."
-
-// GenerateSkillMD renders the full skills/hatch/SKILL.md content: YAML
-// frontmatter (name + trigger-phrase description) followed by SkillMD, the
-// single source of truth also served as the hatch://skill MCP resource
-// (D3 — go:embed can't reach ../../skills from this package, so the two
-// copies are kept in sync via `go generate` + TestSkillMDSyncGuard).
-func GenerateSkillMD() string {
-	return fmt.Sprintf("---\nname: hatch\ndescription: %s\n---\n\n%s", skillFrontmatterDescription, SkillMD)
-}
-
-// SkillMD contains the Hatch platform technical reference for AI agents.
-// This is served as an MCP resource at hatch://skill.
-const SkillMD = `# Hatch Technical Reference
+# Hatch Technical Reference
 
 Deploy flow, runtimes, environment variables, and common issues.
 Optimized for AI agents.
@@ -29,15 +13,15 @@ Optimized for AI agents.
 1. Build the project locally (npm run build, go build, etc.)
 2. Deploy the build output directory:
 
-` + "```" + `bash
+```bash
 hatch deploy --deploy-target <build-dir> --runtime <node|python|go|rust|php|bun|static> --start-command "<cmd>"
-` + "```" + `
+```
 
 Or via MCP:
 
-` + "```" + `
+```
 deploy_app({ deploy_target: "/path/to/build", runtime: "node", start_command: "node server/index.mjs" })
-` + "```" + `
+```
 
 ## Runtimes
 
@@ -101,53 +85,14 @@ Hatch containers run **linux/amd64**. All binaries and native modules must targe
 
 | Tool | Description |
 |---|---|
-| ` + "`deploy_app`" + ` | Deploy a pre-built directory (tar + upload) |
-| ` + "`get_platform_info`" + ` | Runtimes, artifact format, platform constraints |
-| ` + "`list_apps`" + ` | List all your deployed apps |
-| ` + "`add_database`" + ` | Provisions PostgreSQL, injects DATABASE_URL |
-| ` + "`add_storage`" + ` | S3-compatible bucket |
-| ` + "`get_logs`" + ` | Returns recent application logs |
-| ` + "`get_status`" + ` | App running status, URL, region |
-| ` + "`set_env`" + ` | Set environment variables |
-| ` + "`get_env`" + ` | List all environment variables (pass show_secrets: true to unmask) |
-| ` + "`add_domain`" + ` | Custom domain setup with DNS instructions |
-| ` + "`get_database_url`" + ` | Get DATABASE_URL for an app |
-`
-
-// ClaudeMDContent is the user-facing Hatch deployment guide written by `hatch init`.
-const ClaudeMDContent = `## Hatch Deployment
-
-This project deploys to [Hatch](https://gethatch.eu), an EU-hosted PaaS.
-
-### Deploy
-Build your project, then deploy the output:
-` + "```" + `bash
-hatch deploy --deploy-target <build-dir> --runtime <node|python|go|rust|php|bun|static> --start-command "<cmd>"
-` + "```" + `
-
-### Runtimes
-| Runtime | For | Example start command |
-|---------|-----|----------------------|
-| node | Nuxt, Next, Express | ` + "`node server/index.mjs`" + ` |
-| python | FastAPI, Django, Flask | ` + "`uvicorn main:app --host 0.0.0.0 --port 8080`" + ` |
-| go | Go binaries | ` + "`./server`" + ` |
-| rust | Rust binaries | ` + "`./server`" + ` |
-| php | Laravel, Symfony, WordPress | ` + "`apache2-foreground`" + ` |
-| bun | Elysia, Hono, Bun apps | ` + "`bun run index.ts`" + ` |
-| static | HTML/CSS/JS | (none needed) |
-
-### Environment Variables (auto-injected)
-- ` + "`PORT`" + ` — Always 8080. Your app must listen on this port.
-- ` + "`DATABASE_URL`" + ` — PostgreSQL connection string (if provisioned via ` + "`hatch db`" + ` or MCP ` + "`add_database`" + `).
-
-### Platform
-Hatch runs **linux/amd64**. Go/Rust: cross-compile. Node.js: deploy without node_modules if native addons present. Python: deploy without venv.
-
-### MCP Tools (via ` + "`hatch mcp`" + `)
-Use these tools to manage your deployment: ` + "`deploy_app`" + `, ` + "`get_logs`" + `, ` + "`get_status`" + `, ` + "`restart_app`" + `, ` + "`set_env`" + `, ` + "`add_database`" + `, ` + "`add_domain`" + `.
-
-Run ` + "`hatch mcp`" + ` or configure in ` + "`.claude/settings.json`" + `:
-` + "```" + `json
-{ "mcpServers": { "hatch": { "command": "hatch", "args": ["mcp"] } } }
-` + "```" + `
-`
+| `deploy_app` | Deploy a pre-built directory (tar + upload) |
+| `get_platform_info` | Runtimes, artifact format, platform constraints |
+| `list_apps` | List all your deployed apps |
+| `add_database` | Provisions PostgreSQL, injects DATABASE_URL |
+| `add_storage` | S3-compatible bucket |
+| `get_logs` | Returns recent application logs |
+| `get_status` | App running status, URL, region |
+| `set_env` | Set environment variables |
+| `get_env` | List all environment variables (pass show_secrets: true to unmask) |
+| `add_domain` | Custom domain setup with DNS instructions |
+| `get_database_url` | Get DATABASE_URL for an app |
