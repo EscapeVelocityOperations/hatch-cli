@@ -21,8 +21,22 @@ warn()  { printf "${YELLOW}  ⚠${RESET}  %s\n" "$1"; }
 ok()    { printf "${GREEN}  ✓${RESET}  %s\n" "$1"; }
 dim()   { printf "${DIM}     %s${RESET}\n" "$1"; }
 
+# Non-interactive detection (curl | sh, or the hatch-mcp.sh bootstrap wrapper,
+# has no TTY on stdin — and in the wrapper's case stdin is the live MCP stdio
+# stream, not simply closed: an unconditional `read` here would block on it
+# forever, or steal a line of live protocol traffic).
+INTERACTIVE=false
+if [ -t 0 ]; then
+    INTERACTIVE=true
+fi
+
 # Prompt with default value. Usage: ask "question" "default"
+# In non-interactive mode, returns default silently without touching stdin.
 ask() {
+    if [ "$INTERACTIVE" = false ]; then
+        echo "$2"
+        return
+    fi
     printf "${BOLD}%s${RESET} " "$1" >&2
     read -r answer
     echo "${answer:-$2}"

@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // curlStubBody serves fixed binary/checksums content regardless of URL,
@@ -137,6 +138,83 @@ func TestInstallSh_MissingChecksums_Aborts(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(installDir, "hatch")); statErr == nil {
 		t.Errorf("binary must not be installed when checksums.txt cannot be fetched")
+	}
+}
+
+// TestInstallSh_NonInteractive_DoesNotHangOnOpenStdin reproduces the real
+// D4 bootstrap path: hatch-mcp.sh execs `sh "$tmp_installer"` with stdin
+// INHERITED, not redirected — when the wrapper runs as an MCP server
+// subprocess, that inherited stdin is the live MCP stdio stream, not a
+// closed/EOF pipe. PATH deliberately excludes installDir here so
+// check_path's "not in PATH, add it now? [Y/n]" prompt is reached (unlike
+// the other tests in this file, which sidestep every prompt). Stdin is an
+// open, never-written, never-closed pipe: a real TTY-less `ask()` call
+// would call `read -r answer` and block on it forever (or, worse, steal a
+// line of live MCP protocol traffic in production). A safe implementation
+// must detect the non-interactive stdin up front and skip straight to the
+// default without ever reading.
+//
+// Scope note: this only asserts against the hang/steal risk. The guard
+// still returns the SAME "y" default a human would get by pressing Enter
+// (so check_path may still append a PATH export to the rc file) — that's
+// the behavior this port intentionally preserves from the source it's
+// synced from (hatch-landing/public/install); silencing that default
+// specifically for non-interactive runs is a separate, lower-severity
+// follow-up, not this fix.
+func TestInstallSh_NonInteractive_DoesNotHangOnOpenStdin(t *testing.T) {
+	stubBin := t.TempDir()
+	home := t.TempDir()
+	installDir := t.TempDir() // fresh dir, deliberately NOT added to PATH below
+
+	writeStub(t, stubBin, "curl", curlStubBody)
+
+	binary := "#!/bin/sh\necho ok\n"
+	checksums := fmt.Sprintf("%s  %s\n", sha256Hex(binary), releaseFilename())
+
+	// A real OS pipe (*os.File on both ends), not io.Pipe(): when Stdin is
+	// an *os.File, Go connects the child's fd 0 to it directly and Wait()
+	// only waits on the CHILD process exiting. io.Pipe()'s Reader is a
+	// plain io.Reader, which instead makes Go spawn a background copy
+	// goroutine that Wait() also blocks on — that goroutine would block
+	// forever on our never-written, never-closed write end regardless of
+	// whether the child already exited, which would make this test hang
+	// on its OWN plumbing rather than on anything install.sh does.
+	pr, pw, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		t.Fatalf("os.Pipe: %v", pipeErr)
+	}
+	defer pr.Close()
+	defer pw.Close()
+
+	cmd := exec.Command("sh", "install.sh")
+	cmd.Env = []string{
+		"HOME=" + home,
+		"PATH=" + stubBin + ":/bin:/usr/bin", // installDir NOT included
+		"HATCH_INSTALL_DIR=" + installDir,
+		"SHELL=/bin/sh",
+		"STUB_BINARY_CONTENT=" + binary,
+		"STUB_CHECKSUMS_CONTENT=" + checksums,
+	}
+	cmd.Stdin = pr
+
+	var outBuf, errBuf strings.Builder
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("install.sh exited with error: %v\nstdout:\n%s\nstderr:\n%s", err, outBuf.String(), errBuf.String())
+		}
+	case <-time.After(3 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatalf("install.sh hung instead of detecting non-interactive stdin and defaulting silently\nstdout so far:\n%s\nstderr so far:\n%s", outBuf.String(), errBuf.String())
 	}
 }
 
