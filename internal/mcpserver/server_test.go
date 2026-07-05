@@ -163,6 +163,58 @@ func TestNewServer_HasGetStartedTool(t *testing.T) {
 	}
 }
 
+// --- hatch://tos resource ---
+
+func withTosResourceURL(t *testing.T, url string) {
+	t.Helper()
+	orig := tosResourceURL
+	tosResourceURL = url
+	t.Cleanup(func() { tosResourceURL = orig })
+}
+
+func TestTosResourceHandler_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("# Hatch TOS (agent version)"))
+	}))
+	defer srv.Close()
+	withTosResourceURL(t, srv.URL)
+
+	contents, err := tosResourceHandler(context.Background(), mcp.ReadResourceRequest{})
+	if err != nil {
+		t.Fatalf("tosResourceHandler: %v", err)
+	}
+	if len(contents) != 1 {
+		t.Fatalf("expected 1 resource content, got %d", len(contents))
+	}
+	tc, ok := contents[0].(mcp.TextResourceContents)
+	if !ok {
+		t.Fatalf("expected TextResourceContents, got %T", contents[0])
+	}
+	if tc.Text != "# Hatch TOS (agent version)" {
+		t.Errorf("Text = %q, want the TOS body", tc.Text)
+	}
+}
+
+// A non-200 must error out rather than pass the error page through as if it
+// were the TOS text (recon-found bug, h-e2hf T-025).
+func TestTosResourceHandler_NonOKStatusReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("<html>Internal Server Error</html>"))
+	}))
+	defer srv.Close()
+	withTosResourceURL(t, srv.URL)
+
+	_, err := tosResourceHandler(context.Background(), mcp.ReadResourceRequest{})
+	if err == nil {
+		t.Fatal("expected an error for a non-200 TOS response")
+	}
+	if strings.Contains(err.Error(), "<html>") {
+		t.Errorf("error must not embed the raw error-page body, got: %v", err)
+	}
+}
+
 // --- get_started ---
 
 func TestGetStartedHandler_Unauthenticated(t *testing.T) {

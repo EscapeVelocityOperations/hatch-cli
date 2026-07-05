@@ -181,16 +181,22 @@ func skillResourceHandler(ctx context.Context, req mcp.ReadResourceRequest) ([]m
 	}, nil
 }
 
+// tosResourceURL is a var (not a const) so tests can point it at an
+// httptest.Server.
+var tosResourceURL = "https://gethatch.eu/api/tos/agents"
+
 // tosResourceHandler fetches the current TOS from the hatch-landing API.
 func tosResourceHandler(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
-	tosURL := "https://gethatch.eu/api/tos/agents"
-
 	httpClient := &http.Client{Timeout: 10 * time.Second}
-	resp, err := httpClient.Get(tosURL)
+	resp, err := httpClient.Get(tosResourceURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch TOS: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to fetch TOS: server returned %d", resp.StatusCode)
+	}
 
 	body := new(bytes.Buffer)
 	body.ReadFrom(resp.Body)
