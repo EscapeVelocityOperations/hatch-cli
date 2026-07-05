@@ -1,6 +1,6 @@
 {
   "name": "hatch",
-  "version": "0.18.0",
+  "version": "0.18.1",
   "description": "Hatch PaaS deployment and management tools for Claude Code",
   "author": {
     "name": "Escape Velocity Operations"
