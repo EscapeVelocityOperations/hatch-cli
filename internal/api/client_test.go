@@ -86,6 +86,68 @@ func TestGetCronRunLogs(t *testing.T) {
 	}
 }
 
+// h-e2hf/h-gveh: GetWhoami hits the read-only, TOS-exempt identity endpoint so
+// login/check_auth/get_started can surface which account is authenticated and
+// whether TOS acceptance is recorded, without an extra query on the server.
+func TestGetWhoami(t *testing.T) {
+	var gotPath, gotMethod, gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"email":"eric@voxist.com","tos_accepted":true,"tos_accepted_at":"2026-06-01T00:00:00Z","created_at":"2026-05-01T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+
+	whoami, err := c.GetWhoami()
+	if err != nil {
+		t.Fatalf("GetWhoami: %v", err)
+	}
+	if gotMethod != http.MethodGet {
+		t.Errorf("method = %q, want GET", gotMethod)
+	}
+	if gotPath != "/v1/account/whoami" {
+		t.Errorf("path = %q, want /v1/account/whoami", gotPath)
+	}
+	if gotAuth != "Bearer tok123" {
+		t.Errorf("Authorization = %q, want Bearer tok123", gotAuth)
+	}
+	if whoami.Email != "eric@voxist.com" {
+		t.Errorf("Email = %q, want eric@voxist.com", whoami.Email)
+	}
+	if !whoami.TosAccepted {
+		t.Error("TosAccepted = false, want true")
+	}
+}
+
+func TestGetWhoami_NilTosAcceptedAt(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"email":"nobody@example.com","tos_accepted":false,"tos_accepted_at":null,"created_at":"2026-05-01T00:00:00Z"}`))
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+
+	whoami, err := c.GetWhoami()
+	if err != nil {
+		t.Fatalf("GetWhoami: %v", err)
+	}
+	if whoami.TosAccepted {
+		t.Error("TosAccepted = true, want false")
+	}
+	if whoami.TosAcceptedAt != nil {
+		t.Errorf("TosAcceptedAt = %v, want nil", whoami.TosAcceptedAt)
+	}
+}
+
 // h-urxw: ListKeys must hit the server's real route GET /v1/users/keys (the CLI
 // used /v1/keys which 404s) and decode the server shape {id,name,created_at,
 // last_used_at} — created_at/last_used_at are RFC3339 strings parsed into time.Time.

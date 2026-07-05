@@ -795,6 +795,32 @@ func (c *Client) CreateKey(name string) (string, error) {
 	return created.Token, nil
 }
 
+// WhoamiResult is the authenticated user's identity and TOS-acceptance state
+// (GET /v1/account/whoami — a read, reachable even before acceptance).
+type WhoamiResult struct {
+	Email         string  `json:"email"`
+	TosAccepted   bool    `json:"tos_accepted"`
+	TosAcceptedAt *string `json:"tos_accepted_at"`
+	CreatedAt     string  `json:"created_at"`
+}
+
+// GetWhoami returns the authenticated user's identity and TOS-acceptance
+// state (h-e2hf/h-gveh), used by login/check_auth/get_started to surface
+// which account is authenticated.
+func (c *Client) GetWhoami() (*WhoamiResult, error) {
+	resp, err := c.do("GET", "/account/whoami", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result WhoamiResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return &result, nil
+}
+
 // GetAppStatus returns the raw JSON status response for an app.
 // This includes app info, last deployment status, and custom domains.
 func (c *Client) GetAppStatus(slug string) (json.RawMessage, error) {
