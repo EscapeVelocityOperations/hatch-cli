@@ -156,15 +156,25 @@ func clearLoginFlow(flow *loginFlow) {
 // Never includes the token itself (telemetry via toolError is a separate,
 // error-only path). An energy-fetch failure degrades to a bare
 // "Authenticated." — it must never fail the login after the token is saved.
+// A whoami failure similarly degrades: the identity prefix is just omitted,
+// never surfaced as an error (h-gveh D7).
 func loginSuccessResult(token string) *mcp.CallToolResult {
 	client := newAPIClient(token)
+
+	prefix := "Authenticated"
+	if whoami, err := client.GetWhoami(); err == nil {
+		if masked := maskEmail(whoami.Email); masked != "" {
+			prefix = fmt.Sprintf("Authenticated as %s", masked)
+		}
+	}
+
 	energy, err := client.GetAccountEnergy()
 	if err != nil {
-		return mcp.NewToolResultText("Authenticated.")
+		return mcp.NewToolResultText(prefix + ".")
 	}
 	return mcp.NewToolResultText(fmt.Sprintf(
-		"Authenticated. Plan: %s (daily %d/%d min, eggs %d/%d)",
-		energy.Tier, energy.DailyRemaining, energy.DailyLimit,
+		"%s. Plan: %s (daily %d/%d min, eggs %d/%d)",
+		prefix, energy.Tier, energy.DailyRemaining, energy.DailyLimit,
 		energy.EggsActive, energy.EggsLimit))
 }
 

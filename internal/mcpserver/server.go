@@ -327,11 +327,15 @@ func getPlatformInfoHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 
 // GetStartedResult is an unauth-friendly orientation summary: where the
 // agent stands (auth status, CLI version) and what to do next.
+// AccountEmail/TosAccepted are populated only when authenticated AND whoami
+// succeeds (h-gveh D7); a whoami failure omits them rather than erroring.
 type GetStartedResult struct {
 	Authenticated bool   `json:"authenticated"`
 	CLIVersion    string `json:"cli_version"`
 	Quickstart    string `json:"quickstart"`
 	NextAction    string `json:"next_action"`
+	AccountEmail  string `json:"account_email,omitempty"`
+	TosAccepted   *bool  `json:"tos_accepted,omitempty"`
 }
 
 func getStartedTool() mcp.Tool {
@@ -354,6 +358,13 @@ func getStartedHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 	}
 	if authenticated {
 		result.NextAction = "You're authenticated. Call get_platform_info, then deploy_app to ship your first app."
+		if whoami, err := newAPIClient(token).GetWhoami(); err == nil {
+			if masked := maskEmail(whoami.Email); masked != "" {
+				result.AccountEmail = masked
+			}
+			tosAccepted := whoami.TosAccepted
+			result.TosAccepted = &tosAccepted
+		}
 	} else {
 		result.NextAction = "login"
 	}
@@ -1408,7 +1419,22 @@ func checkAuthHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		source = "config file"
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Authenticated. Token source: %s", source)), nil
+	text := fmt.Sprintf("Authenticated. Token source: %s", source)
+
+	// A whoami failure degrades silently — the account/TOS lines are just
+	// omitted, never surfaced as an error (h-gveh D7).
+	if whoami, err := newAPIClient(token).GetWhoami(); err == nil {
+		if masked := maskEmail(whoami.Email); masked != "" {
+			text += fmt.Sprintf("\nAccount: %s", masked)
+		}
+		if whoami.TosAccepted {
+			text += "\nTOS: accepted"
+		} else {
+			text += "\nTOS: not accepted — deploys blocked until accepted (open https://gethatch.eu/terms/accept)"
+		}
+	}
+
+	return mcp.NewToolResultText(text), nil
 }
 
 // --- get_app_details ---

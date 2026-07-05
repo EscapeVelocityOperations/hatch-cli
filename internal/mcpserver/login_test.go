@@ -133,6 +133,44 @@ func TestLoginHandler_AlreadyAuthenticated(t *testing.T) {
 	}
 }
 
+func TestLoginHandler_IdentitySurfaced(t *testing.T) {
+	saveAndRestore(t)
+	saveAndRestoreLoginDeps(t)
+	setAuthToken("hatch_existing_tok")
+	routes := fakeEnergyRoute()
+	for k, v := range fakeWhoamiRoute("eric@voxist.com", true) {
+		routes[k] = v
+	}
+	newMockServer(t, routes)
+
+	result, err := loginHandler(context.Background(), makeReq(nil))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, "Authenticated as e***@voxist.com.") {
+		t.Errorf("expected masked identity in login result, got: %s", text)
+	}
+	if !strings.Contains(text, "free") {
+		t.Errorf("expected plan tier in result, got: %s", text)
+	}
+}
+
+func TestLoginHandler_WhoamiFailureDegradesToPlainText(t *testing.T) {
+	saveAndRestore(t)
+	saveAndRestoreLoginDeps(t)
+	setAuthToken("hatch_existing_tok")
+	newMockServer(t, fakeEnergyRoute()) // no whoami route: exercises the degrade path
+
+	result, err := loginHandler(context.Background(), makeReq(nil))
+	text := assertSuccess(t, result, err)
+
+	if strings.Contains(text, "Authenticated as") {
+		t.Errorf("expected today's exact text (no identity) when whoami fails, got: %s", text)
+	}
+	if !strings.Contains(text, "Authenticated. Plan:") {
+		t.Errorf("expected the unmodified plan text when whoami fails, got: %s", text)
+	}
+}
+
 func TestLoginHandler_EnergyFetchFailureDegradesGracefully(t *testing.T) {
 	saveAndRestore(t)
 	saveAndRestoreLoginDeps(t)

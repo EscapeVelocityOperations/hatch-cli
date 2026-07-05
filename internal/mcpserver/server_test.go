@@ -189,6 +189,7 @@ func TestGetStartedHandler_Unauthenticated(t *testing.T) {
 func TestGetStartedHandler_Authenticated(t *testing.T) {
 	saveAndRestore(t)
 	setAuthToken("hatch_tok")
+	newMockServer(t, map[string]http.HandlerFunc{}) // no whoami route: exercises the degrade path
 
 	result, err := getStartedHandler(context.Background(), makeReq(nil))
 	text := assertSuccess(t, result, err)
@@ -201,6 +202,48 @@ func TestGetStartedHandler_Authenticated(t *testing.T) {
 	}
 	if !strings.Contains(text, "deploy_app") {
 		t.Errorf("expected deploy guidance to mention deploy_app, got: %s", text)
+	}
+}
+
+func fakeWhoamiRoute(email string, tosAccepted bool) map[string]http.HandlerFunc {
+	return map[string]http.HandlerFunc{
+		"GET /v1/account/whoami": jsonHandler(api.WhoamiResult{
+			Email:       email,
+			TosAccepted: tosAccepted,
+			CreatedAt:   "2026-05-01T00:00:00Z",
+		}),
+	}
+}
+
+func TestGetStartedHandler_IncludesMaskedAccountEmailAndTosAccepted(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("hatch_tok")
+	newMockServer(t, fakeWhoamiRoute("eric@voxist.com", true))
+
+	result, err := getStartedHandler(context.Background(), makeReq(nil))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, `"account_email": "e***@voxist.com"`) {
+		t.Errorf("expected masked account_email, got: %s", text)
+	}
+	if !strings.Contains(text, `"tos_accepted": true`) {
+		t.Errorf("expected tos_accepted=true, got: %s", text)
+	}
+}
+
+func TestGetStartedHandler_WhoamiFailureOmitsIdentityFields(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("hatch_tok")
+	newMockServer(t, map[string]http.HandlerFunc{}) // whoami 404s
+
+	result, err := getStartedHandler(context.Background(), makeReq(nil))
+	text := assertSuccess(t, result, err)
+
+	if strings.Contains(text, "account_email") {
+		t.Errorf("expected account_email to be omitted when whoami fails, got: %s", text)
+	}
+	if strings.Contains(text, "tos_accepted") {
+		t.Errorf("expected tos_accepted to be omitted when whoami fails, got: %s", text)
 	}
 }
 
@@ -240,12 +283,58 @@ func TestGetPlatformInfoHandler(t *testing.T) {
 func TestCheckAuthHandler_Success(t *testing.T) {
 	saveAndRestore(t)
 	setAuthToken("hatch_test_token123")
+	newMockServer(t, map[string]http.HandlerFunc{}) // no whoami route: exercises the degrade path
 
 	result, err := checkAuthHandler(context.Background(), makeReq(nil))
 	text := assertSuccess(t, result, err)
 
 	if !strings.Contains(text, "Authenticated") {
 		t.Errorf("expected 'Authenticated' in response, got: %s", text)
+	}
+}
+
+func TestCheckAuthHandler_ShowsAccountAndTosAccepted(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("hatch_test_token123")
+	newMockServer(t, fakeWhoamiRoute("eric@voxist.com", true))
+
+	result, err := checkAuthHandler(context.Background(), makeReq(nil))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, "Account: e***@voxist.com") {
+		t.Errorf("expected masked account line, got: %s", text)
+	}
+	if !strings.Contains(text, "TOS: accepted") {
+		t.Errorf("expected TOS: accepted, got: %s", text)
+	}
+}
+
+func TestCheckAuthHandler_ShowsTosNotAccepted(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("hatch_test_token123")
+	newMockServer(t, fakeWhoamiRoute("eric@voxist.com", false))
+
+	result, err := checkAuthHandler(context.Background(), makeReq(nil))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, "TOS: not accepted") {
+		t.Errorf("expected TOS: not accepted, got: %s", text)
+	}
+	if !strings.Contains(text, "https://gethatch.eu/terms/accept") {
+		t.Errorf("expected the accept-terms URL in the not-accepted copy, got: %s", text)
+	}
+}
+
+func TestCheckAuthHandler_WhoamiFailureDegradesGracefully(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("hatch_test_token123")
+	newMockServer(t, map[string]http.HandlerFunc{}) // whoami 404s
+
+	result, err := checkAuthHandler(context.Background(), makeReq(nil))
+	text := assertSuccess(t, result, err)
+
+	if text != "Authenticated. Token source: config file" {
+		t.Errorf("expected today's exact text when whoami fails (must not error), got: %q", text)
 	}
 }
 
