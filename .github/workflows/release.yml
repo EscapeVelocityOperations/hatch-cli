@@ -113,6 +113,10 @@ jobs:
             exit 1
           fi
 
+      - name: Warn unsigned darwin binary
+        if: ${{ matrix.goos == 'darwin' && secrets.APPLE_CERT_P12 == '' }}
+        run: echo "::warning::darwin binary UNSIGNED — Apple secrets not configured (h-jvc1)"
+
       - uses: actions/upload-artifact@v4
         with:
           name: hatch-${{ matrix.goos }}-${{ matrix.goarch }}
