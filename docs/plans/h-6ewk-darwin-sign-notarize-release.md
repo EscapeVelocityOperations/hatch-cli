@@ -114,3 +114,20 @@ be enabled in those steps — reviewer checks).
 
 No-op. hatch-cli developer tooling, not the voxmemo→voxist-api clinical pipeline.
 Heading retained for explicit auditor consideration.
+
+## Status
+
+- [x] T-001 — failing workflow-guard test (7 subtests, all red)     ✅ green at df945db
+- [x] T-002 — split matrix runners (macos-latest/ubuntu-latest)     ✅ green at 63a70ab (subtest a)
+- [x] T-003 — codesign darwin binary, secret-gated                 ✅ green at 388bd3f (subtest b)
+- [x] T-004 — notarize darwin binary via notarytool                ✅ green at 51943ca (subtests c,d)
+- [x] T-005 — unsigned-warning step (secrets absent, darwin only)   ✅ green at cf597a4 (subtest e)
+- [x] T-006 — delete .goreleaser.yml + Makefile release targets     ✅ green at f1a6a07 (subtest f)
+- [x] T-007 — README Release signing note, full gate green          ✅ green at 89e23d8
+
+Full gate: `go test ./...` (662 passed) + `go vet ./...` (clean) + `go build ./...`
+(success) all green. `actionlint` not available in this environment — skipped;
+flagging for reviewer to run if they have it installed.
+
+Validation limit (per plan, not a gap): live proof of an actual signed+notarized
+binary requires h-jvc1 (Apple secrets) to land first — out of scope here.
