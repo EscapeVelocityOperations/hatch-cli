@@ -82,6 +82,37 @@ jobs:
           codesign --sign "$IDENTITY" --options runtime --timestamp "hatch-${{ matrix.goos }}-${{ matrix.goarch }}"
           codesign --verify --strict "hatch-${{ matrix.goos }}-${{ matrix.goarch }}"
 
+      - name: Notarize darwin binary
+        if: ${{ matrix.goos == 'darwin' && secrets.APPLE_CERT_P12 != '' }}
+        env:
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          ZIP_PATH="$RUNNER_TEMP/hatch-${{ matrix.goos }}-${{ matrix.goarch }}.zip"
+          ditto -c -k "hatch-${{ matrix.goos }}-${{ matrix.goarch }}" "$ZIP_PATH"
+
+          KEY_PATH=$(mktemp)
+          trap 'rm -f "$KEY_PATH"' EXIT
+          printf '%s' "$APPLE_NOTARY_KEY_P8" > "$KEY_PATH"
+
+          RESULT_PATH="$RUNNER_TEMP/notary-result.json"
+          xcrun notarytool submit "$ZIP_PATH" \
+            --key "$KEY_PATH" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait --timeout 20m \
+            --output-format json > "$RESULT_PATH"
+
+          STATUS=$(jq -r '.status' "$RESULT_PATH")
+          echo "notarization status: $STATUS"
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "::error::notarization status was $STATUS, expected Accepted"
+            exit 1
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: hatch-${{ matrix.goos }}-${{ matrix.goarch }}
