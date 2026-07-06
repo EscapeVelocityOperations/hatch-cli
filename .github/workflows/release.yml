@@ -11,6 +11,11 @@ permissions:
 jobs:
   build:
     runs-on: ${{ matrix.runner }}
+    env:
+      # secrets context is illegal in step-level `if` (actionlint-checked); resolve
+      # it once here (jobs.<job_id>.env legally sees secrets) and gate steps on
+      # this env var instead. See h-6ewk infra-review B1.
+      APPLE_SIGNING_AVAILABLE: ${{ secrets.APPLE_CERT_P12 != '' }}
     strategy:
       matrix:
         include:
@@ -28,9 +33,9 @@ jobs:
             runner: macos-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod
 
@@ -48,7 +53,7 @@ jobs:
           go build -ldflags="-s -w -X ${VERSION_PKG}.version=${VERSION} -X ${PKG}.commit=${COMMIT} -X ${PKG}.date=${DATE}" -o hatch-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/hatch
 
       - name: Import Apple signing certificate
-        if: ${{ matrix.goos == 'darwin' && secrets.APPLE_CERT_P12 != '' }}
+        if: ${{ matrix.goos == 'darwin' && env.APPLE_SIGNING_AVAILABLE == 'true' }}
         env:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
           APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
@@ -66,12 +71,15 @@ jobs:
           rm -f "$CERT_PATH"
 
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          # Intentional word-splitting: expands each quoted keychain path in the
+          # user list as a separate argument.
+          # shellcheck disable=SC2046
           security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
 
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
       - name: Codesign darwin binary
-        if: ${{ matrix.goos == 'darwin' && secrets.APPLE_CERT_P12 != '' }}
+        if: ${{ matrix.goos == 'darwin' && env.APPLE_SIGNING_AVAILABLE == 'true' }}
         run: |
           IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -o '"[^"]*Developer ID Application[^"]*"' | head -1 | tr -d '"')
           if [ -z "$IDENTITY" ]; then
@@ -83,7 +91,7 @@ jobs:
           codesign --verify --strict "hatch-${{ matrix.goos }}-${{ matrix.goarch }}"
 
       - name: Notarize darwin binary
-        if: ${{ matrix.goos == 'darwin' && secrets.APPLE_CERT_P12 != '' }}
+        if: ${{ matrix.goos == 'darwin' && env.APPLE_SIGNING_AVAILABLE == 'true' }}
         env:
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
@@ -114,10 +122,10 @@ jobs:
           fi
 
       - name: Warn unsigned darwin binary
-        if: ${{ matrix.goos == 'darwin' && secrets.APPLE_CERT_P12 == '' }}
+        if: ${{ matrix.goos == 'darwin' && env.APPLE_SIGNING_AVAILABLE != 'true' }}
         run: echo "::warning::darwin binary UNSIGNED — Apple secrets not configured (h-jvc1)"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: hatch-${{ matrix.goos }}-${{ matrix.goarch }}
           path: hatch-${{ matrix.goos }}-${{ matrix.goarch }}
@@ -126,7 +134,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
           merge-multiple: true
@@ -136,7 +144,7 @@ jobs:
         run: sha256sum hatch-* > checksums.txt
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           generate_release_notes: true
           files: |

@@ -17,8 +17,9 @@ type releaseWorkflow struct {
 }
 
 type releaseWorkflowJob struct {
-	RunsOn   string               `yaml:"runs-on"`
-	Strategy releaseWorkflowStrat `yaml:"strategy"`
+	RunsOn   string                `yaml:"runs-on"`
+	Env      map[string]string     `yaml:"env"`
+	Strategy releaseWorkflowStrat  `yaml:"strategy"`
 	Steps    []releaseWorkflowStep `yaml:"steps"`
 }
 
@@ -124,21 +125,21 @@ func TestReleaseWorkflow(t *testing.T) {
 		}
 	})
 
-	t.Run("d_sign_and_notarize_steps_are_secret_gated", func(t *testing.T) {
+	t.Run("d_sign_and_notarize_steps_are_env_gated", func(t *testing.T) {
 		sign := stepContaining(job.Steps, "codesign", "--options runtime")
 		if sign == nil {
 			t.Fatalf("no codesign step found to check gating")
 		}
-		if !strings.Contains(sign.If, "secrets.APPLE_CERT_P12") {
-			t.Errorf("codesign step if = %q, want it to reference secrets.APPLE_CERT_P12", sign.If)
+		if !strings.Contains(sign.If, "env.APPLE_SIGNING_AVAILABLE == 'true'") {
+			t.Errorf("codesign step if = %q, want it to reference env.APPLE_SIGNING_AVAILABLE == 'true'", sign.If)
 		}
 
 		notarize := stepContaining(job.Steps, "notarytool submit")
 		if notarize == nil {
 			t.Fatalf("no notarize step found to check gating")
 		}
-		if !strings.Contains(notarize.If, "secrets.APPLE_CERT_P12") {
-			t.Errorf("notarize step if = %q, want it to reference secrets.APPLE_CERT_P12", notarize.If)
+		if !strings.Contains(notarize.If, "env.APPLE_SIGNING_AVAILABLE == 'true'") {
+			t.Errorf("notarize step if = %q, want it to reference env.APPLE_SIGNING_AVAILABLE == 'true'", notarize.If)
 		}
 	})
 
@@ -147,8 +148,8 @@ func TestReleaseWorkflow(t *testing.T) {
 		if step == nil {
 			t.Fatalf("no unsigned-warning step found (expected ::warning:: ... UNSIGNED ...)")
 		}
-		if !strings.Contains(step.If, "secrets.APPLE_CERT_P12") {
-			t.Errorf("unsigned-warning step if = %q, want it to reference secrets.APPLE_CERT_P12", step.If)
+		if !strings.Contains(step.If, "env.APPLE_SIGNING_AVAILABLE != 'true'") {
+			t.Errorf("unsigned-warning step if = %q, want it to reference env.APPLE_SIGNING_AVAILABLE != 'true'", step.If)
 		}
 	})
 
@@ -156,6 +157,28 @@ func TestReleaseWorkflow(t *testing.T) {
 		_, err := os.Stat(filepath.Join("..", ".goreleaser.yml"))
 		if !os.IsNotExist(err) {
 			t.Errorf(".goreleaser.yml still exists (want removed): err=%v", err)
+		}
+	})
+
+	// g+h guard the h-6ewk infra-review B1 finding: the `secrets` context is
+	// illegal in step-level `if` (GitHub Actions context-availability rules;
+	// actionlint enforces it). Signing/notarize gating must go through a
+	// job-level env indirection instead.
+	t.Run("g_job_env_wires_signing_available_from_secrets", func(t *testing.T) {
+		val, ok := job.Env["APPLE_SIGNING_AVAILABLE"]
+		if !ok {
+			t.Fatalf("build job has no env.APPLE_SIGNING_AVAILABLE")
+		}
+		if !strings.Contains(val, "secrets.APPLE_CERT_P12") {
+			t.Errorf("job env APPLE_SIGNING_AVAILABLE = %q, want it derived from secrets.APPLE_CERT_P12", val)
+		}
+	})
+
+	t.Run("h_no_step_if_references_secrets_directly", func(t *testing.T) {
+		for _, step := range job.Steps {
+			if strings.Contains(step.If, "secrets.") {
+				t.Errorf("step %q if = %q references secrets directly (illegal in step-level if) — gate on env.APPLE_SIGNING_AVAILABLE instead", step.Name, step.If)
+			}
 		}
 	})
 }
