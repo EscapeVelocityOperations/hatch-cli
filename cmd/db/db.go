@@ -199,12 +199,37 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	}
 }
 
+// formatWSDialError turns a WebSocket dial failure into an actionable
+// message. gorilla/websocket collapses every non-101 response into the bare
+// string "websocket: bad handshake" (err), discarding the *http.Response
+// that actually says why. resp == nil means the dial never reached the
+// server (a real network-layer failure — report err directly); resp != nil
+// means the server, or something in front of it (Caddy), answered with a
+// real status that's more useful than the gorilla string.
+func formatWSDialError(err error, resp *http.Response) string {
+	if resp == nil {
+		return fmt.Sprintf("tunnel dial failed: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	msg := fmt.Sprintf("tunnel rejected: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized:
+		msg += " (check your token — run 'hatch login')"
+	case resp.StatusCode == http.StatusNotFound:
+		msg += " (unknown app slug)"
+	case resp.StatusCode >= 500:
+		msg += " (server-side — see 'hatch logs' / api logs)"
+	}
+	return msg
+}
+
 func handleConn(tcpConn net.Conn, wsURL string, header http.Header) {
 	defer tcpConn.Close()
 
-	wsConn, _, err := deps.DialWS(wsURL, header)
+	wsConn, resp, err := deps.DialWS(wsURL, header)
 	if err != nil {
-		ui.Error(fmt.Sprintf("WebSocket dial: %v", err))
+		ui.Error(formatWSDialError(err, resp))
 		return
 	}
 	defer wsConn.Close()

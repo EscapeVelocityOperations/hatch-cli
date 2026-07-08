@@ -1,10 +1,17 @@
 package db
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func TestRunConnect_NotLoggedIn(t *testing.T) {
@@ -140,6 +147,129 @@ func TestNewCmd(t *testing.T) {
 		if !names[expected] {
 			t.Fatalf("expected %s subcommand", expected)
 		}
+	}
+}
+
+// TestFormatWSDialError is the h-f70o regression test: gorilla/websocket
+// collapses every non-101 dial response into the bare string "websocket: bad
+// handshake", discarding the *http.Response that actually says why (401 bad
+// token, 404 unknown slug, 5xx server-side, or a Caddy-level rejection).
+// formatWSDialError must recover that signal instead of letting the opaque
+// string reach the user.
+func TestFormatWSDialError(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		resp       *http.Response
+		wantSubstr []string
+	}{
+		{
+			name:       "nil response is a network-layer failure, not a handshake rejection",
+			err:        errors.New("dial tcp: connection refused"),
+			resp:       nil,
+			wantSubstr: []string{"connection refused"},
+		},
+		{
+			name: "401 hints at the token",
+			err:  errors.New("websocket: bad handshake"),
+			resp: &http.Response{
+				StatusCode: http.StatusUnauthorized,
+				Body:       io.NopCloser(strings.NewReader("invalid token")),
+			},
+			wantSubstr: []string{"HTTP 401", "invalid token", "hatch login"},
+		},
+		{
+			name: "404 hints at the slug",
+			err:  errors.New("websocket: bad handshake"),
+			resp: &http.Response{
+				StatusCode: http.StatusNotFound,
+				Body:       io.NopCloser(strings.NewReader("app not found")),
+			},
+			wantSubstr: []string{"HTTP 404", "app not found", "unknown app slug"},
+		},
+		{
+			name: "502 with body hints at the server side",
+			err:  errors.New("websocket: bad handshake"),
+			resp: &http.Response{
+				StatusCode: http.StatusBadGateway,
+				Body:       io.NopCloser(strings.NewReader("control plane unreachable")),
+			},
+			wantSubstr: []string{"HTTP 502", "control plane unreachable", "hatch logs"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatWSDialError(tt.err, tt.resp)
+			if strings.Contains(got, "bad handshake") {
+				t.Errorf("formatWSDialError() = %q, must never let the bare gorilla error through", got)
+			}
+			for _, want := range tt.wantSubstr {
+				if !strings.Contains(got, want) {
+					t.Errorf("formatWSDialError() = %q, want substring %q", got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestHandleConn_SurfacesHTTPStatus confirms handleConn is wired to
+// formatWSDialError instead of printing the raw dial error — capture
+// stdout since ui.Error writes straight to it (fmt.Println, no seam).
+func TestHandleConn_SurfacesHTTPStatus(t *testing.T) {
+	deps = &Deps{
+		DialWS: func(u string, h http.Header) (*websocket.Conn, *http.Response, error) {
+			return nil, &http.Response{
+				StatusCode: http.StatusBadGateway,
+				Body:       io.NopCloser(strings.NewReader("control plane unreachable")),
+			}, errors.New("websocket: bad handshake")
+		},
+	}
+	defer func() { deps = defaultDeps() }()
+
+	out := captureStdout(t, func() {
+		clientConn, serverConn := net.Pipe()
+		defer clientConn.Close()
+		handleConn(serverConn, "wss://example.invalid/tunnel", nil)
+	})
+
+	if !strings.Contains(out, "HTTP 502") {
+		t.Errorf("output = %q, want it to contain HTTP 502", out)
+	}
+	if strings.Contains(out, "bad handshake") {
+		t.Errorf("output = %q, must not contain the bare gorilla error", out)
+	}
+}
+
+// captureStdout redirects os.Stdout for the duration of fn and returns
+// whatever was written. fn runs synchronously; the pipe is drained
+// concurrently so a blocking Println inside fn can't deadlock against an
+// unread pipe buffer.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	defer func() { os.Stdout = old }()
+
+	outCh := make(chan string, 1)
+	go func() {
+		data, _ := io.ReadAll(r)
+		outCh <- string(data)
+	}()
+
+	fn()
+	w.Close()
+
+	select {
+	case out := <-outCh:
+		return out
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out reading captured stdout")
+		return ""
 	}
 }
 
