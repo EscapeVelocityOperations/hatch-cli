@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
@@ -145,18 +146,73 @@ func resolveEmailApp() (EmailAPIClient, string, error) {
 	return emailDeps.NewAPIClient(token), slug, nil
 }
 
-// T-302 skeleton: run bodies are placeholders until T-303/T-304 wire the
-// real logic (mirrors cmd/webhook's tests-first -> impl-cli history).
 func runEmailEnable(cmd *cobra.Command, args []string) error {
-	return errors.New("not yet implemented")
+	client, slug, err := resolveEmailApp()
+	if err != nil {
+		return err
+	}
+
+	emails, _ := cmd.Flags().GetStringSlice("email")
+	domains, _ := cmd.Flags().GetStringSlice("domain")
+	if len(emails) == 0 && len(domains) == 0 {
+		return errors.New("specify at least one --email or --domain")
+	}
+
+	ep, err := client.SetEmailProtection(slug, emails, domains)
+	if err != nil {
+		return fmt.Errorf("enabling email protection: %w", err)
+	}
+
+	fmt.Printf("Email protection enabled for %s.\n", slug)
+	printEmailProtection(ep)
+	return nil
 }
 
 func runEmailDisable(cmd *cobra.Command, args []string) error {
-	return errors.New("not yet implemented")
+	client, slug, err := resolveEmailApp()
+	if err != nil {
+		return err
+	}
+
+	if err := client.DeleteEmailProtection(slug); err != nil {
+		return fmt.Errorf("disabling email protection: %w", err)
+	}
+
+	fmt.Printf("Email protection disabled for %s.\n", slug)
+	return nil
 }
 
 func runEmailList(cmd *cobra.Command, args []string) error {
-	return errors.New("not yet implemented")
+	client, slug, err := resolveEmailApp()
+	if err != nil {
+		return err
+	}
+
+	ep, err := client.GetEmailProtection(slug)
+	if err != nil {
+		return fmt.Errorf("getting email protection: %w", err)
+	}
+	if !ep.Enabled {
+		fmt.Println("Email protection is disabled for this app.")
+		return nil
+	}
+
+	printEmailProtection(ep)
+	return nil
+}
+
+// printEmailProtection renders the current lists (or a placeholder when
+// both are empty — an enabled-but-empty allowlist blocks every visitor).
+func printEmailProtection(ep *EmailProtection) {
+	if len(ep.Emails) > 0 {
+		fmt.Printf("Emails:  %s\n", strings.Join(ep.Emails, ", "))
+	}
+	if len(ep.Domains) > 0 {
+		fmt.Printf("Domains: %s\n", strings.Join(ep.Domains, ", "))
+	}
+	if len(ep.Emails) == 0 && len(ep.Domains) == 0 {
+		fmt.Println("(no emails or domains configured — this blocks every visitor)")
+	}
 }
 
 func runEmailAdd(cmd *cobra.Command, args []string) error {
