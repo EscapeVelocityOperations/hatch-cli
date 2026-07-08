@@ -157,6 +157,14 @@ func runEmailEnable(cmd *cobra.Command, args []string) error {
 	if len(emails) == 0 && len(domains) == 0 {
 		return errors.New("specify at least one --email or --domain")
 	}
+	// Normalize before send (mirrors the server's trim+lowercase, T-104) so
+	// what the CLI echoes back matches what actually gets stored.
+	for i, e := range emails {
+		emails[i] = normalizeEmailArg(e)
+	}
+	for i, d := range domains {
+		domains[i] = normalizeDomainArg(d)
+	}
 
 	ep, err := client.SetEmailProtection(slug, emails, domains)
 	if err != nil {
@@ -226,7 +234,10 @@ func runEmailAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("reading current allowlist: %w", err)
 	}
 
-	addEmails, addDomains := splitEmailArgs(args)
+	addEmails, addDomains, err := splitEmailArgs(args)
+	if err != nil {
+		return err
+	}
 	newEmails := mergeUnique(current.Emails, addEmails)
 	newDomains := mergeUnique(current.Domains, addDomains)
 
@@ -251,7 +262,10 @@ func runEmailRemove(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("reading current allowlist: %w", err)
 	}
 
-	removeEmails, removeDomains := splitEmailArgs(args)
+	removeEmails, removeDomains, err := splitEmailArgs(args)
+	if err != nil {
+		return err
+	}
 	newEmails, notFoundEmails := removeItems(current.Emails, removeEmails)
 	newDomains, notFoundDomains := removeItems(current.Domains, removeDomains)
 	if notFound := append(notFoundEmails, notFoundDomains...); len(notFound) > 0 {
@@ -268,18 +282,42 @@ func runEmailRemove(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// normalizeEmailArg trims and lowercases a single email argument so it
+// compares equal to the server-normalized form (T-104's normalizeEmailList)
+// regardless of how the user typed it.
+func normalizeEmailArg(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// normalizeDomainArg trims, lowercases, and strips a leading "@" from a
+// single domain argument — mirrors the server's normalizeDomainList so the
+// CLI's local view (used to dedupe/diff against the current allowlist in
+// mergeUnique/removeItems) matches what the server actually stored. Returns
+// "" if nothing remains after stripping.
+func normalizeDomainArg(s string) string {
+	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(s)), "@")
+}
+
 // splitEmailArgs partitions positional args into emails and domains: an
 // "@"-prefixed arg is a domain (prefix stripped), everything else is an
-// exact email address.
-func splitEmailArgs(args []string) (emails, domains []string) {
+// exact email address. Both are trimmed and lowercased (normalizeEmailArg /
+// normalizeDomainArg) so mergeUnique/removeItems compare correctly against
+// the server-normalized current list. A bare "@" (nothing left after
+// stripping) is rejected rather than silently turned into an empty-string
+// domain the server would drop without explanation.
+func splitEmailArgs(args []string) (emails, domains []string, err error) {
 	for _, a := range args {
-		if strings.HasPrefix(a, "@") {
-			domains = append(domains, strings.TrimPrefix(a, "@"))
+		if strings.HasPrefix(strings.TrimSpace(a), "@") {
+			d := normalizeDomainArg(a)
+			if d == "" {
+				return nil, nil, fmt.Errorf("%q is not a valid domain (nothing after \"@\")", a)
+			}
+			domains = append(domains, d)
 		} else {
-			emails = append(emails, a)
+			emails = append(emails, normalizeEmailArg(a))
 		}
 	}
-	return emails, domains
+	return emails, domains, nil
 }
 
 // mergeUnique appends add to existing, skipping anything already present —

@@ -100,6 +100,31 @@ func TestRunEmailEnable_PostsNormalizedLists(t *testing.T) {
 	}
 }
 
+// TestRunEmailEnable_NormalizesCaseAndWhitespace (h-vo8d rework, MEDIUM):
+// enable's --email/--domain flags get the same trim+lowercase treatment as
+// add/remove before being sent, so what the CLI echoes back matches what the
+// server will actually store.
+func TestRunEmailEnable_NormalizesCaseAndWhitespace(t *testing.T) {
+	mock := &mockEmailAPIClient{}
+	withTestEmailDeps(t, mock)
+
+	cmd := &cobra.Command{}
+	cmd.Flags().StringSlice("email", nil, "")
+	cmd.Flags().StringSlice("domain", nil, "")
+	_ = cmd.Flags().Set("email", " Admin@Corp.com ")
+	_ = cmd.Flags().Set("domain", "@Corp.com")
+
+	if _, err := captureStdout(func() error { return runEmailEnable(cmd, nil) }); err != nil {
+		t.Fatalf("runEmailEnable: %v", err)
+	}
+	if len(mock.lastSetEmails) != 1 || mock.lastSetEmails[0] != "admin@corp.com" {
+		t.Errorf("emails posted = %v, want [admin@corp.com] (trimmed + lowercased)", mock.lastSetEmails)
+	}
+	if len(mock.lastSetDomains) != 1 || mock.lastSetDomains[0] != "corp.com" {
+		t.Errorf("domains posted = %v, want [corp.com] (lowercased, @ stripped)", mock.lastSetDomains)
+	}
+}
+
 func TestRunEmailEnable_NoListsErrors(t *testing.T) {
 	mock := &mockEmailAPIClient{}
 	withTestEmailDeps(t, mock)
