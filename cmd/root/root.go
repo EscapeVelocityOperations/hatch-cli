@@ -29,6 +29,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/open"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/packs"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/preview"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/protect"
 	rediscmd "github.com/EscapeVelocityOperations/hatch-cli/cmd/redis"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/resources"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/restart"
@@ -166,6 +167,7 @@ func init() {
 	rootCmd.AddCommand(open.NewCmd())
 	rootCmd.AddCommand(packs.NewCmd())
 	rootCmd.AddCommand(preview.NewCmd())
+	rootCmd.AddCommand(protect.NewCmd())
 	rootCmd.AddCommand(rediscmd.NewCmd())
 	rootCmd.AddCommand(resources.NewCmd())
 	rootCmd.AddCommand(restart.NewCmd())

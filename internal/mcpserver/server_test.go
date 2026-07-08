@@ -163,6 +163,21 @@ func TestNewServer_HasGetStartedTool(t *testing.T) {
 	}
 }
 
+// TestNewServer_HasEmailProtectionTools (h-oazj, h-ppn8 tests-green gate):
+// email_protection_test.go exercises the set/get/disable handlers directly,
+// never through NewServer()/AddTool — so a future accidental deletion of the
+// AddTool calls in NewServer would leave every handler test green while the
+// real MCP server silently stopped exposing the tools. Mirrors
+// TestNewServer_HasLoginTool/TestNewServer_HasGetStartedTool above.
+func TestNewServer_HasEmailProtectionTools(t *testing.T) {
+	s := NewServer()
+	for _, name := range []string{"set_email_protection", "get_email_protection", "disable_email_protection"} {
+		if s.GetTool(name) == nil {
+			t.Errorf("expected NewServer() to register a %q tool", name)
+		}
+	}
+}
+
 // --- hatch://tos resource ---
 
 func withTosResourceURL(t *testing.T, url string) {
