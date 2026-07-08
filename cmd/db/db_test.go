@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -270,6 +271,121 @@ func captureStdout(t *testing.T, fn func()) string {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out reading captured stdout")
 		return ""
+	}
+}
+
+// fakeListener answers exactly one Accept() call with an error, simulating
+// an already-closed/shutdown listener — enough to let runConnect's accept
+// loop return immediately (existing behavior: any Accept error -> `return
+// nil`, "Listener closed (shutdown)") without a real client connection.
+type fakeListener struct{}
+
+func (f *fakeListener) Accept() (net.Conn, error) { return nil, fmt.Errorf("closed") }
+func (f *fakeListener) Close() error              { return nil }
+func (f *fakeListener) Addr() net.Addr            { return &net.TCPAddr{} }
+
+// TestConnect_StartupProbeFailsFast is the h-f70o regression test for D2:
+// previously --no-psql sat silently until the first client connected, then
+// failed per-connection with an opaque error. The probe must fail runConnect
+// itself, with the real status surfaced, before ever reaching the accept
+// loop.
+func TestConnect_StartupProbeFailsFast(t *testing.T) {
+	deps = &Deps{
+		GetToken: func() (string, error) { return "tok123", nil },
+		DialWS: func(u string, h http.Header) (*websocket.Conn, *http.Response, error) {
+			return nil, &http.Response{
+				StatusCode: http.StatusUnauthorized,
+				Body:       io.NopCloser(strings.NewReader("invalid token")),
+			}, errors.New("websocket: bad handshake")
+		},
+		Listen: func(network, address string) (net.Listener, error) {
+			return &fakeListener{}, nil
+		},
+	}
+	defer func() { deps = defaultDeps() }()
+
+	err := runConnect(nil, []string{"myapp"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "HTTP 401") {
+		t.Errorf("error = %v, want it to contain HTTP 401", err)
+	}
+	if strings.Contains(err.Error(), "bad handshake") {
+		t.Errorf("error = %v, must not contain the bare gorilla error", err)
+	}
+}
+
+// TestProbeTunnel_ClosesCleanly is the D2 happy-path counterpart, exercised
+// directly against probeTunnel rather than the full runConnect: a successful
+// probe must close its connection (not leak it), verified against a real
+// gorilla websocket server so the close is observed on the wire, not just
+// assumed. (Going through runConnect here would also exercise its DB-
+// credentials fetch, which isn't behind the Deps seam and reaches the real
+// api.gethatch.eu over the network — not hermetic, and not what this test
+// is about.)
+func TestProbeTunnel_ClosesCleanly(t *testing.T) {
+	closed := make(chan struct{})
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer c.Close()
+		// Blocks until the client closes; a normal close unblocks ReadMessage
+		// with a close error instead of hanging.
+		_, _, _ = c.ReadMessage()
+		close(closed)
+	}))
+	defer srv.Close()
+
+	testWSURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	dialer := &websocket.Dialer{}
+	deps = &Deps{
+		DialWS: func(u string, h http.Header) (*websocket.Conn, *http.Response, error) {
+			return dialer.Dial(testWSURL, h)
+		},
+	}
+	defer func() { deps = defaultDeps() }()
+
+	if err := probeTunnel("wss://example.invalid/tunnel", nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	select {
+	case <-closed:
+		// probe connection was closed cleanly; the server observed it.
+	case <-time.After(2 * time.Second):
+		t.Fatal("probe connection was never closed")
+	}
+}
+
+// TestProbeTunnel_FailsFast is the probeTunnel-level counterpart to
+// TestConnect_StartupProbeFailsFast: confirms the real status is surfaced
+// (not the bare gorilla error), independent of runConnect's surrounding
+// setup.
+func TestProbeTunnel_FailsFast(t *testing.T) {
+	deps = &Deps{
+		DialWS: func(u string, h http.Header) (*websocket.Conn, *http.Response, error) {
+			return nil, &http.Response{
+				StatusCode: http.StatusUnauthorized,
+				Body:       io.NopCloser(strings.NewReader("invalid token")),
+			}, errors.New("websocket: bad handshake")
+		},
+	}
+	defer func() { deps = defaultDeps() }()
+
+	err := probeTunnel("wss://example.invalid/tunnel", nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "HTTP 401") {
+		t.Errorf("error = %v, want it to contain HTTP 401", err)
+	}
+	if strings.Contains(err.Error(), "bad handshake") {
+		t.Errorf("error = %v, must not contain the bare gorilla error", err)
 	}
 }
 
