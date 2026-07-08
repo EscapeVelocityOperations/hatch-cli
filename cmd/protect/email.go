@@ -216,9 +216,111 @@ func printEmailProtection(ep *EmailProtection) {
 }
 
 func runEmailAdd(cmd *cobra.Command, args []string) error {
-	return errors.New("not yet implemented")
+	client, slug, err := resolveEmailApp()
+	if err != nil {
+		return err
+	}
+
+	current, err := client.GetEmailProtection(slug)
+	if err != nil {
+		return fmt.Errorf("reading current allowlist: %w", err)
+	}
+
+	addEmails, addDomains := splitEmailArgs(args)
+	newEmails := mergeUnique(current.Emails, addEmails)
+	newDomains := mergeUnique(current.Domains, addDomains)
+
+	ep, err := client.SetEmailProtection(slug, newEmails, newDomains)
+	if err != nil {
+		return fmt.Errorf("updating allowlist: %w", err)
+	}
+
+	fmt.Printf("Updated email allowlist for %s.\n", slug)
+	printEmailProtection(ep)
+	return nil
 }
 
 func runEmailRemove(cmd *cobra.Command, args []string) error {
-	return errors.New("not yet implemented")
+	client, slug, err := resolveEmailApp()
+	if err != nil {
+		return err
+	}
+
+	current, err := client.GetEmailProtection(slug)
+	if err != nil {
+		return fmt.Errorf("reading current allowlist: %w", err)
+	}
+
+	removeEmails, removeDomains := splitEmailArgs(args)
+	newEmails, notFoundEmails := removeItems(current.Emails, removeEmails)
+	newDomains, notFoundDomains := removeItems(current.Domains, removeDomains)
+	if notFound := append(notFoundEmails, notFoundDomains...); len(notFound) > 0 {
+		return fmt.Errorf("not on the allowlist: %s", strings.Join(notFound, ", "))
+	}
+
+	ep, err := client.SetEmailProtection(slug, newEmails, newDomains)
+	if err != nil {
+		return fmt.Errorf("updating allowlist: %w", err)
+	}
+
+	fmt.Printf("Updated email allowlist for %s.\n", slug)
+	printEmailProtection(ep)
+	return nil
+}
+
+// splitEmailArgs partitions positional args into emails and domains: an
+// "@"-prefixed arg is a domain (prefix stripped), everything else is an
+// exact email address.
+func splitEmailArgs(args []string) (emails, domains []string) {
+	for _, a := range args {
+		if strings.HasPrefix(a, "@") {
+			domains = append(domains, strings.TrimPrefix(a, "@"))
+		} else {
+			emails = append(emails, a)
+		}
+	}
+	return emails, domains
+}
+
+// mergeUnique appends add to existing, skipping anything already present —
+// the read-modify-write core of `protect email add`.
+func mergeUnique(existing, add []string) []string {
+	seen := make(map[string]struct{}, len(existing))
+	out := make([]string, 0, len(existing)+len(add))
+	for _, e := range existing {
+		if _, ok := seen[e]; !ok {
+			seen[e] = struct{}{}
+			out = append(out, e)
+		}
+	}
+	for _, a := range add {
+		if _, ok := seen[a]; !ok {
+			seen[a] = struct{}{}
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// removeItems returns existing minus remove, plus any remove entries NOT
+// found in existing as notFound — the caller errors on those instead of
+// silently no-op'ing a typo (T-304: "remove unknown item errors cleanly").
+func removeItems(existing, remove []string) (result, notFound []string) {
+	existingSet := make(map[string]struct{}, len(existing))
+	for _, e := range existing {
+		existingSet[e] = struct{}{}
+	}
+	removeSet := make(map[string]struct{}, len(remove))
+	for _, r := range remove {
+		if _, ok := existingSet[r]; !ok {
+			notFound = append(notFound, r)
+		}
+		removeSet[r] = struct{}{}
+	}
+	for _, e := range existing {
+		if _, ok := removeSet[e]; !ok {
+			result = append(result, e)
+		}
+	}
+	return result, notFound
 }
