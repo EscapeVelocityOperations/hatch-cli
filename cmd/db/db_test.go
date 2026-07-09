@@ -431,12 +431,30 @@ func TestRunConnect_UsesDepsGetDatabaseURL(t *testing.T) {
 	host, port = "127.0.0.1", realListener.Addr().(*net.TCPAddr).Port
 	defer func() { host, port = savedHost, savedPort }()
 
+	// probeTunnel's fail-fast dial (h-f70o) runs before the GetDatabaseURL
+	// fetch this test is actually about — it needs a real websocket peer too,
+	// or runConnect never gets past the probe to reach deps.GetDatabaseURL.
+	wsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		_, _, _ = c.ReadMessage()
+	}))
+	defer wsSrv.Close()
+	testWSURL := "ws" + strings.TrimPrefix(wsSrv.URL, "http")
+	dialer := &websocket.Dialer{}
+
 	var gotToken, gotSlug string
 	var gotCreds *dbCreds
 	psqlDone := make(chan struct{})
 	deps = &Deps{
 		GetToken: func() (string, error) { return "tok123", nil },
 		Listen:   func(network, address string) (net.Listener, error) { return realListener, nil },
+		DialWS: func(u string, h http.Header) (*websocket.Conn, *http.Response, error) {
+			return dialer.Dial(testWSURL, h)
+		},
 		GetDatabaseURL: func(token, slug string) (string, error) {
 			gotToken, gotSlug = token, slug
 			return "postgresql://appuser:secret@ignored-host:5432/appdb", nil
