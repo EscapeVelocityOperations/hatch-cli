@@ -171,7 +171,10 @@ func TestNewServer_HasGetStartedTool(t *testing.T) {
 // TestNewServer_HasLoginTool/TestNewServer_HasGetStartedTool above.
 func TestNewServer_HasEmailProtectionTools(t *testing.T) {
 	s := NewServer()
-	for _, name := range []string{"set_email_protection", "get_email_protection", "disable_email_protection"} {
+	for _, name := range []string{
+		"set_email_protection", "get_email_protection", "disable_email_protection",
+		"add_email_protection_user", "remove_email_protection_user", "clear_email_protection",
+	} {
 		if s.GetTool(name) == nil {
 			t.Errorf("expected NewServer() to register a %q tool", name)
 		}
