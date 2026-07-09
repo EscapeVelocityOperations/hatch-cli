@@ -229,6 +229,57 @@ hatch open myapp
 hatch open             # auto-detect from git remote
 ```
 
+### Protection
+
+#### `hatch protect email enable`
+
+Enable email-allowlist protection (replaces the current lists). Visitors sign in via a magic link sent to an allowed email address or domain.
+
+```sh
+hatch protect email enable --email a@b.com --domain corp.com
+```
+
+**Flags:**
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--email` | | Exact email address(es) to allow (repeatable) |
+| `--domain` | | Email domain(s) to allow, with or without a leading `@` (repeatable) |
+
+#### `hatch protect email disable`
+
+Disable email-allowlist protection.
+
+```sh
+hatch protect email disable
+```
+
+#### `hatch protect email list`
+
+Show the current email allowlist.
+
+```sh
+hatch protect email list
+```
+
+#### `hatch protect email add <email-or-@domain>...`
+
+Add email(s) or `@domain`(s) to the allowlist.
+
+```sh
+hatch protect email add newuser@corp.com @partner.com
+```
+
+#### `hatch protect email remove <email-or-@domain>...`
+
+Remove email(s) or `@domain`(s) from the allowlist.
+
+```sh
+hatch protect email remove newuser@corp.com
+```
+
+If protection is enabled but the deployment has no mailer configured, `list` and `enable` print a warning — no magic link can be sent, so allowed visitors are silently locked out. See the [email-protection docs](https://gethatch.eu/docs/email-protection) for rate limits and the corresponding MCP tools (`set_email_protection`, `get_email_protection`, `disable_email_protection`).
+
 ### AI Integration
 
 The [Claude Code plugin](#claude-code-plugin-recommended) is the
