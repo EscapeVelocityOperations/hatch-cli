@@ -15,7 +15,7 @@ func TestSetEmailProtection(t *testing.T) {
 		gotMethod, gotPath, gotAuth = r.Method, r.URL.Path, r.Header.Get("Authorization")
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"email_protected":true,"emails":["a@b.com"],"domains":["corp.com"]}`))
+		_, _ = w.Write([]byte(`{"email_protected":true,"emails":["a@b.com"],"domains":["corp.com"],"mailer_configured":true}`))
 	}))
 	defer server.Close()
 
@@ -39,6 +39,9 @@ func TestSetEmailProtection(t *testing.T) {
 	if !ep.EmailProtected || len(ep.Emails) != 1 || ep.Emails[0] != "a@b.com" || len(ep.Domains) != 1 || ep.Domains[0] != "corp.com" {
 		t.Errorf("email protection = %+v, want protected + emails/domains passthrough", ep)
 	}
+	if !ep.MailerConfigured {
+		t.Errorf("MailerConfigured = false, want true (passthrough from API)")
+	}
 }
 
 func TestGetEmailProtection(t *testing.T) {
@@ -46,7 +49,7 @@ func TestGetEmailProtection(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod, gotPath = r.Method, r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"email_protected":true,"emails":["a@b.com"],"domains":[]}`))
+		_, _ = w.Write([]byte(`{"email_protected":true,"emails":["a@b.com"],"domains":[],"mailer_configured":false}`))
 	}))
 	defer server.Close()
 
@@ -62,6 +65,9 @@ func TestGetEmailProtection(t *testing.T) {
 	}
 	if !ep.EmailProtected || len(ep.Emails) != 1 {
 		t.Errorf("email protection = %+v", ep)
+	}
+	if ep.MailerConfigured {
+		t.Errorf("MailerConfigured = true, want false (silent-lockout case: mailer_configured:false in API response)")
 	}
 }
 

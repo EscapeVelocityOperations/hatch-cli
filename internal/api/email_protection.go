@@ -9,9 +9,10 @@ import (
 // EmailProtection is an egg's email-allowlist protection state as the API
 // returns it (h-oazj).
 type EmailProtection struct {
-	EmailProtected bool     `json:"email_protected"`
-	Emails         []string `json:"emails"`
-	Domains        []string `json:"domains"`
+	EmailProtected   bool     `json:"email_protected"`
+	Emails           []string `json:"emails"`
+	Domains          []string `json:"domains"`
+	MailerConfigured bool     `json:"mailer_configured"`
 }
 
 // SetEmailProtection enables email-allowlist protection, replacing both
