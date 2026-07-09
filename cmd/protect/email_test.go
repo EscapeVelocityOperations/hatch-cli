@@ -75,6 +75,27 @@ func captureStdout(fn func() error) (string, error) {
 	return buf.String(), runErr
 }
 
+// captureStdoutAndStderr mirrors captureStdout but also captures stderr —
+// the mailer_configured warning (T-005) is deliberately kept off the
+// parseable stdout payload, so tests need to assert on both streams.
+func captureStdoutAndStderr(fn func() error) (stdout, stderr string, err error) {
+	oldOut, oldErr := os.Stdout, os.Stderr
+	rOut, wOut, _ := os.Pipe()
+	rErr, wErr, _ := os.Pipe()
+	os.Stdout, os.Stderr = wOut, wErr
+
+	runErr := fn()
+
+	wOut.Close()
+	wErr.Close()
+	os.Stdout, os.Stderr = oldOut, oldErr
+
+	var bufOut, bufErr bytes.Buffer
+	_, _ = io.Copy(&bufOut, rOut)
+	_, _ = io.Copy(&bufErr, rErr)
+	return bufOut.String(), bufErr.String(), runErr
+}
+
 func TestRunEmailEnable_PostsNormalizedLists(t *testing.T) {
 	mock := &mockEmailAPIClient{}
 	withTestEmailDeps(t, mock)
@@ -179,6 +200,91 @@ func TestRunEmailList_DisabledSaysSo(t *testing.T) {
 	}
 	if !containsAll(out, "disabled") {
 		t.Errorf("list output = %q, want it to say protection is disabled", out)
+	}
+}
+
+// TestRunEmailList_WarnsWhenMailerNotConfigured / TestRunEmailEnable_...
+// (h-7b9l T-004): an enabled-but-unconfigured mailer silently locks out
+// every visitor (no sign-in link can ever be sent) — list/enable must warn
+// on stderr, and the warning must never land in stdout's parseable payload.
+func TestRunEmailList_WarnsWhenMailerNotConfigured(t *testing.T) {
+	mock := &mockEmailAPIClient{
+		getFn: func(slug string) (*EmailProtection, error) {
+			return &EmailProtection{Enabled: true, Emails: []string{"a@b.com"}, MailerConfigured: false}, nil
+		},
+	}
+	withTestEmailDeps(t, mock)
+
+	stdout, stderr, err := captureStdoutAndStderr(func() error { return runEmailList(&cobra.Command{}, nil) })
+	if err != nil {
+		t.Fatalf("runEmailList: %v", err)
+	}
+	if !containsAll(stderr, "warning", "not configured") {
+		t.Errorf("stderr = %q, want a mailer-not-configured warning", stderr)
+	}
+	if bytes.Contains([]byte(stdout), []byte("warning")) {
+		t.Errorf("stdout = %q, warning must not appear in the parseable payload", stdout)
+	}
+}
+
+func TestRunEmailList_NoWarningWhenMailerConfigured(t *testing.T) {
+	mock := &mockEmailAPIClient{
+		getFn: func(slug string) (*EmailProtection, error) {
+			return &EmailProtection{Enabled: true, Emails: []string{"a@b.com"}, MailerConfigured: true}, nil
+		},
+	}
+	withTestEmailDeps(t, mock)
+
+	_, stderr, err := captureStdoutAndStderr(func() error { return runEmailList(&cobra.Command{}, nil) })
+	if err != nil {
+		t.Fatalf("runEmailList: %v", err)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want no warning when mailer is configured", stderr)
+	}
+}
+
+func TestRunEmailEnable_WarnsWhenMailerNotConfigured(t *testing.T) {
+	mock := &mockEmailAPIClient{
+		setFn: func(slug string, emails, domains []string) (*EmailProtection, error) {
+			return &EmailProtection{Enabled: true, Emails: emails, Domains: domains, MailerConfigured: false}, nil
+		},
+	}
+	withTestEmailDeps(t, mock)
+
+	cmd := &cobra.Command{}
+	cmd.Flags().StringSlice("email", nil, "")
+	cmd.Flags().StringSlice("domain", nil, "")
+	_ = cmd.Flags().Set("email", "a@b.com")
+
+	_, stderr, err := captureStdoutAndStderr(func() error { return runEmailEnable(cmd, nil) })
+	if err != nil {
+		t.Fatalf("runEmailEnable: %v", err)
+	}
+	if !containsAll(stderr, "warning", "not configured") {
+		t.Errorf("stderr = %q, want a mailer-not-configured warning", stderr)
+	}
+}
+
+func TestRunEmailEnable_NoWarningWhenMailerConfigured(t *testing.T) {
+	mock := &mockEmailAPIClient{
+		setFn: func(slug string, emails, domains []string) (*EmailProtection, error) {
+			return &EmailProtection{Enabled: true, Emails: emails, Domains: domains, MailerConfigured: true}, nil
+		},
+	}
+	withTestEmailDeps(t, mock)
+
+	cmd := &cobra.Command{}
+	cmd.Flags().StringSlice("email", nil, "")
+	cmd.Flags().StringSlice("domain", nil, "")
+	_ = cmd.Flags().Set("email", "a@b.com")
+
+	_, stderr, err := captureStdoutAndStderr(func() error { return runEmailEnable(cmd, nil) })
+	if err != nil {
+		t.Fatalf("runEmailEnable: %v", err)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want no warning when mailer is configured", stderr)
 	}
 }
 

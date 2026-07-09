@@ -14,9 +14,10 @@ import (
 
 // EmailProtection is the CLI-facing view of an egg's email-allowlist state.
 type EmailProtection struct {
-	Enabled bool
-	Emails  []string
-	Domains []string
+	Enabled          bool
+	Emails           []string
+	Domains          []string
+	MailerConfigured bool
 }
 
 // EmailAPIClient is the email-protection surface of the Hatch API.
@@ -49,7 +50,12 @@ func defaultEmailDeps() *EmailDeps {
 type realEmailAPIClient struct{ client *api.Client }
 
 func cliEmailProtection(ep api.EmailProtection) EmailProtection {
-	return EmailProtection{Enabled: ep.EmailProtected, Emails: ep.Emails, Domains: ep.Domains}
+	return EmailProtection{
+		Enabled:          ep.EmailProtected,
+		Emails:           ep.Emails,
+		Domains:          ep.Domains,
+		MailerConfigured: ep.MailerConfigured,
+	}
 }
 
 func (r *realEmailAPIClient) SetEmailProtection(slug string, emails, domains []string) (*EmailProtection, error) {
@@ -211,6 +217,9 @@ func runEmailList(cmd *cobra.Command, args []string) error {
 
 // printEmailProtection renders the current lists (or a placeholder when
 // both are empty — an enabled-but-empty allowlist blocks every visitor).
+// When protection is enabled but the deployment has no mailer configured,
+// no magic link can ever be sent — every allowed visitor is silently locked
+// out. That warning goes to stderr, never stdout's parseable payload.
 func printEmailProtection(ep *EmailProtection) {
 	if len(ep.Emails) > 0 {
 		fmt.Printf("Emails:  %s\n", strings.Join(ep.Emails, ", "))
@@ -220,6 +229,9 @@ func printEmailProtection(ep *EmailProtection) {
 	}
 	if len(ep.Emails) == 0 && len(ep.Domains) == 0 {
 		fmt.Println("(no emails or domains configured — this blocks every visitor)")
+	}
+	if ep.Enabled && !ep.MailerConfigured {
+		fmt.Fprintln(os.Stderr, "warning: magic-link mail is not configured on this deployment — allowed visitors will not receive sign-in links")
 	}
 }
 

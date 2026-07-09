@@ -94,6 +94,32 @@ func TestGetEmailProtectionHandler_Success(t *testing.T) {
 	}
 }
 
+// TestGetEmailProtectionHandler_MailerConfigured is a regression guard
+// (mirrors the h-ppn8 MCP registration guard style): the tool marshals the
+// api.EmailProtection struct directly, so mailer_configured must round-trip
+// into the result JSON without any handler-side field list to drift out of
+// sync (h-7b9l T-003).
+func TestGetEmailProtectionHandler_MailerConfigured(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/apps/myapp-a1b2/email-protect": jsonHandler(api.EmailProtection{
+			EmailProtected:   true,
+			Emails:           []string{"a@b.com"},
+			MailerConfigured: false,
+		}),
+	})
+
+	result, err := getEmailProtectionHandler(context.Background(), makeReq(map[string]interface{}{
+		"app": "myapp-a1b2",
+	}))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, `"mailer_configured":false`) {
+		t.Errorf("expected mailer_configured in result JSON, got: %s", text)
+	}
+}
+
 // --- disable_email_protection ---
 
 func TestDisableEmailProtectionHandler_MissingParams(t *testing.T) {
