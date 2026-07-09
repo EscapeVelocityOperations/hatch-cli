@@ -38,10 +38,13 @@ type dbCreds struct {
 
 // Deps holds injectable dependencies for testing.
 type Deps struct {
-	GetToken func() (string, error)
-	DialWS   func(url string, header http.Header) (*websocket.Conn, *http.Response, error)
-	Listen   func(network, address string) (net.Listener, error)
-	RunPsql  func(host string, port int, creds *dbCreds, extraArgs []string) error
+	GetToken       func() (string, error)
+	DialWS         func(url string, header http.Header) (*websocket.Conn, *http.Response, error)
+	Listen         func(network, address string) (net.Listener, error)
+	RunPsql        func(host string, port int, creds *dbCreds, extraArgs []string) error
+	GetDatabaseURL func(token, slug string) (string, error)
+	AddAddon       func(token, slug, addonType string) (*api.Addon, error)
+	ListAddons     func(token, slug string) ([]api.Addon, error)
 }
 
 func defaultDeps() *Deps {
@@ -58,6 +61,15 @@ func defaultDeps() *Deps {
 		Listen: net.Listen,
 		RunPsql: func(host string, port int, creds *dbCreds, extraArgs []string) error {
 			return runPsql(host, port, creds, extraArgs)
+		},
+		GetDatabaseURL: func(token, slug string) (string, error) {
+			return api.NewClient(token).GetDatabaseURL(slug)
+		},
+		AddAddon: func(token, slug, addonType string) (*api.Addon, error) {
+			return api.NewClient(token).AddAddon(slug, addonType)
+		},
+		ListAddons: func(token, slug string) ([]api.Addon, error) {
+			return api.NewClient(token).ListAddons(slug)
 		},
 	}
 }
@@ -149,9 +161,8 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	}
 
 	// Fetch database credentials for psql connection
-	client := api.NewClient(token)
 	var creds *dbCreds
-	dbURL, err := client.GetDatabaseURL(slug)
+	dbURL, err := deps.GetDatabaseURL(token, slug)
 	if err == nil && dbURL != "" {
 		creds = parseDBURL(dbURL)
 	}
@@ -453,8 +464,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 
 	ui.Info(fmt.Sprintf("Provisioning PostgreSQL database for %s...", ui.Bold(slug)))
 
-	client := api.NewClient(token)
-	addon, err := client.AddAddon(slug, "postgresql")
+	addon, err := deps.AddAddon(token, slug, "postgresql")
 	if err != nil {
 		return fmt.Errorf("provisioning database: %w", err)
 	}
@@ -498,8 +508,7 @@ func runInfo(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	client := api.NewClient(token)
-	addons, err := client.ListAddons(slug)
+	addons, err := deps.ListAddons(token, slug)
 	if err != nil {
 		return fmt.Errorf("fetching addons: %w", err)
 	}

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/gorilla/websocket"
 )
 
@@ -402,5 +403,133 @@ func TestDefaultDeps(t *testing.T) {
 	}
 	if d.RunPsql == nil {
 		t.Fatal("RunPsql not set")
+	}
+	if d.GetDatabaseURL == nil {
+		t.Fatal("GetDatabaseURL not set")
+	}
+	if d.AddAddon == nil {
+		t.Fatal("AddAddon not set")
+	}
+	if d.ListAddons == nil {
+		t.Fatal("ListAddons not set")
+	}
+}
+
+// TestRunConnect_UsesDepsGetDatabaseURL: runConnect must fetch db credentials
+// through deps.GetDatabaseURL, never api.NewClient directly — a direct call
+// hits the real api.gethatch.eu and makes the test slow/network-dependent
+// (h-csu3, surfaced during h-f70o review). The fake response must flow
+// through to the psql creds RunPsql receives, proving the seam is load-bearing
+// end-to-end, not just present.
+func TestRunConnect_UsesDepsGetDatabaseURL(t *testing.T) {
+	realListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	savedHost, savedPort := host, port
+	host, port = "127.0.0.1", realListener.Addr().(*net.TCPAddr).Port
+	defer func() { host, port = savedHost, savedPort }()
+
+	// probeTunnel's fail-fast dial (h-f70o) runs before the GetDatabaseURL
+	// fetch this test is actually about — it needs a real websocket peer too,
+	// or runConnect never gets past the probe to reach deps.GetDatabaseURL.
+	wsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		_, _, _ = c.ReadMessage()
+	}))
+	defer wsSrv.Close()
+	testWSURL := "ws" + strings.TrimPrefix(wsSrv.URL, "http")
+	dialer := &websocket.Dialer{}
+
+	var gotToken, gotSlug string
+	var gotCreds *dbCreds
+	psqlDone := make(chan struct{})
+	deps = &Deps{
+		GetToken: func() (string, error) { return "tok123", nil },
+		Listen:   func(network, address string) (net.Listener, error) { return realListener, nil },
+		DialWS: func(u string, h http.Header) (*websocket.Conn, *http.Response, error) {
+			return dialer.Dial(testWSURL, h)
+		},
+		GetDatabaseURL: func(token, slug string) (string, error) {
+			gotToken, gotSlug = token, slug
+			return "postgresql://appuser:secret@ignored-host:5432/appdb", nil
+		},
+		RunPsql: func(h string, p int, creds *dbCreds, extraArgs []string) error {
+			gotCreds = creds
+			close(psqlDone)
+			return nil
+		},
+	}
+	defer func() { deps = defaultDeps() }()
+
+	done := make(chan error, 1)
+	go func() { done <- runConnect(nil, []string{"myapp"}) }()
+
+	select {
+	case <-psqlDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunPsql was never invoked")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runConnect returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runConnect did not return after psql exited")
+	}
+
+	if gotToken != "tok123" || gotSlug != "myapp" {
+		t.Fatalf("GetDatabaseURL called with (%q, %q), want (tok123, myapp)", gotToken, gotSlug)
+	}
+	if gotCreds == nil || gotCreds.User != "appuser" || gotCreds.Password != "secret" || gotCreds.DBName != "appdb" {
+		t.Fatalf("psql creds = %+v, want parsed from the fake GetDatabaseURL response", gotCreds)
+	}
+}
+
+// TestRunAdd_UsesDepsAddAddon: runAdd must provision through deps.AddAddon,
+// not api.NewClient directly (h-csu3).
+func TestRunAdd_UsesDepsAddAddon(t *testing.T) {
+	var gotToken, gotSlug, gotType string
+	deps = &Deps{
+		GetToken: func() (string, error) { return "tok123", nil },
+		AddAddon: func(token, slug, addonType string) (*api.Addon, error) {
+			gotToken, gotSlug, gotType = token, slug, addonType
+			return &api.Addon{Status: "active"}, nil
+		},
+	}
+	defer func() { deps = defaultDeps() }()
+
+	if err := runAdd(nil, []string{"myapp"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotToken != "tok123" || gotSlug != "myapp" || gotType != "postgresql" {
+		t.Fatalf("AddAddon called with (%q, %q, %q), want (tok123, myapp, postgresql)", gotToken, gotSlug, gotType)
+	}
+}
+
+// TestRunInfo_UsesDepsListAddons: runInfo must look up addons through
+// deps.ListAddons, not api.NewClient directly (h-csu3).
+func TestRunInfo_UsesDepsListAddons(t *testing.T) {
+	var gotToken, gotSlug string
+	deps = &Deps{
+		GetToken: func() (string, error) { return "tok123", nil },
+		ListAddons: func(token, slug string) ([]api.Addon, error) {
+			gotToken, gotSlug = token, slug
+			return []api.Addon{{Type: "postgresql", Status: "active"}}, nil
+		},
+	}
+	defer func() { deps = defaultDeps() }()
+
+	if err := runInfo(nil, []string{"myapp"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotToken != "tok123" || gotSlug != "myapp" {
+		t.Fatalf("ListAddons called with (%q, %q), want (tok123, myapp)", gotToken, gotSlug)
 	}
 }
