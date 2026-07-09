@@ -131,6 +131,18 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	}
 	defer listener.Close()
 
+	wsURL := wsURLForSlug(slug)
+	header := http.Header{"Authorization": {"Bearer " + token}}
+
+	// Fail fast (h-f70o): probe the tunnel before doing anything else.
+	// Previously --no-psql sat silently until the first client connected,
+	// then failed per-connection with an opaque "bad handshake" — now a
+	// broken tunnel (bad token, unknown slug, server down) is reported
+	// immediately, with the real status, and nothing else runs.
+	if err := probeTunnel(wsURL, header); err != nil {
+		return err
+	}
+
 	// Warn if binding to non-loopback address
 	if host != "localhost" && host != "127.0.0.1" && host != "::1" {
 		ui.Warn(fmt.Sprintf("Warning: binding to %s exposes the database proxy to the network. Use --host localhost for local-only access.", host))
@@ -186,9 +198,6 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		listener.Close()
 	}()
 
-	wsURL := wsURLForSlug(slug)
-	header := http.Header{"Authorization": {"Bearer " + token}}
-
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -199,12 +208,48 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	}
 }
 
+// formatWSDialError turns a WebSocket dial failure into an actionable
+// message. gorilla/websocket collapses every non-101 response into the bare
+// string "websocket: bad handshake" (err), discarding the *http.Response
+// that actually says why. resp == nil means the dial never reached the
+// server (a real network-layer failure — report err directly); resp != nil
+// means the server, or something in front of it (Caddy), answered with a
+// real status that's more useful than the gorilla string.
+func formatWSDialError(err error, resp *http.Response) string {
+	if resp == nil {
+		return fmt.Sprintf("tunnel dial failed: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	msg := fmt.Sprintf("tunnel rejected: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized:
+		msg += " (check your token — run 'hatch login')"
+	case resp.StatusCode == http.StatusNotFound:
+		msg += " (unknown app slug)"
+	case resp.StatusCode >= 500:
+		msg += " (server-side — see 'hatch logs' / api logs)"
+	}
+	return msg
+}
+
+// probeTunnel dials the tunnel once and closes it immediately on success —
+// the fail-fast check runConnect runs before doing anything else (h-f70o).
+// The real per-connection tunnel opened by handleConn is a separate dial.
+func probeTunnel(wsURL string, header http.Header) error {
+	conn, resp, err := deps.DialWS(wsURL, header)
+	if err != nil {
+		return fmt.Errorf("%s", formatWSDialError(err, resp))
+	}
+	return conn.Close()
+}
+
 func handleConn(tcpConn net.Conn, wsURL string, header http.Header) {
 	defer tcpConn.Close()
 
-	wsConn, _, err := deps.DialWS(wsURL, header)
+	wsConn, resp, err := deps.DialWS(wsURL, header)
 	if err != nil {
-		ui.Error(fmt.Sprintf("WebSocket dial: %v", err))
+		ui.Error(formatWSDialError(err, resp))
 		return
 	}
 	defer wsConn.Close()
