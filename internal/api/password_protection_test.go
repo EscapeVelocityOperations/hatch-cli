@@ -64,6 +64,29 @@ func TestGetPasswordProtection(t *testing.T) {
 	}
 }
 
+func TestDeletePasswordProtection(t *testing.T) {
+	var gotMethod, gotPath, gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath, gotAuth = r.Method, r.URL.Path, r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"protected":false}`))
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+
+	if err := c.DeletePasswordProtection("my-app"); err != nil {
+		t.Fatalf("DeletePasswordProtection: %v", err)
+	}
+	if gotMethod != "DELETE" || gotPath != "/v1/apps/my-app/protect" {
+		t.Errorf("request = %s %s, want DELETE /v1/apps/my-app/protect", gotMethod, gotPath)
+	}
+	if gotAuth != "Bearer tok123" {
+		t.Errorf("auth = %q, want Bearer tok123", gotAuth)
+	}
+}
+
 // TestSetPasswordProtection_APIError: a 4xx is surfaced as an error, not swallowed.
 func TestSetPasswordProtection_APIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

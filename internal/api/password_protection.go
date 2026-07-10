@@ -37,6 +37,20 @@ func (c *Client) SetPasswordProtection(slug, password string) (*PasswordProtecti
 	return &pp, nil
 }
 
+// DeletePasswordProtection disables password protection
+// (DELETE /v1/apps/{slug}/protect).
+func (c *Client) DeletePasswordProtection(slug string) error {
+	if err := validateSlug(slug); err != nil {
+		return err
+	}
+	resp, err := c.do("DELETE", "/apps/"+slug+"/protect", nil)
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	return nil
+}
+
 // GetPasswordProtection returns the current password-protection state
 // (GET /v1/apps/{slug}/protect).
 func (c *Client) GetPasswordProtection(slug string) (*PasswordProtection, error) {
