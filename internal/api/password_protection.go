@@ -36,3 +36,22 @@ func (c *Client) SetPasswordProtection(slug, password string) (*PasswordProtecti
 	}
 	return &pp, nil
 }
+
+// GetPasswordProtection returns the current password-protection state
+// (GET /v1/apps/{slug}/protect).
+func (c *Client) GetPasswordProtection(slug string) (*PasswordProtection, error) {
+	if err := validateSlug(slug); err != nil {
+		return nil, err
+	}
+	resp, err := c.do("GET", "/apps/"+slug+"/protect", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var pp PasswordProtection
+	if err := json.NewDecoder(resp.Body).Decode(&pp); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	return &pp, nil
+}
