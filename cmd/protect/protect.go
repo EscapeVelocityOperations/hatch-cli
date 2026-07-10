@@ -16,6 +16,7 @@ func NewCmd() *cobra.Command {
 		RunE:  runProtect,
 	}
 	cmd.Flags().String("password", "", "Set a password, enabling password protection")
+	cmd.Flags().Bool("off", false, "Disable password protection")
 	cmd.AddCommand(NewEmailCmd())
 	return cmd
 }

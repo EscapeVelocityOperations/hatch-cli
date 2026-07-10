@@ -69,6 +69,28 @@ func protectCmdWithFlags() *cobra.Command {
 	return cmd
 }
 
+func TestRunProtectDisable_CallsClear(t *testing.T) {
+	mock := &mockPasswordAPIClient{}
+	withTestPasswordDeps(t, mock)
+
+	cmd := protectCmdWithFlags()
+	_ = cmd.Flags().Set("off", "true")
+
+	out, err := captureStdout(func() error { return runProtect(cmd, nil) })
+	if err != nil {
+		t.Fatalf("runProtect: %v", err)
+	}
+	if mock.setCalled {
+		t.Error("expected SetPasswordProtection NOT to be called on --off")
+	}
+	if !mock.deleteCalled {
+		t.Fatal("expected DeletePasswordProtection to be called")
+	}
+	if !strings.Contains(out, "my-app") || !strings.Contains(out, "disabled") {
+		t.Errorf("output = %q, want a disabled confirmation mentioning the app slug", out)
+	}
+}
+
 func TestRunProtectEnable_PostsPassword(t *testing.T) {
 	mock := &mockPasswordAPIClient{}
 	withTestPasswordDeps(t, mock)

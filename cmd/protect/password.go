@@ -110,6 +110,15 @@ func runProtect(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	off, _ := cmd.Flags().GetBool("off")
+	if off {
+		if err := client.DeletePasswordProtection(slug); err != nil {
+			return fmt.Errorf("disabling password protection: %w", err)
+		}
+		fmt.Printf("Password protection disabled for %s.\n", slug)
+		return nil
+	}
+
 	password, _ := cmd.Flags().GetString("password")
 	if _, err := client.SetPasswordProtection(slug, password); err != nil {
 		return fmt.Errorf("enabling password protection: %w", err)
