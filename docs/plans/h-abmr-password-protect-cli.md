@@ -61,44 +61,29 @@ timing: "password set for `<slug>`; enforced by the Hatch auth-gateway."
 
 ## Micro-tasks
 
-- [ ] T-001 — api client: `SetPasswordProtection` (POST). Red:
-  `TestSetPasswordProtection` (mirrors `TestSetEmailProtection`: asserts
-  method/path/auth header/request body, response decode). Green: add
-  `PasswordProtection{Protected bool}` struct + method in new
-  `internal/api/password_protection.go`.
-- [ ] T-002 — api client: `GetPasswordProtection` (GET). Red:
-  `TestGetPasswordProtection`. Green: add method.
-- [ ] T-003 — api client: `DeletePasswordProtection` (DELETE). Red:
-  `TestDeletePasswordProtection`. Green: add method.
-- [ ] T-004 — api client: error surfacing. Red:
-  `TestSetPasswordProtection_APIError` (mirrors
-  `TestSetEmailProtection_APIError`, a 400 surfaces as an error). Green:
-  should already pass via the shared `c.do()` wrapping — confirms the
-  contract, no new prod code expected.
-- [ ] T-005 — cmd scaffolding + enable path. Red:
-  `TestRunProtectEnable_PostsPassword` (cmd/protect/password_test.go, mirrors
-  `TestRunEmailEnable_PostsNormalizedLists`): mock `PasswordAPIClient`,
-  assert `Set` called with the flag value, stdout confirms enablement +
-  mentions the auth-gateway, password value never appears in captured
-  stdout. Green: `cmd/protect/password.go` (interface + `PasswordDeps` +
-  `defaultPasswordDeps` + `realPasswordAPIClient` + `resolvePasswordApp` +
-  `runProtect` enable branch) + wire `--password string` flag and `RunE:
-  runProtect` onto `protect.go`'s `cmd`.
-- [ ] T-006 — disable path. Red: `TestRunProtectDisable_CallsClear`. Green:
-  add `--off bool` flag + disable branch in `runProtect` (calls
-  `DeletePasswordProtection`).
-- [ ] T-007 — status path (bare `hatch protect`). Red:
-  `TestRunProtectStatus_{Protected,Unprotected}`. Green: default branch in
-  `runProtect` (neither flag set) calls `GetPasswordProtection`, prints
-  status.
-- [ ] T-008 — validation guards. Red:
-  `TestRunProtect_MutuallyExclusiveFlags` (`--password` + `--off` together →
-  error, no API call), `TestRunProtect_EmptyPassword` (`--password ""` →
-  error, no API call). Green: add guard checks at the top of `runProtect`.
+- [x] T-001 — api client: `SetPasswordProtection` (POST). ✅ green at
+  `TestSetPasswordProtection` — commit f81a9e7.
+- [x] T-002 — api client: `GetPasswordProtection` (GET). ✅ green at
+  `TestGetPasswordProtection` — commit 20ae98d.
+- [x] T-003 — api client: `DeletePasswordProtection` (DELETE). ✅ green at
+  `TestDeletePasswordProtection` — commit 9f242fc.
+- [x] T-004 — api client: error surfacing. ✅ green at
+  `TestSetPasswordProtection_APIError` (folded into T-001's commit
+  f81a9e7 — same file/cycle).
+- [x] T-005 — cmd scaffolding + enable path. ✅ green at
+  `TestRunProtectEnable_PostsPassword` — commit 38f2871.
+- [x] T-006 — disable path. ✅ green at `TestRunProtectDisable_CallsClear`
+  — commit 83d4839.
+- [x] T-007 — status path (bare `hatch protect`). ✅ green at
+  `TestRunProtectStatus_{Protected,Unprotected}` — commit cbd4256.
+- [x] T-008 — validation guards. ✅ green at
+  `TestRunProtect_{MutuallyExclusiveFlags,EmptyPassword}` — commit 44c9787
+  (includes a small refactor: single flag read at the top of `runProtect`
+  instead of re-reading `--password` in the enable branch).
 
-## Acceptance
+## Acceptance — VERIFIED
 
-`go build ./...` clean, `go test ./...` green, `go vet ./...` clean,
-existing `TestProtectCommandRegistered` (cmd/root/protect_test.go) still
-passes unmodified (no new subcommand registered — flags added to the
-existing `protect` command).
+`go build ./...` clean, `go test ./...` green (full repo, all packages),
+`go vet ./...` clean, `TestProtectCommandRegistered`
+(cmd/root/protect_test.go) passes unmodified (no new subcommand registered
+— flags added to the existing `protect` command).
