@@ -40,6 +40,30 @@ func TestSetPasswordProtection(t *testing.T) {
 	}
 }
 
+func TestGetPasswordProtection(t *testing.T) {
+	var gotMethod, gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"protected":true}`))
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+
+	pp, err := c.GetPasswordProtection("my-app")
+	if err != nil {
+		t.Fatalf("GetPasswordProtection: %v", err)
+	}
+	if gotMethod != "GET" || gotPath != "/v1/apps/my-app/protect" {
+		t.Errorf("request = %s %s, want GET /v1/apps/my-app/protect", gotMethod, gotPath)
+	}
+	if !pp.Protected {
+		t.Errorf("password protection = %+v, want Protected:true", pp)
+	}
+}
+
 // TestSetPasswordProtection_APIError: a 4xx is surfaced as an error, not swallowed.
 func TestSetPasswordProtection_APIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
