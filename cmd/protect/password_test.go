@@ -132,6 +132,39 @@ func TestRunProtectStatus_Unprotected(t *testing.T) {
 	}
 }
 
+func TestRunProtect_MutuallyExclusiveFlags(t *testing.T) {
+	mock := &mockPasswordAPIClient{}
+	withTestPasswordDeps(t, mock)
+
+	cmd := protectCmdWithFlags()
+	_ = cmd.Flags().Set("password", "hunter2")
+	_ = cmd.Flags().Set("off", "true")
+
+	err := runProtect(cmd, nil)
+	if err == nil {
+		t.Fatal("expected an error when --password and --off are both set")
+	}
+	if mock.setCalled || mock.deleteCalled {
+		t.Error("expected no API call when flags conflict")
+	}
+}
+
+func TestRunProtect_EmptyPassword(t *testing.T) {
+	mock := &mockPasswordAPIClient{}
+	withTestPasswordDeps(t, mock)
+
+	cmd := protectCmdWithFlags()
+	_ = cmd.Flags().Set("password", "")
+
+	err := runProtect(cmd, nil)
+	if err == nil {
+		t.Fatal("expected an error for an explicitly empty --password")
+	}
+	if mock.setCalled {
+		t.Error("expected no API call for an empty password")
+	}
+}
+
 func TestRunProtectEnable_PostsPassword(t *testing.T) {
 	mock := &mockPasswordAPIClient{}
 	withTestPasswordDeps(t, mock)

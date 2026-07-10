@@ -105,12 +105,22 @@ func resolvePasswordApp() (PasswordAPIClient, string, error) {
 // protection is a single credential, not a list, so it takes flags directly
 // on the parent command instead of enable/disable/status verbs).
 func runProtect(cmd *cobra.Command, args []string) error {
+	off, _ := cmd.Flags().GetBool("off")
+	password, _ := cmd.Flags().GetString("password")
+	passwordChanged := cmd.Flags().Changed("password")
+
+	if off && passwordChanged {
+		return errors.New("--password and --off are mutually exclusive")
+	}
+	if passwordChanged && password == "" {
+		return errors.New("password is required (pass a non-empty value with --password)")
+	}
+
 	client, slug, err := resolvePasswordApp()
 	if err != nil {
 		return err
 	}
 
-	off, _ := cmd.Flags().GetBool("off")
 	if off {
 		if err := client.DeletePasswordProtection(slug); err != nil {
 			return fmt.Errorf("disabling password protection: %w", err)
@@ -119,7 +129,7 @@ func runProtect(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	if !cmd.Flags().Changed("password") {
+	if !passwordChanged {
 		pp, err := client.GetPasswordProtection(slug)
 		if err != nil {
 			return fmt.Errorf("getting password protection status: %w", err)
@@ -132,7 +142,6 @@ func runProtect(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	password, _ := cmd.Flags().GetString("password")
 	if _, err := client.SetPasswordProtection(slug, password); err != nil {
 		return fmt.Errorf("enabling password protection: %w", err)
 	}
