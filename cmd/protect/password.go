@@ -119,6 +119,19 @@ func runProtect(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	if !cmd.Flags().Changed("password") {
+		pp, err := client.GetPasswordProtection(slug)
+		if err != nil {
+			return fmt.Errorf("getting password protection status: %w", err)
+		}
+		if pp.Protected {
+			fmt.Printf("%s is password-protected.\n", slug)
+		} else {
+			fmt.Printf("%s is not password-protected.\n", slug)
+		}
+		return nil
+	}
+
 	password, _ := cmd.Flags().GetString("password")
 	if _, err := client.SetPasswordProtection(slug, password); err != nil {
 		return fmt.Errorf("enabling password protection: %w", err)

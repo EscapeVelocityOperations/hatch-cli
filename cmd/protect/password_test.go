@@ -91,6 +91,47 @@ func TestRunProtectDisable_CallsClear(t *testing.T) {
 	}
 }
 
+func TestRunProtectStatus_Protected(t *testing.T) {
+	mock := &mockPasswordAPIClient{
+		getFn: func(slug string) (*PasswordProtection, error) {
+			return &PasswordProtection{Protected: true}, nil
+		},
+	}
+	withTestPasswordDeps(t, mock)
+
+	cmd := protectCmdWithFlags()
+
+	out, err := captureStdout(func() error { return runProtect(cmd, nil) })
+	if err != nil {
+		t.Fatalf("runProtect: %v", err)
+	}
+	if mock.setCalled || mock.deleteCalled {
+		t.Error("bare status call must not mutate protection state")
+	}
+	if !strings.Contains(out, "my-app") || !strings.Contains(strings.ToLower(out), "protected") {
+		t.Errorf("output = %q, want a status line mentioning the app slug + protected", out)
+	}
+}
+
+func TestRunProtectStatus_Unprotected(t *testing.T) {
+	mock := &mockPasswordAPIClient{
+		getFn: func(slug string) (*PasswordProtection, error) {
+			return &PasswordProtection{Protected: false}, nil
+		},
+	}
+	withTestPasswordDeps(t, mock)
+
+	cmd := protectCmdWithFlags()
+
+	out, err := captureStdout(func() error { return runProtect(cmd, nil) })
+	if err != nil {
+		t.Fatalf("runProtect: %v", err)
+	}
+	if !strings.Contains(out, "my-app") || !strings.Contains(strings.ToLower(out), "not") {
+		t.Errorf("output = %q, want a status line indicating NOT protected", out)
+	}
+}
+
 func TestRunProtectEnable_PostsPassword(t *testing.T) {
 	mock := &mockPasswordAPIClient{}
 	withTestPasswordDeps(t, mock)
