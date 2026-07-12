@@ -29,15 +29,23 @@ from the bead's literal example text, not an oversight.
 ## Design decision: honest-output wording
 
 Bead was filed before h-macc (the enforcing auth-gateway) shipped. h-macc's
-PR-2/PR-3 (hatch-control #66, #67) merged 2026-07-08 — the gateway now
-unconditionally gates every protected-egg request (verified: `logoutPath`
-live on origin/main, reconciler routes protected apps to the gateway
-upstream, never flips to direct). The bead's suggested caveat ("protection
-becomes active once the platform auth-gateway is deployed") would now be a
-false claim in the other direction. Rather than assert a specific
-deployment/live state I have not verified against this exact moment's prod
-SHA, the CLI states the mechanism, which is true regardless of exact deploy
-timing: "password set for `<slug>`; enforced by the Hatch auth-gateway."
+PR-2/PR-3 (hatch-control #66, #67) merged 2026-07-08. Original plan reasoned
+the gateway now unconditionally gates every protected-egg request and had
+the CLI print "password set for `<slug>`; enforced by the Hatch
+auth-gateway."
+
+**Reviewer REWORK (2026-07-12, fd-111496867c16):** that claim is false
+against current origin/main — h-7lbm (P0, fix PR#79 open/unmerged) and
+h-wvzu (fix PR#81 open/unmerged) mean protected eggs have documented
+zero-auth windows on every wake, boost, deploy, and restart; h-0ed4 (P1,
+deferred) means the wakeproxy fails open on a protection-lookup error. The
+gate chokepoints from those fixes are absent from hatch-control origin/main.
+Asserting "enforced by" is exactly the misleading security half-ship the
+bead's HONEST OUTPUT requirement forbids — and reverting to the bead's
+original "becomes active once deployed" wording would be false in the
+*other* direction (the gateway is deployed, just gap-ridden). Corrected
+output states only what's verifiably true and makes no enforcement
+guarantee either way: "Password protection enabled for `<slug>`."
 
 ## API surface (already live on hatch-api main — verified, no work needed there)
 
@@ -87,3 +95,11 @@ timing: "password set for `<slug>`; enforced by the Hatch auth-gateway."
 `go vet ./...` clean, `TestProtectCommandRegistered`
 (cmd/root/protect_test.go) passes unmodified (no new subcommand registered
 — flags added to the existing `protect` command).
+
+## Rework — fd-111496867c16 (2026-07-12)
+
+- [x] Drop "enforced by the Hatch auth-gateway" enforcement claim from the
+  enable-path success output (see design-decision update above). ✅ green at
+  `TestRunProtectEnable_PostsPassword` — commit 84acc17. Re-verified:
+  `go build ./...` clean, `go test ./...` 711 passed / 44 packages,
+  `go vet ./...` clean.
