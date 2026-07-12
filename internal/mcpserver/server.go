@@ -129,6 +129,7 @@ func NewServer() *server.MCPServer {
 	s.AddTool(addDomainTool(), addDomainHandler)
 	s.AddTool(listDomainsTool(), listDomainsHandler)
 	s.AddTool(removeDomainTool(), removeDomainHandler)
+	s.AddTool(verifyDomainTool(), verifyDomainHandler)
 	s.AddTool(setEmailProtectionTool(), setEmailProtectionHandler)
 	s.AddTool(getEmailProtectionTool(), getEmailProtectionHandler)
 	s.AddTool(disableEmailProtectionTool(), disableEmailProtectionHandler)
@@ -1250,6 +1251,45 @@ func removeDomainHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf("Domain '%s' removed from '%s'", domain, slug)), nil
+}
+
+// --- verify_domain ---
+
+func verifyDomainTool() mcp.Tool {
+	return mcp.NewTool("verify_domain",
+		mcp.WithDescription("Verify ownership of a custom domain via its DNS TXT record. Run after publishing the _hatch-verify TXT record from add_domain."),
+		mcp.WithString("app",
+			mcp.Required(),
+			mcp.Description("App slug (name) the domain belongs to"),
+		),
+		mcp.WithString("domain",
+			mcp.Required(),
+			mcp.Description("Custom domain name to verify (e.g. example.com)"),
+		),
+	)
+}
+
+func verifyDomainHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	slug, err := req.RequireString("app")
+	if err != nil {
+		return toolError("failed to verify domain: missing required parameter 'app'")
+	}
+	domain, err := req.RequireString("domain")
+	if err != nil {
+		return toolError("failed to verify domain: missing required parameter 'domain'")
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return toolError("failed to verify domain: %v", err)
+	}
+
+	d, err := client.VerifyDomain(slug, domain)
+	if err != nil {
+		return toolError("failed to verify domain: %v", err)
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("Domain %s verified: %t\nStatus: %s\nSSL will be provisioned automatically via Let's Encrypt once DNS propagates.", d.Domain, d.Verified, d.Status)), nil
 }
 
 // --- get_build_logs ---
