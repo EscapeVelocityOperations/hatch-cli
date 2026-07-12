@@ -185,8 +185,16 @@ func TestRunProtectEnable_PostsPassword(t *testing.T) {
 	if !strings.Contains(out, "my-app") {
 		t.Errorf("output = %q, want confirmation mentioning the app slug", out)
 	}
-	if !strings.Contains(out, "auth-gateway") {
-		t.Errorf("output = %q, want a mention of the enforcing auth-gateway (honest-output requirement)", out)
+	if !strings.Contains(out, "Password protection enabled") {
+		t.Errorf("output = %q, want a factual enablement confirmation", out)
+	}
+	// h-macc rework: the enforcement layer has open P0 bypass fixes
+	// (h-7lbm PR#79, h-wvzu PR#81) — the CLI must not assert reliable
+	// enforcement it cannot guarantee. "auth-gateway" may still appear
+	// as a description of intent (who prompts for the password), but
+	// never as an enforcement guarantee.
+	if strings.Contains(out, "enforced by") {
+		t.Errorf("output = %q, must not claim enforcement while known bypasses are open (h-abmr rework)", out)
 	}
 	if strings.Contains(out, "hunter2") {
 		t.Errorf("output = %q, must never echo the stored password back", out)
