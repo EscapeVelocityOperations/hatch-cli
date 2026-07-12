@@ -146,6 +146,6 @@ func runProtect(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("enabling password protection: %w", err)
 	}
 
-	fmt.Printf("Password protection enabled for %s; enforced by the Hatch auth-gateway.\n", slug)
+	fmt.Printf("Password protection enabled for %s.\n", slug)
 	return nil
 }
