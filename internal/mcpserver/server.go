@@ -471,7 +471,7 @@ EXAMPLES:
 			mcp.Description("Command to start the app (paths relative to /app/). Required for all runtimes except static."),
 		),
 		mcp.WithString("app",
-			mcp.Description("App slug to deploy to. If omitted, reads .hatch.toml or creates a new app."),
+			mcp.Description("App slug to deploy to. If omitted, reads .hatch.toml from the deploy_target directory or creates a new app."),
 		),
 		mcp.WithString("name",
 			mcp.Description("App name for new apps (defaults to directory name)"),
@@ -532,31 +532,19 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		return toolError("failed to deploy app: %v", err)
 	}
 
-	// Resolve app slug
-	slug := appSlug
-	if slug == "" {
-		tomlPath := filepath.Join(".", ".hatch.toml")
-		if data, err := os.ReadFile(tomlPath); err == nil {
-			if strings.Contains(string(data), "[app]") {
-				lines := strings.Split(string(data), "\n")
-				for _, line := range lines {
-					line = strings.TrimSpace(line)
-					if strings.HasPrefix(line, "slug") {
-						parts := strings.SplitN(line, "=", 2)
-						if len(parts) == 2 {
-							slug = strings.Trim(strings.TrimSpace(parts[1]), "\"")
-						}
-					}
-				}
-			}
-		}
+	// Resolve app slug from the app parameter or the deploy_target's toml —
+	// never from the MCP server's own working directory.
+	res, err := resolveDeploySlug(appSlug, name, deployTarget)
+	if err != nil {
+		return toolError("failed to deploy app: %v", err)
 	}
+	slug := res.Slug
 
 	if slug == "" {
 		appName := name
 		if appName == "" {
-			cwd, _ := os.Getwd()
-			appName = filepath.Base(cwd)
+			abs, _ := filepath.Abs(deployTarget)
+			appName = filepath.Base(abs)
 		}
 
 		app, err := client.CreateApp(appName)
@@ -564,10 +552,9 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 			return toolError("failed to deploy app: %v", err)
 		}
 		slug = app.Slug
+		res.Provenance = fmt.Sprintf("new app created from name %q", appName)
 
-		tomlPath := filepath.Join(".", ".hatch.toml")
-		content := fmt.Sprintf("[app]\nslug = %q\nname = %q\n", slug, appName)
-		_ = os.WriteFile(tomlPath, []byte(content), 0644)
+		_ = writeHatchToml(deployTarget, slug, appName)
 	}
 
 	// Upload
@@ -576,7 +563,7 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	}
 
 	appURL := fmt.Sprintf("https://%s.nest.gethatch.eu", slug)
-	return mcp.NewToolResultText(fmt.Sprintf("Deployed successfully!\nApp: %s\nURL: %s\nRuntime: %s", slug, appURL, rt)), nil
+	return mcp.NewToolResultText(fmt.Sprintf("Deployed successfully!\nApp: %s\nURL: %s\nRuntime: %s\nApp resolved from: %s", slug, appURL, rt, res.Provenance)), nil
 }
 
 // createMCPTarGz creates a tar.gz from a directory for MCP deploy_app tool.
