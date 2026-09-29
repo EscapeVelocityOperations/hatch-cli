@@ -75,6 +75,19 @@ type Domain struct {
 	CNAME             string `json:"cname,omitempty"`
 	Verified          bool   `json:"verified"`
 	VerificationToken string `json:"verification_token,omitempty"`
+	// Certificate readiness (h-zqbr). Status/Verified only mean ownership is
+	// proven. Empty when the API predates it.
+	TLSStatus string     `json:"tls_status,omitempty"`
+	TLS       *DomainTLS `json:"tls,omitempty"`
+	Message   string     `json:"message,omitempty"`
+}
+
+// DomainTLS is a custom domain's certificate state.
+type DomainTLS struct {
+	Status     string     `json:"status"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	RetryAfter *time.Time `json:"retry_after,omitempty"`
+	Detail     string     `json:"detail,omitempty"`
 }
 
 // APIKey represents an API key for the user.
