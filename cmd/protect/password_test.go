@@ -16,6 +16,7 @@ type mockPasswordAPIClient struct {
 	deleteFn func(slug string) error
 
 	lastSetPassword string
+	lastSlug        string
 	setCalled       bool
 	deleteCalled    bool
 }
@@ -23,6 +24,7 @@ type mockPasswordAPIClient struct {
 func (m *mockPasswordAPIClient) SetPasswordProtection(slug, password string) (*PasswordProtection, error) {
 	m.setCalled = true
 	m.lastSetPassword = password
+	m.lastSlug = slug
 	if m.setFn != nil {
 		return m.setFn(slug, password)
 	}
@@ -30,6 +32,7 @@ func (m *mockPasswordAPIClient) SetPasswordProtection(slug, password string) (*P
 }
 
 func (m *mockPasswordAPIClient) GetPasswordProtection(slug string) (*PasswordProtection, error) {
+	m.lastSlug = slug
 	if m.getFn != nil {
 		return m.getFn(slug)
 	}
@@ -38,6 +41,7 @@ func (m *mockPasswordAPIClient) GetPasswordProtection(slug string) (*PasswordPro
 
 func (m *mockPasswordAPIClient) DeletePasswordProtection(slug string) error {
 	m.deleteCalled = true
+	m.lastSlug = slug
 	if m.deleteFn != nil {
 		return m.deleteFn(slug)
 	}
@@ -198,5 +202,141 @@ func TestRunProtectEnable_PostsPassword(t *testing.T) {
 	}
 	if strings.Contains(out, "hunter2") {
 		t.Errorf("output = %q, must never echo the stored password back", out)
+	}
+}
+
+func TestRunProtect_WhitespacePassword(t *testing.T) {
+	mock := &mockPasswordAPIClient{}
+	withTestPasswordDeps(t, mock)
+
+	cmd := protectCmdWithFlags()
+	_ = cmd.Flags().Set("password", "   ")
+
+	if err := runProtect(cmd, nil); err == nil {
+		t.Fatal("expected an error for a whitespace-only --password")
+	}
+	if mock.setCalled {
+		t.Error("expected no API call for a whitespace-only password")
+	}
+}
+
+// executeHatchProtect runs `hatch <args...>` through a real parent root with
+// the protect command mounted, the way main wires it. Calling runProtect
+// directly (or executing NewCmd() standalone, which makes it the root) cannot
+// catch positionals being silently dropped: cobra only rejects unknown args
+// on the root command (h-abmr F1). newProtectCmd is the same command NewCmd
+// returns minus the email subtree, which can only be mounted once per process.
+func executeHatchProtect(args ...string) (string, error) {
+	root := &cobra.Command{Use: "hatch", SilenceUsage: true, SilenceErrors: true}
+	root.AddCommand(newProtectCmd())
+	root.SetArgs(args)
+	return captureStdout(root.Execute)
+}
+
+// withCwdOutsideApp points GetCwd at a directory with no .hatch.toml.
+func withCwdOutsideApp(t *testing.T) {
+	t.Helper()
+	empty := t.TempDir()
+	passwordDeps.GetCwd = func() (string, error) { return empty, nil }
+}
+
+func TestProtectViaRoot_PositionalSlugTargetsThatEgg(t *testing.T) {
+	cases := []struct {
+		name       string
+		args       []string
+		wantSet    bool
+		wantDelete bool
+	}{
+		{"enable", []string{"protect", "other-app", "--password", "hunter2"}, true, false},
+		{"off", []string{"protect", "other-app", "--off"}, false, true},
+		{"status", []string{"protect", "other-app"}, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := &mockPasswordAPIClient{}
+			// cwd is my-app: the positional must win over .hatch.toml.
+			withTestPasswordDeps(t, mock)
+
+			out, err := executeHatchProtect(tc.args...)
+			if err != nil {
+				t.Fatalf("hatch %v: %v", tc.args, err)
+			}
+			if mock.lastSlug != "other-app" {
+				t.Errorf("API targeted slug %q, want other-app (must not fall back to cwd my-app)", mock.lastSlug)
+			}
+			if mock.setCalled != tc.wantSet || mock.deleteCalled != tc.wantDelete {
+				t.Errorf("set=%v delete=%v, want set=%v delete=%v",
+					mock.setCalled, mock.deleteCalled, tc.wantSet, tc.wantDelete)
+			}
+			if !strings.Contains(out, "other-app") || strings.Contains(out, "my-app") {
+				t.Errorf("output = %q, want it to name other-app only", out)
+			}
+		})
+	}
+}
+
+func TestProtectViaRoot_NoPositionalUsesCwdApp(t *testing.T) {
+	for _, args := range [][]string{
+		{"protect", "--password", "hunter2"},
+		{"protect", "--off"},
+	} {
+		mock := &mockPasswordAPIClient{}
+		withTestPasswordDeps(t, mock)
+
+		if _, err := executeHatchProtect(args...); err != nil {
+			t.Fatalf("hatch %v: %v", args, err)
+		}
+		if mock.lastSlug != "my-app" {
+			t.Errorf("hatch %v targeted slug %q, want cwd app my-app", args, mock.lastSlug)
+		}
+	}
+}
+
+func TestProtectViaRoot_NoSlugNoAppErrors(t *testing.T) {
+	for _, args := range [][]string{
+		{"protect", "--password", "hunter2"},
+		{"protect", "--off"},
+		{"protect"},
+	} {
+		mock := &mockPasswordAPIClient{}
+		withTestPasswordDeps(t, mock)
+		withCwdOutsideApp(t)
+
+		_, err := executeHatchProtect(args...)
+		if err == nil {
+			t.Fatalf("hatch %v: expected an error with no slug and no .hatch.toml", args)
+		}
+		if !strings.Contains(err.Error(), "no app specified") {
+			t.Errorf("hatch %v: error = %q, want a clear no-app error", args, err)
+		}
+		if mock.setCalled || mock.deleteCalled {
+			t.Errorf("hatch %v: expected no mutation without a target", args)
+		}
+	}
+}
+
+func TestProtectViaRoot_TooManyArgsIsUsageError(t *testing.T) {
+	mock := &mockPasswordAPIClient{}
+	withTestPasswordDeps(t, mock)
+
+	_, err := executeHatchProtect("protect", "a", "b", "--off")
+	if err == nil {
+		t.Fatal("expected a usage error for more than one positional")
+	}
+	if mock.setCalled || mock.deleteCalled {
+		t.Error("expected no API call on a usage error")
+	}
+}
+
+func TestProtectViaRoot_EmailSubcommandStillRoutes(t *testing.T) {
+	// MaximumNArgs(1) must not turn the `email` verb into a slug. The only
+	// NewCmd() call in this package's tests (email subtree mounts once).
+	cmd := NewCmd()
+	found, rest, err := cmd.Find([]string{"email"})
+	if err != nil {
+		t.Fatalf("Find(email): %v", err)
+	}
+	if found.Name() != "email" || len(rest) != 0 {
+		t.Errorf("protect email resolved to %q with args %v, want the email subcommand", found.Name(), rest)
 	}
 }

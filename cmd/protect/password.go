@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
@@ -73,15 +74,19 @@ func (r *realPasswordAPIClient) DeletePasswordProtection(slug string) error {
 }
 
 // resolvePasswordApp returns the password-protection API client and the
-// current app slug, or a friendly error (not logged in / no app in this
-// directory). Mirrors resolveEmailApp.
-func resolvePasswordApp() (PasswordAPIClient, string, error) {
+// target app slug — the positional slug if given, otherwise the app in the
+// current directory — or a friendly error (not logged in / no app).
+func resolvePasswordApp(args []string) (PasswordAPIClient, string, error) {
 	token, err := passwordDeps.GetToken()
 	if err != nil || token == "" {
 		return nil, "", errors.New("not logged in (run 'hatch login' first)")
 	}
 	if passwordDeps.NewAPIClient == nil {
 		return nil, "", errors.New("protect commands are not yet wired to the API")
+	}
+
+	if len(args) > 0 && args[0] != "" {
+		return passwordDeps.NewAPIClient(token), args[0], nil
 	}
 
 	dir := "."
@@ -94,8 +99,8 @@ func resolvePasswordApp() (PasswordAPIClient, string, error) {
 	}
 	slug := resolve.SlugFromDir(dir)
 	if slug == "" {
-		return nil, "", errors.New("no app found here — run from an app directory " +
-			"with a .hatch.toml (or 'hatch init' first)")
+		return nil, "", errors.New("no app specified — pass a slug " +
+			"('hatch protect <slug>') or run from an app directory with a .hatch.toml")
 	}
 
 	return passwordDeps.NewAPIClient(token), slug, nil
@@ -112,11 +117,11 @@ func runProtect(cmd *cobra.Command, args []string) error {
 	if off && passwordChanged {
 		return errors.New("--password and --off are mutually exclusive")
 	}
-	if passwordChanged && password == "" {
+	if passwordChanged && strings.TrimSpace(password) == "" {
 		return errors.New("password is required (pass a non-empty value with --password)")
 	}
 
-	client, slug, err := resolvePasswordApp()
+	client, slug, err := resolvePasswordApp(args)
 	if err != nil {
 		return err
 	}
