@@ -178,6 +178,13 @@ func TestNewServer_HasEmailProtectionTools(t *testing.T) {
 	}
 }
 
+func TestNewServer_HasVerifyDomainTool(t *testing.T) {
+	s := NewServer()
+	if s.GetTool("verify_domain") == nil {
+		t.Fatal("expected NewServer() to register a 'verify_domain' tool")
+	}
+}
+
 // --- hatch://tos resource ---
 
 func withTosResourceURL(t *testing.T, url string) {
@@ -1111,6 +1118,47 @@ func TestRemoveDomainHandler_AuthFailure(t *testing.T) {
 		"domain": "example.com",
 	}))
 	assertError(t, result, err, "not authenticated")
+}
+
+// --- verify_domain ---
+
+func TestVerifyDomainHandler_Success(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	newMockServer(t, map[string]http.HandlerFunc{
+		"POST /v1/apps/myapp-a1b2/domains/example.com/verify": jsonHandler(api.Domain{
+			Domain:   "example.com",
+			Status:   "active",
+			Verified: true,
+		}),
+	})
+
+	result, err := verifyDomainHandler(context.Background(), makeReq(map[string]interface{}{
+		"app":    "myapp-a1b2",
+		"domain": "example.com",
+	}))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, "example.com") {
+		t.Errorf("expected domain in output, got: %s", text)
+	}
+	if !strings.Contains(text, "verified") {
+		t.Errorf("expected verification confirmation, got: %s", text)
+	}
+}
+
+func TestVerifyDomainHandler_TXTNotFound(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	newMockServer(t, map[string]http.HandlerFunc{
+		"POST /v1/apps/myapp-a1b2/domains/example.com/verify": errorHandler(422, "verification failed: TXT record not found"),
+	})
+
+	result, err := verifyDomainHandler(context.Background(), makeReq(map[string]interface{}{
+		"app":    "myapp-a1b2",
+		"domain": "example.com",
+	}))
+	assertError(t, result, err, "TXT record not found")
 }
 
 // --- get_logs ---
