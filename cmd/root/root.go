@@ -11,6 +11,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/authcmd"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/boost"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/ci"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/collab"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/configure"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/credits"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/cron"
@@ -22,6 +23,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/env"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/initcmd"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/initignore"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/invite"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/login"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/logout"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/logs"
@@ -149,6 +151,7 @@ func init() {
 	rootCmd.AddCommand(authcmd.NewCmd())
 	rootCmd.AddCommand(boost.NewCmd())
 	rootCmd.AddCommand(ci.NewCmd())
+	rootCmd.AddCommand(collab.NewCmd())
 	rootCmd.AddCommand(configure.NewCmd())
 	rootCmd.AddCommand(credits.NewCmd())
 	rootCmd.AddCommand(cron.NewCmd())
@@ -159,6 +162,7 @@ func init() {
 	rootCmd.AddCommand(energy.NewCmd())
 	rootCmd.AddCommand(initcmd.NewCmd())
 	rootCmd.AddCommand(initignore.NewCmd())
+	rootCmd.AddCommand(invite.NewCmd())
 	rootCmd.AddCommand(env.NewCmd())
 	rootCmd.AddCommand(login.NewCmd())
 	rootCmd.AddCommand(logout.NewCmd())
