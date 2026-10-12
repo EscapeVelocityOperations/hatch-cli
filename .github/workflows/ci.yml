@@ -21,3 +21,6 @@ jobs:
         # goroutine-vs-test race this fix closes — and any future one — would
         # pass CI unnoticed.
         run: go test ./... -race -v
+
+      - name: Lint workflows (actionlint)
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12

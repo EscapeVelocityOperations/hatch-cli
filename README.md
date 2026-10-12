@@ -343,12 +343,31 @@ Supported commands: `logs`, `restart`, `destroy`, `open`, `env`
 
 Hatch stores configuration in `~/.hatch/config.json`. This file contains your authentication token and is created automatically on `hatch login`.
 
+## Release signing
+
+Darwin release binaries (`hatch-darwin-amd64`, `hatch-darwin-arm64`) are
+codesigned with a Developer ID Application certificate and notarized via
+`notarytool` when Apple credentials are configured in CI. This gives the
+binary a stable code identity that app firewalls (e.g. Little Snitch) can
+attribute, and clears Gatekeeper on manual browser downloads.
+
+We notarize a zip of the bare binary, not a stapled `.app`/`.dmg`/`.pkg` —
+Apple's `stapler` only staples bundles and installer packages, and switching
+distribution formats would break the `install.sh` / MCP bootstrap checksum
+contract. Gatekeeper instead resolves the notarization ticket online on
+first launch, so a freshly downloaded binary needs network access the first
+time it runs.
+
+If the signing secrets aren't configured, the release step falls back to
+today's behavior — an unsigned binary, with a `::warning::` noted in the
+workflow log. See the secrets contract in
+[`docs/plans/h-6ewk-darwin-sign-notarize-release.md`](docs/plans/h-6ewk-darwin-sign-notarize-release.md).
+
 ## Stack
 
 - Go 1.25+
 - [Cobra](https://github.com/spf13/cobra) - CLI framework
 - [Viper](https://github.com/spf13/viper) - Configuration management
-- [goreleaser](https://goreleaser.com) - Cross-platform builds and releases
 
 ## Development
 
@@ -361,7 +380,4 @@ make test
 
 # Lint
 make lint
-
-# Build release snapshot
-make release-snapshot
 ```
