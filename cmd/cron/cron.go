@@ -225,10 +225,28 @@ func runCronLogs(cmd *cobra.Command, args []string) error {
 
 	logs, err := client.GetCronRunLogs(slug, cronID, runID)
 	if err != nil {
-		return fmt.Errorf("fetching logs for run %s: %w", runID, err)
+		return friendlyCronLogsErr(runID, err)
 	}
 	fmt.Println(logs)
 	return nil
+}
+
+// friendlyCronLogsErr maps the run-logs endpoint's status codes (h-muuw5:
+// 404 run-not-found/no-alloc, 503 no log source wired, 502 upstream fetch
+// failed) to a short, actionable message instead of surfacing the raw
+// "API error <code>: {\"error\":...}" client-layer wrapping.
+func friendlyCronLogsErr(runID string, err error) error {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "API error 503:"):
+		return fmt.Errorf("log source not configured")
+	case strings.Contains(msg, "API error 404:"):
+		return fmt.Errorf("run not found / produced no logs")
+	case strings.Contains(msg, "API error 502:"):
+		return fmt.Errorf("could not fetch run logs")
+	default:
+		return fmt.Errorf("fetching logs for run %s: %w", runID, err)
+	}
 }
 
 // formatCronTime renders run timestamps compactly in UTC.

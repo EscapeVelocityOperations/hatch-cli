@@ -86,6 +86,46 @@ func TestGetCronRunLogs(t *testing.T) {
 	}
 }
 
+// h-5fgqt (AC #2): the run-logs handler (hatch-api h-muuw5) reports three
+// distinct non-2xx cases as JSON {"error": "..."} — 404 (run not found /
+// produced no logs), 503 (no log source wired), 502 (log source fetch
+// failed). GetCronRunLogs itself just surfaces whatever `do()` produces; this
+// locks in that exact shape so cmd/cron's friendly-error mapping (which
+// pattern-matches on it) doesn't silently drift out of sync.
+func TestGetCronRunLogs_ErrorStatusCodes(t *testing.T) {
+	cases := []struct {
+		name       string
+		status     int
+		body       string
+		wantSubstr string
+	}{
+		{"not found", http.StatusNotFound, `{"error":"run not found"}`, "API error 404: {\"error\":\"run not found\"}"},
+		{"no alloc", http.StatusNotFound, `{"error":"run produced no logs (it did not execute)"}`, "API error 404:"},
+		{"no log source", http.StatusServiceUnavailable, `{"error":"log source not configured"}`, "API error 503: {\"error\":\"log source not configured\"}"},
+		{"fetch failed", http.StatusBadGateway, `{"error":"could not fetch run logs"}`, "API error 502: {\"error\":\"could not fetch run logs\"}"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+
+			c := NewClient("tok123")
+			c.host = server.URL
+
+			_, err := c.GetCronRunLogs("demo-app", "c1", "run-2")
+			if err == nil {
+				t.Fatalf("expected error for status %d, got nil", tc.status)
+			}
+			if !strings.Contains(err.Error(), tc.wantSubstr) {
+				t.Errorf("error = %q, want substring %q", err.Error(), tc.wantSubstr)
+			}
+		})
+	}
+}
+
 // h-e2hf/h-gveh: GetWhoami hits the read-only, TOS-exempt identity endpoint so
 // login/check_auth/get_started can surface which account is authenticated and
 // whether TOS acceptance is recorded, without an extra query on the server.
