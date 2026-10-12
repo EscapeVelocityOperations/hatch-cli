@@ -132,6 +132,9 @@ func NewServer() *server.MCPServer {
 	s.AddTool(setEmailProtectionTool(), setEmailProtectionHandler)
 	s.AddTool(getEmailProtectionTool(), getEmailProtectionHandler)
 	s.AddTool(disableEmailProtectionTool(), disableEmailProtectionHandler)
+	s.AddTool(addEmailProtectionUserTool(), addEmailProtectionUserHandler)
+	s.AddTool(removeEmailProtectionUserTool(), removeEmailProtectionUserHandler)
+	s.AddTool(clearEmailProtectionTool(), clearEmailProtectionHandler)
 	s.AddTool(restartAppTool(), restartAppHandler)
 	s.AddTool(getBuildLogsTool(), getBuildLogsHandler)
 
