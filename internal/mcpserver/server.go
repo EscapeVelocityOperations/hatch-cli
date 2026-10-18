@@ -577,7 +577,7 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	}
 
 	// The upload only starts the rollout: wait for a terminal app status.
-	app, err := deploywait.Wait(slug, func() (*api.App, error) { return client.GetApp(slug) }, deployWaitOptions)
+	app, err := deploywait.Wait(ctx, slug, func() (*api.App, error) { return client.GetApp(slug) }, deployWaitOptions)
 	if err != nil {
 		return toolError("failed to deploy app: %v. Use get_logs or get_build_logs for %s", err, slug)
 	}

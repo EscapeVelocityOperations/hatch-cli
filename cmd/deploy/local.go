@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/archcheck"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/deploywait"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/exitcode"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ignore"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
 	"golang.org/x/term"
@@ -30,25 +32,75 @@ type ArtifactDeployConfig struct {
 	DeployTarget string
 	Runtime      string
 	StartCommand string
-	AppSlug      string        // Explicit slug (optional, reads .hatch.toml if empty)
-	PreviewRef   string        // "pr-<n>" or "<n>": deploy to the parent's preview egg (h-qtie8)
-	JSONOutput   bool          // print a machine-readable JSON result instead of human output
-	NoWait       bool          // return once the upload is accepted (h-59ej)
-	WaitTimeout  time.Duration // max wait for a terminal status; 0 = deploywait.DefaultTimeout
+	AppSlug      string          // Explicit slug (optional, reads .hatch.toml if empty)
+	PreviewRef   string          // "pr-<n>" or "<n>": deploy to the parent's preview egg (h-qtie8)
+	JSONOutput   bool            // print a machine-readable JSON result instead of human output
+	NoWait       bool            // return once the upload is accepted (h-59ej)
+	WaitTimeout  time.Duration   // max wait for a terminal status; 0 = deploywait.DefaultTimeout
+	Context      context.Context // cancels the status wait; nil = context.Background()
 }
+
+// Exit codes of a failed hatch deploy, honored even outside a TTY (h-59ej).
+const (
+	ExitDeployError   = 1 // validation, auth, upload or build failure
+	ExitRolloutFailed = 2 // the egg ended failed, stopped or crashed
+	ExitWaitTimeout   = 3 // no terminal status within --timeout
+)
 
 // validRuntimes lists accepted runtime values.
 var validRuntimes = map[string]bool{
 	"node": true, "python": true, "go": true, "rust": true, "php": true, "bun": true, "static": true,
 }
 
-// RunArtifactDeploy deploys a pre-built directory as an artifact.
+// RunArtifactDeploy deploys a pre-built directory as an artifact. A failure
+// carries an exit code (see ExitDeployError…); under --json, stdout gets
+// exactly one JSON line describing the outcome, success or not.
 func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 	// Under --json, stdout carries only the final JSON line.
 	if cfg.JSONOutput {
 		defer ui.SetOutput(os.Stderr)()
 	}
+	fields, err := deployArtifact(cfg)
+	return finishDeploy(cfg.JSONOutput, fields, err)
+}
 
+// finishDeploy prints the --json result (an error payload when the failure
+// happened before the rollout wait) and attaches the exit code.
+func finishDeploy(jsonOutput bool, fields map[string]any, err error) error {
+	if jsonOutput {
+		if fields == nil {
+			fields = jsonError("", err)
+		}
+		if perr := printJSONResult(fields); perr != nil && err == nil {
+			err = perr
+		}
+	}
+	if err == nil {
+		return nil
+	}
+	var failedErr *deploywait.FailedError
+	var timeoutErr *deploywait.TimeoutError
+	switch {
+	case errors.As(err, &failedErr):
+		return exitcode.Wrap(ExitRolloutFailed, err)
+	case errors.As(err, &timeoutErr):
+		return exitcode.Wrap(ExitWaitTimeout, err)
+	}
+	return exitcode.Wrap(ExitDeployError, err)
+}
+
+// jsonError is the --json payload of a failure before the rollout wait.
+func jsonError(slug string, err error) map[string]any {
+	out := map[string]any{"status": "error", "waited": false, "error": err.Error()}
+	if slug != "" {
+		out["slug"] = slug
+	}
+	return out
+}
+
+// deployArtifact runs the deploy and returns the --json payload (nil when it
+// failed before reaching an egg).
+func deployArtifact(cfg ArtifactDeployConfig) (map[string]any, error) {
 	// Inform interactive users that Hatch is designed for AI agents
 	if term.IsTerminal(int(os.Stdout.Fd())) {
 		ui.Info("Hatch is designed for AI agents. Manual usage is supported, but your agent should handle deployment in production.")
@@ -56,24 +108,24 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 
 	// Validate runtime
 	if cfg.Runtime == "" {
-		return fmt.Errorf("--runtime is required (node, python, go, rust, php, bun, or static)")
+		return nil, fmt.Errorf("--runtime is required (node, python, go, rust, php, bun, or static)")
 	}
 	if !validRuntimes[cfg.Runtime] {
-		return fmt.Errorf("unknown runtime %q (valid: node, python, go, rust, php, bun, static)", cfg.Runtime)
+		return nil, fmt.Errorf("unknown runtime %q (valid: node, python, go, rust, php, bun, static)", cfg.Runtime)
 	}
 
 	// Validate start command for non-static
 	if cfg.Runtime != "static" && cfg.StartCommand == "" {
-		return fmt.Errorf("--start-command is required for runtime %q", cfg.Runtime)
+		return nil, fmt.Errorf("--start-command is required for runtime %q", cfg.Runtime)
 	}
 
 	// Validate deploy-target directory exists
 	targetInfo, err := os.Stat(cfg.DeployTarget)
 	if err != nil {
-		return fmt.Errorf("deploy-target directory not found: %s", cfg.DeployTarget)
+		return nil, fmt.Errorf("deploy-target directory not found: %s", cfg.DeployTarget)
 	}
 	if !targetInfo.IsDir() {
-		return fmt.Errorf("deploy-target must be a directory: %s", cfg.DeployTarget)
+		return nil, fmt.Errorf("deploy-target must be a directory: %s", cfg.DeployTarget)
 	}
 
 	// Validate entrypoint exists (for non-static runtimes)
@@ -82,13 +134,13 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 		if entrypoint != "" {
 			entrypointPath := filepath.Join(cfg.DeployTarget, entrypoint)
 			if _, err := os.Stat(entrypointPath); os.IsNotExist(err) {
-				return fmt.Errorf("entrypoint file %q not found in deploy-target %q\n\nThe start-command references %q but that file does not exist in your deploy-target directory.\nCheck that your build output is complete.", entrypoint, cfg.DeployTarget, entrypoint)
+				return nil, fmt.Errorf("entrypoint file %q not found in deploy-target %q\n\nThe start-command references %q but that file does not exist in your deploy-target directory.\nCheck that your build output is complete.", entrypoint, cfg.DeployTarget, entrypoint)
 			}
 
 			// For compiled runtimes, check binary architecture
 			if cfg.Runtime == "go" || cfg.Runtime == "rust" {
 				if err := checkBinaryArch(entrypointPath, cfg.Runtime); err != nil {
-					return err
+					return nil, err
 				}
 			}
 		}
@@ -97,13 +149,13 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 	// Check native dependencies for interpreted runtimes
 	if cfg.Runtime == "node" || cfg.Runtime == "bun" || cfg.Runtime == "python" {
 		if err := checkNativeDeps(cfg.DeployTarget, cfg.Runtime); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	// Check if deploy target looks like a source directory (not build output)
 	if err := checkSourceDirectory(cfg.DeployTarget, cfg.Runtime); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Validate the preview ref before any artifact or API work.
@@ -111,7 +163,7 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 	if cfg.PreviewRef != "" {
 		previewPR, err = parsePreviewRef(cfg.PreviewRef)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
@@ -119,7 +171,7 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 	ui.Info("Creating artifact from " + cfg.DeployTarget)
 	artifact, excluded, err := createTarGz(cfg.DeployTarget)
 	if err != nil {
-		return fmt.Errorf("creating artifact: %w", err)
+		return nil, fmt.Errorf("creating artifact: %w", err)
 	}
 	if len(excluded) > 0 {
 		ui.Println(ui.Dim("  Excluded: " + strings.Join(excluded, ", ")))
@@ -137,7 +189,7 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 	// Resolve app
 	slug, name, err := resolveApp(client, cfg.AppSlug, cfg.AppName, ".")
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Upload
@@ -146,7 +198,8 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 	err = client.UploadArtifact(slug, artifact, cfg.Runtime, cfg.StartCommand)
 	sp.Stop()
 	if err != nil {
-		return fmt.Errorf("uploading artifact: %w", err)
+		err = fmt.Errorf("uploading artifact: %w", err)
+		return jsonError(slug, err), err
 	}
 
 	// Write .hatch.toml only after successful upload
@@ -158,13 +211,9 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 
 	url := fmt.Sprintf("https://%s.nest.gethatch.eu", slug)
 	res := awaitDeploy(client, slug, cfg)
-	if cfg.JSONOutput {
-		if err := printJSONResult(res.fields(slug, url)); err != nil {
-			return err
-		}
-	}
+	fields := res.fields(slug, url)
 	if res.err != nil {
-		return res.err
+		return fields, res.err
 	}
 
 	if !cfg.JSONOutput {
@@ -184,7 +233,7 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 		configureDomain(realClient, slug, cfg.Domain)
 	}
 
-	return nil
+	return fields, nil
 }
 
 // deployResult is the outcome of the post-upload wait.
@@ -219,16 +268,18 @@ func awaitDeploy(client APIClient, slug string, cfg ArtifactDeployConfig) deploy
 		return deployResult{status: "deploying"}
 	}
 
+	ctx := cfg.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	sp := ui.NewSpinner("Waiting for deploy...")
 	sp.Start()
-	app, err := deploywait.Wait(slug, func() (*api.App, error) { return client.GetApp(slug) }, deploywait.Options{
+	app, err := deploywait.Wait(ctx, slug, func() (*api.App, error) { return client.GetApp(slug) }, deploywait.Options{
 		Timeout: cfg.WaitTimeout,
 		Sleep:   deps.Sleep,
 		Now:     deps.Now,
 		OnStatus: func(status string) {
-			sp.Stop()
-			sp = ui.NewSpinner(fmt.Sprintf("Waiting for deploy... (%s)", status))
-			sp.Start()
+			sp.Update(fmt.Sprintf("Waiting for deploy (%s)...", status))
 		},
 	})
 	sp.Stop()
@@ -275,15 +326,15 @@ func parsePreviewRef(ref string) (int, error) {
 // runPreviewDeploy creates/refreshes the preview egg for (parent, PR) and
 // uploads the artifact to the preview slug. The parent comes from
 // --app/.hatch.toml — a preview never creates its parent.
-func runPreviewDeploy(client APIClient, cfg ArtifactDeployConfig, artifact []byte, pr int) error {
+func runPreviewDeploy(client APIClient, cfg ArtifactDeployConfig, artifact []byte, pr int) (map[string]any, error) {
 	parentSlug := cfg.AppSlug
 	if parentSlug == "" {
 		hatchConfig, err := readHatchConfig(".")
 		if err != nil {
-			return fmt.Errorf("reading .hatch.toml: %w", err)
+			return nil, fmt.Errorf("reading .hatch.toml: %w", err)
 		}
 		if hatchConfig == nil {
-			return fmt.Errorf("preview deploys need a parent egg: run from a directory with .hatch.toml or pass --app")
+			return nil, fmt.Errorf("preview deploys need a parent egg: run from a directory with .hatch.toml or pass --app")
 		}
 		parentSlug = hatchConfig.Slug
 	}
@@ -291,7 +342,7 @@ func runPreviewDeploy(client APIClient, cfg ArtifactDeployConfig, artifact []byt
 	ui.Info(fmt.Sprintf("Creating preview for %s PR #%d", parentSlug, pr))
 	preview, err := client.CreatePreview(parentSlug, pr)
 	if err != nil {
-		return fmt.Errorf("creating preview: %w", err)
+		return nil, fmt.Errorf("creating preview: %w", err)
 	}
 
 	sp := ui.NewSpinner("Uploading artifact to preview...")
@@ -299,19 +350,17 @@ func runPreviewDeploy(client APIClient, cfg ArtifactDeployConfig, artifact []byt
 	err = client.UploadArtifact(preview.Slug, artifact, cfg.Runtime, cfg.StartCommand)
 	sp.Stop()
 	if err != nil {
-		return fmt.Errorf("uploading artifact: %w", err)
+		err = fmt.Errorf("uploading artifact: %w", err)
+		fields := jsonError(preview.Slug, err)
+		fields["pr_number"] = preview.PRNumber
+		return fields, err
 	}
 
 	res := awaitDeploy(client, preview.Slug, cfg)
-	if cfg.JSONOutput {
-		fields := res.fields(preview.Slug, preview.URL)
-		fields["pr_number"] = preview.PRNumber
-		if err := printJSONResult(fields); err != nil {
-			return err
-		}
-	}
+	fields := res.fields(preview.Slug, preview.URL)
+	fields["pr_number"] = preview.PRNumber
 	if res.err != nil {
-		return res.err
+		return fields, res.err
 	}
 
 	if !cfg.JSONOutput {
@@ -323,7 +372,7 @@ func runPreviewDeploy(client APIClient, cfg ArtifactDeployConfig, artifact []byt
 		}
 	}
 	ui.Info(fmt.Sprintf("Preview URL: %s", preview.URL))
-	return nil
+	return fields, nil
 }
 
 // parseEntrypoint extracts the file path from a start command.

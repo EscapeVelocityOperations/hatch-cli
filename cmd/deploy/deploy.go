@@ -3,6 +3,7 @@ package deploy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -169,19 +170,29 @@ Platform constraints:
 
 Waiting and exit status:
   After the upload, hatch deploy waits until the egg is running (or
-  sleeping) before reporting success. The command exits non-zero if the
-  egg ends up failed, stopped or crashed (the reason is printed — inspect
-  with 'hatch logs <slug>'), or if no final status is seen within
-  --timeout (default 6m). --no-wait returns as soon as the upload is
-  accepted and prints "Deploy started"; check with 'hatch info <slug>'.
+  sleeping) before reporting success. If the egg ends up failed, stopped
+  or crashed, the reason is printed (inspect with 'hatch logs <slug>');
+  if no final status is seen within --timeout (default 6m), the last
+  status is printed. --no-wait returns as soon as the upload is accepted
+  and prints "Deploy started"; check with 'hatch info <slug>'.
+
+  Unlike other hatch commands, a failed deploy exits non-zero even when
+  not attached to a terminal (scripts, agents, CI):
+    0  deployed (or started, with --no-wait)
+    1  deploy error: invalid flags, auth, upload or image build failure
+    2  rollout failed: the egg ended failed, stopped or crashed
+    3  timed out waiting for a final status (the deploy may still finish)
 
 JSON output (--json):
   stdout holds exactly one JSON line, printed at the end; human messages
-  go to stderr. Even on failure or timeout the JSON is printed before the
-  non-zero exit:
+  go to stderr. The JSON is printed on every outcome, before a non-zero
+  exit:
     {"slug":"...","url":"...","status":"running","waited":true}
   Optional keys: "status_reason" and "error" (on failure); previews add
   "pr_number". With --no-wait, status is "deploying" and waited is false.
+  A failure before the rollout wait (exit 1) prints
+    {"status":"error","waited":false,"error":"...","slug":"..."}
+  where "slug" is present once the egg is known.
 
 Examples:
   # Node.js (Nuxt)
@@ -217,23 +228,18 @@ Examples:
 }
 
 func runDeploy(cmd *cobra.Command, args []string) error {
-	// Validate required flags
-	if deployTarget == "" {
-		return fmt.Errorf("--deploy-target is required\n\nUsage: hatch deploy --deploy-target <dir> --runtime <runtime> --start-command <cmd>\n\nRun 'hatch deploy --help' for details")
-	}
-	if runtime == "" {
-		return fmt.Errorf("--runtime is required (node, python, go, or static)\n\nRun 'hatch deploy --help' for details")
-	}
-
-	// Check auth
-	token, err := deps.GetToken()
+	token, err := deployPreflight()
 	if err != nil {
-		return fmt.Errorf("checking auth: %w", err)
-	}
-	if token == "" {
-		return fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
+		if jsonOut {
+			defer ui.SetOutput(os.Stderr)()
+		}
+		return finishDeploy(jsonOut, nil, err)
 	}
 
+	ctx := context.Background()
+	if cmd != nil && cmd.Context() != nil {
+		ctx = cmd.Context()
+	}
 	return RunArtifactDeploy(ArtifactDeployConfig{
 		Token:        token,
 		AppName:      appName,
@@ -245,7 +251,27 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		JSONOutput:   jsonOut,
 		NoWait:       noWait,
 		WaitTimeout:  waitTimeout,
+		Context:      ctx,
 	})
+}
+
+// deployPreflight validates the required flags and returns the auth token.
+func deployPreflight() (string, error) {
+	if deployTarget == "" {
+		return "", fmt.Errorf("--deploy-target is required\n\nUsage: hatch deploy --deploy-target <dir> --runtime <runtime> --start-command <cmd>\n\nRun 'hatch deploy --help' for details")
+	}
+	if runtime == "" {
+		return "", fmt.Errorf("--runtime is required (node, python, go, or static)\n\nRun 'hatch deploy --help' for details")
+	}
+
+	token, err := deps.GetToken()
+	if err != nil {
+		return "", fmt.Errorf("checking auth: %w", err)
+	}
+	if token == "" {
+		return "", fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
+	}
+	return token, nil
 }
 
 func getCwd() (string, error) {

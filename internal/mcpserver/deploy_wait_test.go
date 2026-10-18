@@ -90,3 +90,15 @@ func TestDeployAppHandler_WaitFalseSkipsPolling(t *testing.T) {
 		t.Fatalf("wait=false polled %d times, text: %s", *polls, text)
 	}
 }
+
+// N2: a cancelled MCP request stops the wait instead of blocking ~6 min.
+func TestDeployAppHandler_CancelledRequestStopsWait(t *testing.T) {
+	dir, polls := deployWaitFixture(t, "", "building")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := deployAppHandler(ctx, makeReq(deployReq(dir, nil)))
+	assertError(t, result, err, "context canceled")
+	if *polls != 0 {
+		t.Fatalf("GetApp polled %d times after cancellation", *polls)
+	}
+}

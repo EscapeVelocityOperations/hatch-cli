@@ -205,6 +205,9 @@ func TestRootCmdStructure(t *testing.T) {
 	if !rootCmd.SilenceUsage {
 		t.Error("expected SilenceUsage to be true")
 	}
+	if !rootCmd.SilenceErrors {
+		t.Error("expected SilenceErrors to be true (main prints errors)")
+	}
 }
 
 // The preview command group (hatch preview list|rm, h-qtie8) must be

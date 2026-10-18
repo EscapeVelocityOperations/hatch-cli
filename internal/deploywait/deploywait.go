@@ -9,6 +9,7 @@
 package deploywait
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -30,8 +31,9 @@ type Options struct {
 	Interval             time.Duration
 	Timeout              time.Duration
 	MaxConsecutiveErrors int
-	Sleep                func(time.Duration)
-	Now                  func() time.Time
+	// Sleep waits between polls; nil sleeps on a timer that ctx interrupts.
+	Sleep func(time.Duration)
+	Now   func() time.Time
 	// OnStatus is called each time the observed status changes.
 	OnStatus func(status string)
 }
@@ -45,9 +47,6 @@ func (o Options) withDefaults() Options {
 	}
 	if o.MaxConsecutiveErrors <= 0 {
 		o.MaxConsecutiveErrors = DefaultMaxConsecutiveErrors
-	}
-	if o.Sleep == nil {
-		o.Sleep = time.Sleep
 	}
 	if o.Now == nil {
 		o.Now = time.Now
@@ -97,7 +96,8 @@ func (e *TimeoutError) Error() string {
 
 // Wait polls get until the egg reaches a terminal status. It returns the last
 // app observed (nil if no poll succeeded) and a nil error only on success.
-func Wait(slug string, get func() (*api.App, error), opts Options) (*api.App, error) {
+// Cancelling ctx stops the wait with ctx.Err().
+func Wait(ctx context.Context, slug string, get func() (*api.App, error), opts Options) (*api.App, error) {
 	opts = opts.withDefaults()
 	deadline := opts.Now().Add(opts.Timeout)
 
@@ -105,6 +105,9 @@ func Wait(slug string, get func() (*api.App, error), opts Options) (*api.App, er
 	lastStatus := ""
 	consecutiveErrors := 0
 	for {
+		if err := ctx.Err(); err != nil {
+			return last, fmt.Errorf("waiting for deploy of %s: %w", slug, err)
+		}
 		app, err := get()
 		if err != nil {
 			consecutiveErrors++
@@ -135,6 +138,15 @@ func Wait(slug string, get func() (*api.App, error), opts Options) (*api.App, er
 			}
 			return last, &TimeoutError{Slug: slug, LastStatus: status, Timeout: opts.Timeout}
 		}
-		opts.Sleep(opts.Interval)
+		if opts.Sleep != nil {
+			opts.Sleep(opts.Interval)
+			continue
+		}
+		timer := time.NewTimer(opts.Interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
 	}
 }

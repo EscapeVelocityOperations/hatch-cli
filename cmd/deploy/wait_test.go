@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/exitcode"
 )
 
 // --- h-59ej: hatch deploy waits for the rollout to finish -----------------
@@ -228,5 +229,124 @@ func TestNewCmd_WaitFlagsRegistered(t *testing.T) {
 	f := cmd.Flags().Lookup("timeout")
 	if f == nil || f.DefValue != "6m0s" {
 		t.Fatalf("--timeout flag missing or wrong default: %+v", f)
+	}
+}
+
+// --- h-59ej rework: exit codes survive non-TTY, JSON on every outcome ------
+
+// assertExitCode checks the exit status main will use for err.
+func assertExitCode(t *testing.T, err error, want int) {
+	t.Helper()
+	code, ok := exitcode.From(err)
+	if !ok || code != want {
+		t.Fatalf("exit code = %d (carried: %v), want %d; err = %v", code, ok, want, err)
+	}
+}
+
+// A12: a failed rollout exits 2, a timeout 3, on normal and preview paths.
+func TestRunDeploy_ExitCodes(t *testing.T) {
+	tests := []struct {
+		name     string
+		statuses []string
+		preview  string
+		timeout  time.Duration
+		want     int
+	}{
+		{"failed", []string{"building", "failed"}, "", 0, ExitRolloutFailed},
+		{"crashed", []string{"crashed"}, "", 0, ExitRolloutFailed},
+		{"timeout", []string{"building"}, "", 10 * time.Second, ExitWaitTimeout},
+		{"preview failed", []string{"failed"}, "pr-42", 0, ExitRolloutFailed},
+		{"preview timeout", []string{"building"}, "pr-42", 10 * time.Second, ExitWaitTimeout},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmp := writeParentHatchToml(t, "mysite-x1y2")
+			getApp, _ := statusSequence("boom", tt.statuses...)
+			waitDeps(t, &mockAPIClient{getAppFn: getApp})
+			deployTarget, runtime, previewRef, waitTimeout = tmp, "static", tt.preview, tt.timeout
+
+			var err error
+			captureOutput(func() { err = runDeploy(nil, nil) })
+			assertExitCode(t, err, tt.want)
+		})
+	}
+}
+
+// A12: an upload (image build) failure exits 1 and --json still reports it.
+func TestRunDeploy_UploadFailure_JSONAndExit1(t *testing.T) {
+	tmp := writeParentHatchToml(t, "mysite-x1y2")
+	waitDeps(t, &mockAPIClient{
+		uploadArtifactFn: func(string, []byte, string, string) error { return errors.New("API error 500: build failed") },
+	})
+	deployTarget, runtime, jsonOut = tmp, "static", true
+
+	var err error
+	out := captureOutput(func() { err = runDeploy(nil, nil) })
+	assertExitCode(t, err, ExitDeployError)
+	p := parseSingleJSONLine(t, out)
+	if p["status"] != "error" || p["slug"] != "mysite-x1y2" || p["waited"] != false ||
+		!strings.Contains(p["error"].(string), "build failed") {
+		t.Fatalf("unexpected JSON payload: %v", p)
+	}
+}
+
+// A13: failures before any egg is known still print one JSON line.
+func TestRunDeploy_PreUploadErrors_JSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		target  string
+		runtime string
+		want    string
+	}{
+		{"missing deploy-target", "", "static", "--deploy-target is required"},
+		{"missing runtime", "dir", "", "--runtime is required"},
+		{"unknown runtime", "dir", "cobol", "unknown runtime"},
+		{"target not found", "/nonexistent-dir", "static", "deploy-target directory not found"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmp := writeParentHatchToml(t, "mysite-x1y2")
+			waitDeps(t, &mockAPIClient{})
+			deployTarget, runtime, jsonOut = tt.target, tt.runtime, true
+			if tt.target == "dir" {
+				deployTarget = tmp
+			}
+
+			var err error
+			out := captureOutput(func() { err = runDeploy(nil, nil) })
+			assertExitCode(t, err, ExitDeployError)
+			p := parseSingleJSONLine(t, out)
+			if p["status"] != "error" || !strings.Contains(p["error"].(string), tt.want) {
+				t.Fatalf("unexpected JSON payload: %v", p)
+			}
+			if _, ok := p["slug"]; ok {
+				t.Fatalf("no egg is known yet, slug must be absent: %v", p)
+			}
+		})
+	}
+}
+
+// Without --json, a pre-upload error prints nothing on stdout.
+func TestRunDeploy_PreUploadError_NoJSONWithoutFlag(t *testing.T) {
+	waitDeps(t, &mockAPIClient{})
+	deployTarget, runtime = "/nonexistent-dir", "static"
+
+	var err error
+	out := captureOutput(func() { err = runDeploy(nil, nil) })
+	assertExitCode(t, err, ExitDeployError)
+	if strings.Contains(out, "{") {
+		t.Fatalf("stdout must not carry JSON without --json:\n%s", out)
+	}
+}
+
+func TestRunDeploy_SuccessCarriesNoExitError(t *testing.T) {
+	tmp := writeParentHatchToml(t, "mysite-x1y2")
+	waitDeps(t, &mockAPIClient{})
+	deployTarget, runtime = tmp, "static"
+
+	var err error
+	captureOutput(func() { err = runDeploy(nil, nil) })
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

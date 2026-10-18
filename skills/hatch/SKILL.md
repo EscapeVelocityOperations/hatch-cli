@@ -25,13 +25,15 @@ deploy_app({ deploy_target: "/path/to/build", runtime: "node", start_command: "n
 
 `hatch deploy` (and `deploy_app`) waits until the egg is `running` before
 reporting success, and exits non-zero if it ends `failed`/`stopped`/`crashed`
-(reason printed — run `hatch logs <slug>`) or after `--timeout` (default 6m).
-`--no-wait` (MCP: `wait: false`) returns once the upload is accepted.
+(reason printed — run `hatch logs <slug>`) or after `--timeout` (default 6m),
+even when piped: exit 1 = deploy/upload/build error, 2 = rollout failed,
+3 = timeout. `--no-wait` (MCP: `wait: false`) returns once the upload is accepted.
 
 For scripts, `--json` prints one JSON line on stdout, even on failure:
 `{"slug":"…","url":"…","status":"running","waited":true}` (plus
-`status_reason`/`error` on failure). `hatch info <slug> --json` prints the
-egg's current `status` and `status_reason`.
+`status_reason`/`error` on failure; `status: "error"` if it failed before
+the rollout). `hatch info <slug> --json` prints the egg's current `status` and
+`status_reason`.
 
 ## Runtimes
 
