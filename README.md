@@ -121,6 +121,7 @@ Display detailed information about a specific application.
 
 ```sh
 hatch info myapp
+hatch info myapp --json   # machine-readable, includes status and status_reason
 ```
 
 **Output:**

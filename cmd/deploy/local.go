@@ -5,15 +5,18 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/archcheck"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/deploywait"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ignore"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
 	"golang.org/x/term"
@@ -27,9 +30,11 @@ type ArtifactDeployConfig struct {
 	DeployTarget string
 	Runtime      string
 	StartCommand string
-	AppSlug      string // Explicit slug (optional, reads .hatch.toml if empty)
-	PreviewRef   string // "pr-<n>" or "<n>": deploy to the parent's preview egg (h-qtie8)
-	JSONOutput   bool   // print a machine-readable JSON result instead of human output
+	AppSlug      string        // Explicit slug (optional, reads .hatch.toml if empty)
+	PreviewRef   string        // "pr-<n>" or "<n>": deploy to the parent's preview egg (h-qtie8)
+	JSONOutput   bool          // print a machine-readable JSON result instead of human output
+	NoWait       bool          // return once the upload is accepted (h-59ej)
+	WaitTimeout  time.Duration // max wait for a terminal status; 0 = deploywait.DefaultTimeout
 }
 
 // validRuntimes lists accepted runtime values.
@@ -39,6 +44,11 @@ var validRuntimes = map[string]bool{
 
 // RunArtifactDeploy deploys a pre-built directory as an artifact.
 func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
+	// Under --json, stdout carries only the final JSON line.
+	if cfg.JSONOutput {
+		defer ui.SetOutput(os.Stderr)()
+	}
+
 	// Inform interactive users that Hatch is designed for AI agents
 	if term.IsTerminal(int(os.Stdout.Fd())) {
 		ui.Info("Hatch is designed for AI agents. Manual usage is supported, but your agent should handle deployment in production.")
@@ -112,7 +122,7 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 		return fmt.Errorf("creating artifact: %w", err)
 	}
 	if len(excluded) > 0 {
-		fmt.Println(ui.Dim("  Excluded: " + strings.Join(excluded, ", ")))
+		ui.Println(ui.Dim("  Excluded: " + strings.Join(excluded, ", ")))
 	}
 	ui.Info(fmt.Sprintf("Artifact size: %.2f MB", float64(len(artifact))/1024/1024))
 
@@ -146,15 +156,110 @@ func RunArtifactDeploy(cfg ArtifactDeployConfig) error {
 		}
 	}
 
-	ui.Success("Deployed successfully!")
-	ui.Info(fmt.Sprintf("Egg URL: https://%s.nest.gethatch.eu", slug))
+	url := fmt.Sprintf("https://%s.nest.gethatch.eu", slug)
+	res := awaitDeploy(client, slug, cfg)
+	if cfg.JSONOutput {
+		if err := printJSONResult(res.fields(slug, url)); err != nil {
+			return err
+		}
+	}
+	if res.err != nil {
+		return res.err
+	}
 
-	// Set custom domain if specified
+	if !cfg.JSONOutput {
+		if res.waited {
+			ui.Success("Deployed successfully!")
+		} else {
+			ui.Success("Deploy started")
+			ui.Info(fmt.Sprintf("Check progress with: hatch info %s", slug))
+		}
+	}
+	ui.Info(fmt.Sprintf("Egg URL: %s", url))
+
+	// Set custom domain if specified — only once the deploy succeeded (or
+	// was started with --no-wait), never after a failed rollout.
 	if cfg.Domain != "" {
 		realClient := api.NewClient(cfg.Token)
 		configureDomain(realClient, slug, cfg.Domain)
 	}
 
+	return nil
+}
+
+// deployResult is the outcome of the post-upload wait.
+type deployResult struct {
+	status string
+	reason string
+	waited bool
+	err    error
+}
+
+// fields builds the --json payload for the result.
+func (r deployResult) fields(slug, url string) map[string]any {
+	out := map[string]any{
+		"slug":   slug,
+		"url":    url,
+		"status": r.status,
+		"waited": r.waited,
+	}
+	if r.reason != "" {
+		out["status_reason"] = r.reason
+	}
+	if r.err != nil {
+		out["error"] = r.err.Error()
+	}
+	return out
+}
+
+// awaitDeploy polls the egg after an accepted upload until it is running or
+// has failed (h-59ej). The upload alone only means the rollout started.
+func awaitDeploy(client APIClient, slug string, cfg ArtifactDeployConfig) deployResult {
+	if cfg.NoWait {
+		return deployResult{status: "deploying"}
+	}
+
+	sp := ui.NewSpinner("Waiting for deploy...")
+	sp.Start()
+	app, err := deploywait.Wait(slug, func() (*api.App, error) { return client.GetApp(slug) }, deploywait.Options{
+		Timeout: cfg.WaitTimeout,
+		Sleep:   deps.Sleep,
+		Now:     deps.Now,
+		OnStatus: func(status string) {
+			sp.Stop()
+			sp = ui.NewSpinner(fmt.Sprintf("Waiting for deploy... (%s)", status))
+			sp.Start()
+		},
+	})
+	sp.Stop()
+
+	res := deployResult{status: "unknown", waited: true}
+	if app != nil {
+		res.status = app.Status
+		res.reason = app.StatusReason
+	}
+	var timeoutErr *deploywait.TimeoutError
+	var failedErr *deploywait.FailedError
+	switch {
+	case errors.As(err, &failedErr):
+		res.err = fmt.Errorf("%w\n\nInspect with: hatch logs %s", err, slug)
+	case errors.As(err, &timeoutErr):
+		res.err = fmt.Errorf("%w\n\nThe deploy may still finish; check with: hatch info %s", err, slug)
+	case err != nil:
+		res.err = fmt.Errorf("%w\n\nThe upload was accepted; check with: hatch info %s", err, slug)
+	}
+	return res
+}
+
+// printJSONResult writes the single --json result line to stdout.
+func printJSONResult(fields map[string]any) error {
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return fmt.Errorf("encoding json result: %w", err)
+	}
+	if _, err := fmt.Fprintln(os.Stdout, string(out)); err != nil {
+		return fmt.Errorf("writing json result: %w", err)
+	}
 	return nil
 }
 
@@ -197,20 +302,26 @@ func runPreviewDeploy(client APIClient, cfg ArtifactDeployConfig, artifact []byt
 		return fmt.Errorf("uploading artifact: %w", err)
 	}
 
+	res := awaitDeploy(client, preview.Slug, cfg)
 	if cfg.JSONOutput {
-		out, err := json.Marshal(map[string]any{
-			"slug":      preview.Slug,
-			"url":       preview.URL,
-			"pr_number": preview.PRNumber,
-		})
-		if err != nil {
-			return fmt.Errorf("encoding json result: %w", err)
+		fields := res.fields(preview.Slug, preview.URL)
+		fields["pr_number"] = preview.PRNumber
+		if err := printJSONResult(fields); err != nil {
+			return err
 		}
-		fmt.Println(string(out))
-		return nil
+	}
+	if res.err != nil {
+		return res.err
 	}
 
-	ui.Success("Preview deployed!")
+	if !cfg.JSONOutput {
+		if res.waited {
+			ui.Success("Preview deployed!")
+		} else {
+			ui.Success("Preview deploy started")
+			ui.Info(fmt.Sprintf("Check progress with: hatch info %s", preview.Slug))
+		}
+	}
 	ui.Info(fmt.Sprintf("Preview URL: %s", preview.URL))
 	return nil
 }
@@ -248,13 +359,13 @@ func configureDomain(client *api.Client, slug, domainName string) {
 			ui.Success(fmt.Sprintf("Domain %s configured and verified", domainName))
 		} else {
 			ui.Success(fmt.Sprintf("Domain %s configured (pending verification)", domainName))
-			fmt.Println()
-			fmt.Println(ui.Bold("To verify ownership, add this DNS TXT record:"))
-			fmt.Printf("  Host:  %s\n", ui.Bold("_hatch-verify."+domainName))
-			fmt.Printf("  Value: %s\n", ui.Bold(domain.VerificationToken))
-			fmt.Println()
-			fmt.Printf("Then run: %s\n", ui.Bold(fmt.Sprintf("hatch domain verify %s --app %s", domainName, slug)))
-			fmt.Println()
+			ui.Println()
+			ui.Println(ui.Bold("To verify ownership, add this DNS TXT record:"))
+			ui.Printf("  Host:  %s\n", ui.Bold("_hatch-verify."+domainName))
+			ui.Printf("  Value: %s\n", ui.Bold(domain.VerificationToken))
+			ui.Println()
+			ui.Printf("Then run: %s\n", ui.Bold(fmt.Sprintf("hatch domain verify %s --app %s", domainName, slug)))
+			ui.Println()
 		}
 		if domain.CNAME != "" {
 			ui.Info(fmt.Sprintf("CNAME target: %s", domain.CNAME))
@@ -485,7 +596,7 @@ func checkNativeDeps(dir, runtime string) error {
 	if result != nil && len(result.BadFiles) > 0 {
 		ui.Warn(fmt.Sprintf("found %d/%d native module(s) compiled for wrong platform", len(result.BadFiles), result.Total))
 		for _, f := range result.BadFiles {
-			fmt.Println(ui.Dim("  - " + f))
+			ui.Println(ui.Dim("  - " + f))
 		}
 	}
 	return nil

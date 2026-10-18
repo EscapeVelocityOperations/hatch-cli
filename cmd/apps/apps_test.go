@@ -2,6 +2,7 @@ package apps
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -226,4 +227,35 @@ func contains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// A7 (h-59ej): hatch info --json prints the egg, including status_reason.
+func TestRunInfo_JSON(t *testing.T) {
+	deps = &Deps{
+		GetToken: func() (string, error) { return "tok", nil },
+		GetApp: func(token, slug string) (*api.App, error) {
+			return &api.App{Slug: slug, Name: "site", Status: "failed", StatusReason: "Deploy failed: app did not start in time"}, nil
+		},
+	}
+	infoJSON = true
+	defer func() { deps = defaultDeps(); infoJSON = false }()
+
+	var err error
+	output := captureOutput(func() { err = runInfo(nil, []string{"site-a1b2"}) })
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(output), &got); err != nil {
+		t.Fatalf("--json output is not valid JSON: %v\n%s", err, output)
+	}
+	if got["slug"] != "site-a1b2" || got["status"] != "failed" || got["status_reason"] != "Deploy failed: app did not start in time" {
+		t.Fatalf("unexpected JSON: %v", got)
+	}
+}
+
+func TestNewInfoCmd_JSONFlagRegistered(t *testing.T) {
+	if NewInfoCmd().Flags().Lookup("json") == nil {
+		t.Fatal("--json flag not registered on info")
+	}
 }
