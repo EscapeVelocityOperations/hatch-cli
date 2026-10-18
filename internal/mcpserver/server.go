@@ -41,12 +41,17 @@ func toolError(format string, args ...interface{}) (*mcp.CallToolResult, error) 
 	return mcp.NewToolResultError(redactError(msg)), nil
 }
 
+// isNoRunningAllocationError reports whether a logs error only means the app
+// has nothing to read logs from. "no allocations found" is what the control
+// plane returns when the app never got an allocation, e.g. its build failed
+// (h-83n6).
 func isNoRunningAllocationError(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "no running allocation")
+	return strings.Contains(msg, "no running allocation") ||
+		strings.Contains(msg, "no allocations found")
 }
 
 func noRunningAllocationResult(client *api.Client, slug string) (*mcp.CallToolResult, error) {
