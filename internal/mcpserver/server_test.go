@@ -1277,6 +1277,45 @@ func TestGetLogsHandler_AuthFailure(t *testing.T) {
 	assertError(t, result, err, "not authenticated")
 }
 
+// h-83n6: a failed build leaves the app without any allocation; the control
+// plane answers "no allocations found" (500 before hatch-control#89, 404
+// after). Both log tools must return the status_reason, not a tool error.
+func TestLogTools_NoAllocationsFoundReturnsFailureReason(t *testing.T) {
+	handlers := map[string]func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error){
+		"get_logs":       getLogsHandler,
+		"get_build_logs": getBuildLogsHandler,
+	}
+	for name, handler := range handlers {
+		for _, status := range []int{500, 404} {
+			t.Run(fmt.Sprintf("%s/%d", name, status), func(t *testing.T) {
+				saveAndRestore(t)
+				setAuthToken("tok")
+				now := time.Now()
+
+				newMockServer(t, map[string]http.HandlerFunc{
+					"GET /v1/apps/myapp-a1b2/logs": errorHandler(status, "no allocations found for myapp-a1b2\n"),
+					"GET /v1/apps/myapp-a1b2": jsonHandler(api.App{
+						Slug: "myapp-a1b2", Name: "myapp", Status: "failed",
+						StatusReason: "Build failed at tar: tar: can't create hardlink 'a/b.png'",
+						URL:          "https://myapp-a1b2.nest.gethatch.eu",
+						CreatedAt:    now, UpdatedAt: now,
+					}),
+				})
+
+				result, err := handler(context.Background(), makeReq(map[string]interface{}{
+					"app": "myapp-a1b2",
+				}))
+				text := assertSuccess(t, result, err)
+
+				if !strings.Contains(text, "App status: failed") ||
+					!strings.Contains(text, "Failure reason: Build failed at tar: tar: can't create hardlink 'a/b.png'") {
+					t.Fatalf("expected status and failure reason, got: %s", text)
+				}
+			})
+		}
+	}
+}
+
 // --- get_build_logs ---
 
 func TestGetBuildLogsHandler_MissingApp(t *testing.T) {
