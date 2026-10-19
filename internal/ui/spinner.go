@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 type Spinner struct {
+	mu      sync.Mutex
 	message string
 	stop    chan struct{}
 	done    sync.WaitGroup
@@ -29,7 +31,7 @@ func NewSpinner(message string) *Spinner {
 func (s *Spinner) Start() {
 	if !s.isTTY {
 		// Not a TTY, just print the message once
-		fmt.Fprint(os.Stderr, s.message+"...")
+		fmt.Fprint(os.Stderr, withEllipsis(s.message))
 		return
 	}
 
@@ -43,7 +45,10 @@ func (s *Spinner) Start() {
 				fmt.Fprintf(os.Stderr, "\r\033[K") // Clear the line
 				return
 			default:
-				fmt.Fprintf(os.Stderr, "\r%s %s", spinnerFrames[i%len(spinnerFrames)], s.message)
+				s.mu.Lock()
+				msg := s.message
+				s.mu.Unlock()
+				fmt.Fprintf(os.Stderr, "\r\033[K%s %s", spinnerFrames[i%len(spinnerFrames)], msg)
 				i++
 				time.Sleep(80 * time.Millisecond)
 			}
@@ -58,4 +63,24 @@ func (s *Spinner) Stop() {
 	}
 	close(s.stop)
 	s.done.Wait()
+}
+
+// Update replaces the message of a started spinner. Outside a TTY the new
+// message goes on its own line.
+func (s *Spinner) Update(message string) {
+	s.mu.Lock()
+	changed := message != s.message
+	s.message = message
+	s.mu.Unlock()
+	if !s.isTTY && changed {
+		fmt.Fprint(os.Stderr, "\n"+withEllipsis(message))
+	}
+}
+
+// withEllipsis appends "..." unless the message already ends with it.
+func withEllipsis(message string) string {
+	if strings.HasSuffix(message, "...") {
+		return message
+	}
+	return message + "..."
 }

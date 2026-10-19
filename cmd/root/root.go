@@ -59,6 +59,9 @@ var rootCmd = &cobra.Command{
 	Short:        "Hatch CLI - Developer tools for Hatch",
 	Long:         "Hatch is a command-line interface for deploying and managing eggs on the Hatch platform.",
 	SilenceUsage: true,
+	// main prints the returned error itself; letting cobra print it too
+	// doubled every error message on stderr.
+	SilenceErrors: true,
 }
 
 func Execute() error {

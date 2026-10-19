@@ -16,6 +16,7 @@ import (
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/deploywait"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/telemetry"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/version"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -26,6 +27,8 @@ import (
 var (
 	getTokenFunc = auth.GetToken
 	newAPIClient = func(token string) *api.Client { return api.NewClient(token) }
+	// deployWaitOptions tunes the post-upload status poll of deploy_app (h-59ej).
+	deployWaitOptions = deploywait.Options{}
 )
 
 // redactError applies token redaction to error messages returned to the MCP client.
@@ -428,6 +431,9 @@ WHAT THIS TOOL DOES:
 2. Validates the start-command entrypoint file exists in deploy-target
 3. Creates a tar.gz of the directory contents
 4. Uploads to Hatch which wraps it in a thin container image and deploys
+5. Waits until the app is running (default; up to ~6 min) and returns an
+   error if the deploy fails or times out. Pass wait=false to return as
+   soon as the upload is accepted.
 
 CONTAINER BEHAVIOR:
 - The ENTIRE contents of deploy_target are extracted to /app/ inside the container
@@ -483,6 +489,9 @@ EXAMPLES:
 		),
 		mcp.WithString("domain",
 			mcp.Description("Custom domain to configure (e.g. example.com)"),
+		),
+		mcp.WithBoolean("wait",
+			mcp.Description("Wait for the app to be running before returning (default true). false returns once the upload is accepted."),
 		),
 	)
 }
@@ -568,7 +577,16 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	}
 
 	appURL := fmt.Sprintf("https://%s.nest.gethatch.eu", slug)
-	return mcp.NewToolResultText(fmt.Sprintf("Deployed successfully!\nApp: %s\nURL: %s\nRuntime: %s\nApp resolved from: %s", slug, appURL, rt, res.Provenance)), nil
+	if !req.GetBool("wait", true) {
+		return mcp.NewToolResultText(fmt.Sprintf("Deploy started (not waiting).\nApp: %s\nURL: %s\nRuntime: %s\nApp resolved from: %s\nCheck progress with get_app_details.", slug, appURL, rt, res.Provenance)), nil
+	}
+
+	// The upload only starts the rollout: wait for a terminal app status.
+	app, err := deploywait.Wait(ctx, slug, func() (*api.App, error) { return client.GetApp(slug) }, deployWaitOptions)
+	if err != nil {
+		return toolError("failed to deploy app: %v. Use get_logs or get_build_logs for %s", err, slug)
+	}
+	return mcp.NewToolResultText(fmt.Sprintf("Deployed successfully!\nApp: %s\nURL: %s\nRuntime: %s\nStatus: %s\nApp resolved from: %s", slug, appURL, rt, app.Status, res.Provenance)), nil
 }
 
 // createMCPTarGz creates a tar.gz from a directory for MCP deploy_app tool.
