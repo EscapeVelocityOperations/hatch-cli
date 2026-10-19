@@ -140,6 +140,13 @@ func NewServer() *server.MCPServer {
 	s.AddTool(setEmailProtectionTool(), setEmailProtectionHandler)
 	s.AddTool(getEmailProtectionTool(), getEmailProtectionHandler)
 	s.AddTool(disableEmailProtectionTool(), disableEmailProtectionHandler)
+	s.AddTool(enableCommentsTool(), enableCommentsHandler)
+	s.AddTool(disableCommentsTool(), disableCommentsHandler)
+	s.AddTool(listCommentsTool(), listCommentsHandler)
+	s.AddTool(getCommentThreadTool(), getCommentThreadHandler)
+	s.AddTool(replyToCommentTool(), replyToCommentHandler)
+	s.AddTool(resolveCommentTool(), resolveCommentHandler)
+	s.AddTool(reopenCommentTool(), reopenCommentHandler)
 	s.AddTool(restartAppTool(), restartAppHandler)
 	s.AddTool(getBuildLogsTool(), getBuildLogsHandler)
 
