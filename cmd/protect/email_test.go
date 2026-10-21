@@ -18,11 +18,13 @@ type mockEmailAPIClient struct {
 
 	lastSetEmails  []string
 	lastSetDomains []string
+	lastSetTTL     *int
+	setCalled      bool
 	deleteCalled   bool
 }
 
-func (m *mockEmailAPIClient) SetEmailProtection(slug string, emails, domains []string) (*EmailProtection, error) {
-	m.lastSetEmails, m.lastSetDomains = emails, domains
+func (m *mockEmailAPIClient) SetEmailProtection(slug string, emails, domains []string, sessionTTL *int) (*EmailProtection, error) {
+	m.lastSetEmails, m.lastSetDomains, m.lastSetTTL, m.setCalled = emails, domains, sessionTTL, true
 	if m.setFn != nil {
 		return m.setFn(slug, emails, domains)
 	}

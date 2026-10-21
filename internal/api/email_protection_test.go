@@ -22,7 +22,7 @@ func TestSetEmailProtection(t *testing.T) {
 	c := NewClient("tok123")
 	c.host = server.URL
 
-	ep, err := c.SetEmailProtection("my-app", []string{"a@b.com"}, []string{"corp.com"})
+	ep, err := c.SetEmailProtection("my-app", []string{"a@b.com"}, []string{"corp.com"}, nil)
 	if err != nil {
 		t.Fatalf("SetEmailProtection: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestSetEmailProtection_APIError(t *testing.T) {
 	c := NewClient("tok123")
 	c.host = server.URL
 
-	_, err := c.SetEmailProtection("my-app", []string{"not-an-email"}, nil)
+	_, err := c.SetEmailProtection("my-app", []string{"not-an-email"}, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "400") {
 		t.Errorf("SetEmailProtection error = %v, want a 400 API error", err)
 	}
