@@ -131,6 +131,7 @@ func runProtect(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("disabling password protection: %w", err)
 		}
 		fmt.Printf("Password protection disabled for %s.\n", slug)
+		warnUnservedPages(os.Stdout, client, slug)
 		return nil
 	}
 

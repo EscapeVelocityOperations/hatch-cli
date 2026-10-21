@@ -225,6 +225,7 @@ func runEmailDisable(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Email protection disabled for %s.\n", slug)
+	warnUnservedPages(os.Stdout, client, slug)
 	return nil
 }
 

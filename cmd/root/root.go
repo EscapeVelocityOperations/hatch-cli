@@ -29,6 +29,7 @@ import (
 	mcpcmd "github.com/EscapeVelocityOperations/hatch-cli/cmd/mcp"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/open"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/packs"
+	pagescmd "github.com/EscapeVelocityOperations/hatch-cli/cmd/pages"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/preview"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/protect"
 	rediscmd "github.com/EscapeVelocityOperations/hatch-cli/cmd/redis"
@@ -171,6 +172,7 @@ func init() {
 	rootCmd.AddCommand(mcpcmd.NewCmd())
 	rootCmd.AddCommand(open.NewCmd())
 	rootCmd.AddCommand(packs.NewCmd())
+	rootCmd.AddCommand(pagescmd.NewCmd())
 	rootCmd.AddCommand(preview.NewCmd())
 	rootCmd.AddCommand(protect.NewCmd())
 	rootCmd.AddCommand(rediscmd.NewCmd())
