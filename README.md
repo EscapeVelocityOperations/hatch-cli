@@ -355,6 +355,8 @@ Export every stored comment, deleted ones included, as JSON. The dump holds visi
 
 Erase comments permanently — no undo, not even in export. `--author` and `--before` can be combined; `--author` also clears that person's email from the "resolved by" / "deleted by" marks on the remaining comments (right to erasure). `--before` takes a date, an RFC 3339 time or a duration (`30d` = older than 30 days). Asks you to type the egg name unless `--yes` / `-y`; without a terminal, `--yes` is required.
 
+**A purged thread takes all its replies with it**, whatever their author or date: if A opened a thread and B replied, `purge --author A` erases B's reply too; with `--before`, a recent reply under an old thread goes the same way. To keep the other replies, run `hatch comments export <egg> -o comments.json` first.
+
 Limits: 5,000 characters per comment; 5,000 comments per egg (deleted ones included — purge frees room). Each new visitor comment fires a `comment.created` webhook carrying ids only. MCP tools: `enable_comments`, `disable_comments`, `list_comments`, `get_comment_thread`, `reply_to_comment`, `resolve_comment`, `reopen_comment` — delete, export and purge are CLI-only. See the [comments docs](https://gethatch.eu/docs/comments).
 
 ### AI Integration
