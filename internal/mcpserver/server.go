@@ -140,6 +140,7 @@ func NewServer() *server.MCPServer {
 	s.AddTool(setEmailProtectionTool(), setEmailProtectionHandler)
 	s.AddTool(getEmailProtectionTool(), getEmailProtectionHandler)
 	s.AddTool(disableEmailProtectionTool(), disableEmailProtectionHandler)
+	s.AddTool(revokeEggSessionsTool(), revokeEggSessionsHandler)
 	s.AddTool(enableCommentsTool(), enableCommentsHandler)
 	s.AddTool(disableCommentsTool(), disableCommentsHandler)
 	s.AddTool(listCommentsTool(), listCommentsHandler)

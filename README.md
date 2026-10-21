@@ -246,6 +246,7 @@ hatch protect email enable --email a@b.com --domain corp.com
 |------|-------|-------------|
 | `--email` | | Exact email address(es) to allow (repeatable) |
 | `--domain` | | Email domain(s) to allow, with or without a leading `@` (repeatable) |
+| `--session-ttl` | | How long a magic-link sign-in lasts: `1h` to `30d`, or `default` (12h). Unchanged if omitted |
 
 #### `hatch protect email disable`
 
@@ -279,7 +280,23 @@ Remove email(s) or `@domain`(s) from the allowlist.
 hatch protect email remove newuser@corp.com
 ```
 
-If protection is enabled but the deployment has no mailer configured, `list` and `enable` print a warning — no magic link can be sent, so allowed visitors are silently locked out. See the [email-protection docs](https://gethatch.eu/docs/email-protection) for rate limits and the corresponding MCP tools (`set_email_protection`, `get_email_protection`, `disable_email_protection`).
+#### `hatch protect email session-ttl <duration|default>`
+
+Set how long a visitor stays signed in after clicking a magic link — between `1h` and `30d` (default `12h`). Applies to new sign-ins.
+
+```sh
+hatch protect email session-ttl 30d
+```
+
+#### `hatch protect sessions revoke [slug]`
+
+Sign every visitor out of a protected egg (password and magic-link sessions). Asks you to type the egg name; pass `--yes` when stdin is not a terminal.
+
+```sh
+hatch protect sessions revoke --yes
+```
+
+If protection is enabled but the deployment has no mailer configured, `list` and `enable` print a warning — no magic link can be sent, so allowed visitors are silently locked out. See the [email-protection docs](https://gethatch.eu/docs/email-protection) for rate limits and the corresponding MCP tools (`set_email_protection` with its `session_ttl`, `get_email_protection`, `disable_email_protection`, `revoke_egg_sessions`).
 
 ### AI Integration
 

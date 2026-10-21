@@ -124,6 +124,8 @@ Hatch containers run **linux/amd64**. All binaries and native modules must targe
 | ` + "`get_env`" + ` | List all environment variables (pass show_secrets: true to unmask) |
 | ` + "`add_domain`" + ` | Custom domain setup with DNS instructions |
 | ` + "`get_database_url`" + ` | Get DATABASE_URL for an app |
+| ` + "`set_email_protection`" + ` / ` + "`get_email_protection`" + ` / ` + "`disable_email_protection`" + ` | Magic-link email allowlist; ` + "`session_ttl`" + ` sets how long a sign-in lasts (1h–30d, default 12h) |
+| ` + "`revoke_egg_sessions`" + ` | Sign every visitor out of a protected egg |
 | ` + "`enable_comments`" + ` / ` + "`disable_comments`" + ` | Turn Hatch comments on/off for an email-protected egg |
 | ` + "`list_comments`" + ` | Comment threads (filters: page, status, since) |
 | ` + "`get_comment_thread`" + ` | One full thread with its replies |

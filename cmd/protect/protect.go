@@ -1,6 +1,7 @@
 // Package protect implements `hatch protect` — access protection for eggs.
 // email.go is the email-allowlist subtree (h-oazj); password.go is
-// password-only protection (h-abmr), wired directly on this parent command.
+// password-only protection (h-abmr), wired directly on this parent command;
+// sessions.go signs every visitor out (h-pbhn).
 package protect
 
 import "github.com/spf13/cobra"
@@ -15,7 +16,7 @@ import "github.com/spf13/cobra"
 // ignore other-app and mutate the cwd egg (h-abmr F1).
 func NewCmd() *cobra.Command {
 	cmd := newProtectCmd()
-	cmd.AddCommand(NewEmailCmd())
+	cmd.AddCommand(NewEmailCmd(), newSessionsCmd())
 	return cmd
 }
 

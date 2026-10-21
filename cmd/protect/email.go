@@ -9,6 +9,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/resolve"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/sessionttl"
 	"github.com/spf13/cobra"
 )
 
@@ -17,12 +18,15 @@ type EmailProtection struct {
 	Enabled          bool
 	Emails           []string
 	Domains          []string
+	SessionTTL       int // effective magic-link session lifetime, seconds (h-pbhn)
 	MailerConfigured bool
 }
 
 // EmailAPIClient is the email-protection surface of the Hatch API.
+// SetEmailProtection's sessionTTL is nil to keep the egg's session lifetime,
+// 0 to reset it to the default, or seconds (h-pbhn).
 type EmailAPIClient interface {
-	SetEmailProtection(slug string, emails, domains []string) (*EmailProtection, error)
+	SetEmailProtection(slug string, emails, domains []string, sessionTTL *int) (*EmailProtection, error)
 	GetEmailProtection(slug string) (*EmailProtection, error)
 	DeleteEmailProtection(slug string) error
 }
@@ -54,12 +58,13 @@ func cliEmailProtection(ep api.EmailProtection) EmailProtection {
 		Enabled:          ep.EmailProtected,
 		Emails:           ep.Emails,
 		Domains:          ep.Domains,
+		SessionTTL:       ep.SessionTTLSeconds,
 		MailerConfigured: ep.MailerConfigured,
 	}
 }
 
-func (r *realEmailAPIClient) SetEmailProtection(slug string, emails, domains []string) (*EmailProtection, error) {
-	ep, err := r.client.SetEmailProtection(slug, emails, domains)
+func (r *realEmailAPIClient) SetEmailProtection(slug string, emails, domains []string, sessionTTL *int) (*EmailProtection, error) {
+	ep, err := r.client.SetEmailProtection(slug, emails, domains, sessionTTL)
 	if err != nil {
 		return nil, err
 	}
@@ -88,26 +93,44 @@ func NewEmailCmd() *cobra.Command {
 	}
 	emailEnableCmd.Flags().StringSlice("email", nil, "Exact email address(es) to allow")
 	emailEnableCmd.Flags().StringSlice("domain", nil, "Email domain(s) to allow (with or without a leading @)")
-	cmd.AddCommand(emailEnableCmd, emailDisableCmd, emailListCmd, emailAddCmd, emailRemoveCmd)
+	emailEnableCmd.Flags().String("session-ttl", "", "How long a magic-link sign-in lasts: 1h to 30d (e.g. 12h, 30d), or \"default\" (12h); unchanged if omitted")
+	cmd.AddCommand(emailEnableCmd, emailDisableCmd, emailListCmd, emailAddCmd, emailRemoveCmd, emailSessionTTLCmd)
 	return cmd
 }
 
+// Every subcommand declares Args: these resolve the egg from the current
+// directory, so a stray positional must fail rather than be silently
+// ignored while the cwd egg is mutated (h-abmr F1).
 var emailEnableCmd = &cobra.Command{
 	Use:   "enable",
 	Short: "Enable email-allowlist protection (replaces the current lists)",
+	Args:  cobra.NoArgs,
 	RunE:  runEmailEnable,
 }
 
 var emailDisableCmd = &cobra.Command{
 	Use:   "disable",
 	Short: "Disable email-allowlist protection",
+	Args:  cobra.NoArgs,
 	RunE:  runEmailDisable,
 }
 
 var emailListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "Show the current email allowlist",
+	Args:  cobra.NoArgs,
 	RunE:  runEmailList,
+}
+
+var emailSessionTTLCmd = &cobra.Command{
+	Use:   "session-ttl <duration|default>",
+	Short: "Set how long a magic-link sign-in lasts (1h to 30d, default 12h)",
+	Long: "Set how long a visitor stays signed in after clicking a magic link: " +
+		"a duration between 1h and 30d (e.g. 12h, 7d, 30d), or \"default\" for 12h. " +
+		"Applies to new sign-ins; existing sessions keep their original expiry " +
+		"(use 'hatch protect sessions revoke' to sign everyone out).",
+	Args: cobra.ExactArgs(1),
+	RunE: runEmailSessionTTL,
 }
 
 var emailAddCmd = &cobra.Command{
@@ -171,8 +194,17 @@ func runEmailEnable(cmd *cobra.Command, args []string) error {
 	for i, d := range domains {
 		domains[i] = normalizeDomainArg(d)
 	}
+	var ttl *int
+	if cmd.Flags().Changed("session-ttl") {
+		raw, _ := cmd.Flags().GetString("session-ttl")
+		secs, err := sessionttl.Parse(raw)
+		if err != nil {
+			return err
+		}
+		ttl = &secs
+	}
 
-	ep, err := client.SetEmailProtection(slug, emails, domains)
+	ep, err := client.SetEmailProtection(slug, emails, domains, ttl)
 	if err != nil {
 		return fmt.Errorf("enabling email protection: %w", err)
 	}
@@ -230,6 +262,9 @@ func printEmailProtection(ep *EmailProtection) {
 	if len(ep.Emails) == 0 && len(ep.Domains) == 0 {
 		fmt.Println("(no emails or domains configured — this blocks every visitor)")
 	}
+	if ep.SessionTTL > 0 {
+		fmt.Printf("Session: %s\n", sessionttl.Format(ep.SessionTTL))
+	}
 	if ep.Enabled && !ep.MailerConfigured {
 		fmt.Fprintln(os.Stderr, "warning: magic-link mail is not configured on this deployment — allowed visitors will not receive sign-in links")
 	}
@@ -253,7 +288,7 @@ func runEmailAdd(cmd *cobra.Command, args []string) error {
 	newEmails := mergeUnique(current.Emails, addEmails)
 	newDomains := mergeUnique(current.Domains, addDomains)
 
-	ep, err := client.SetEmailProtection(slug, newEmails, newDomains)
+	ep, err := client.SetEmailProtection(slug, newEmails, newDomains, nil)
 	if err != nil {
 		return fmt.Errorf("updating allowlist: %w", err)
 	}
@@ -284,13 +319,41 @@ func runEmailRemove(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("not on the allowlist: %s", strings.Join(notFound, ", "))
 	}
 
-	ep, err := client.SetEmailProtection(slug, newEmails, newDomains)
+	ep, err := client.SetEmailProtection(slug, newEmails, newDomains, nil)
 	if err != nil {
 		return fmt.Errorf("updating allowlist: %w", err)
 	}
 
 	fmt.Printf("Updated email allowlist for %s.\n", slug)
 	printEmailProtection(ep)
+	return nil
+}
+
+func runEmailSessionTTL(cmd *cobra.Command, args []string) error {
+	secs, err := sessionttl.Parse(args[0])
+	if err != nil {
+		return err
+	}
+	client, slug, err := resolveEmailApp()
+	if err != nil {
+		return err
+	}
+
+	// Set-replace API: re-send the current lists unchanged with the new TTL.
+	current, err := client.GetEmailProtection(slug)
+	if err != nil {
+		return fmt.Errorf("reading current allowlist: %w", err)
+	}
+	if !current.Enabled {
+		return errors.New("email protection is disabled for this app — enable it first with 'hatch protect email enable'")
+	}
+
+	ep, err := client.SetEmailProtection(slug, current.Emails, current.Domains, &secs)
+	if err != nil {
+		return fmt.Errorf("setting session TTL: %w", err)
+	}
+
+	fmt.Printf("Magic-link sessions for %s now last %s.\n", slug, sessionttl.Format(ep.SessionTTL))
 	return nil
 }
 
