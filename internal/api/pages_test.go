@@ -5,12 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestNormalizePageName(t *testing.T) {
@@ -62,11 +64,14 @@ func TestPublishPage_SendsArchiveMetadataAndChecksum(t *testing.T) {
 	}
 }
 
-func TestPublishPage_RetriesServerErrorsNotClientErrors(t *testing.T) {
+func TestPublishPage_RetriesOnlyWhatCannotHavePublished(t *testing.T) {
+	pagesRetryDelay = time.Millisecond
+	t.Cleanup(func() { pagesRetryDelay = 2 * time.Second })
 	var calls int32
+	status := 503
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if atomic.AddInt32(&calls, 1) == 1 {
-			w.WriteHeader(502)
+			w.WriteHeader(status)
 			return
 		}
 		w.WriteHeader(201)
@@ -74,7 +79,36 @@ func TestPublishPage_RetriesServerErrorsNotClientErrors(t *testing.T) {
 	}))
 	defer srv.Close()
 	if _, err := NewTestClient("tok", srv.URL).PublishPage("e", []byte("a"), PagePublishMeta{Name: "x"}); err != nil || calls != 2 {
-		t.Fatalf("5xx retry: err=%v calls=%d", err, calls)
+		t.Fatalf("503 retry: err=%v calls=%d", err, calls)
+	}
+
+	// N1: a 502 (or a lost answer) may follow the commit: no second vN+1.
+	calls, status = 0, 502
+	_, err := NewTestClient("tok", srv.URL).PublishPage("e", []byte("a"), PagePublishMeta{Name: "x"})
+	if !errors.Is(err, errPublishUnknown) || calls != 1 {
+		t.Fatalf("502: err=%v calls=%d", err, calls)
+	}
+	hang := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		_, _ = io.ReadAll(r.Body)
+		hj, _ := w.(http.Hijacker)
+		conn, _, _ := hj.Hijack()
+		_ = conn.Close() // answer lost after the body was read
+	}))
+	defer hang.Close()
+	calls = 0
+	_, err = NewTestClient("tok", hang.URL).PublishPage("e", []byte("a"), PagePublishMeta{Name: "x"})
+	if !errors.Is(err, errPublishUnknown) || calls != 1 {
+		t.Fatalf("lost answer: err=%v calls=%d", err, calls)
+	}
+
+	// Connection refused never reached the API: retried, then reported.
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closedURL := closed.URL
+	closed.Close()
+	_, err = NewTestClient("tok", closedURL).PublishPage("e", []byte("a"), PagePublishMeta{Name: "x"})
+	if err == nil || errors.Is(err, errPublishUnknown) || !isDialError(err) {
+		t.Fatalf("refused: err=%v", err)
 	}
 
 	calls = 0
@@ -84,7 +118,7 @@ func TestPublishPage_RetriesServerErrorsNotClientErrors(t *testing.T) {
 		_, _ = io.WriteString(w, `{"error":"pages_require_gateway"}`)
 	}))
 	defer srv4.Close()
-	_, err := NewTestClient("tok", srv4.URL).PublishPage("e", []byte("a"), PagePublishMeta{Name: "x"})
+	_, err = NewTestClient("tok", srv4.URL).PublishPage("e", []byte("a"), PagePublishMeta{Name: "x"})
 	if err == nil || !strings.Contains(err.Error(), "pages_require_gateway") || calls != 1 {
 		t.Fatalf("4xx: err=%v calls=%d", err, calls)
 	}
@@ -127,4 +161,3 @@ func TestPagesReadAndRemoveRequests(t *testing.T) {
 		t.Fatal("unsafe page name reached the URL")
 	}
 }
-

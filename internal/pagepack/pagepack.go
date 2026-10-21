@@ -58,8 +58,14 @@ func Build(path string) (*Pack, error) {
 		return fromFiles([]file{{name: "index.html", data: data}}, nil)
 	}
 
-	if st, err := os.Stat(filepath.Join(path, "index.html")); err != nil || !st.Mode().IsRegular() {
+	// Lstat: a symlinked index.html would pass a Stat, then be skipped by
+	// the walk below (links are not published) and refused by the server.
+	st, err := os.Lstat(filepath.Join(path, "index.html"))
+	if err != nil {
 		return nil, fmt.Errorf("%s has no index.html: a published directory needs one", path)
+	}
+	if !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s/index.html is not a regular file (a link?): links are not published, copy the file instead", path)
 	}
 	var files []file
 	var skipped []string

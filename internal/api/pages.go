@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -114,9 +116,31 @@ type PageRemoveResult struct {
 	Purged         bool   `json:"purged,omitempty"`
 }
 
+// pagesRetryDelay is the first backoff between publish attempts (tests
+// shorten it).
+var pagesRetryDelay = 2 * time.Second
+
+// errPublishUnknown is wrapped when a publication may have been recorded
+// although no answer came back (N1).
+var errPublishUnknown = errors.New("the publication may have been recorded: check `hatch pages versions` before publishing again")
+
+// isDialError reports a request that never reached the API (connection
+// refused, DNS): retrying it cannot publish twice.
+func isDialError(err error) bool {
+	var op *net.OpError
+	if errors.As(err, &op) && op.Op == "dial" {
+		return true
+	}
+	var dns *net.DNSError
+	return errors.As(err, &dns)
+}
+
 // PublishPage uploads a page archive (tar.gz) as a new version of meta.Name.
-// Retried on transport errors and 5xx like UploadArtifact: every attempt is
-// a whole new upload and, until the API records it, nothing is published.
+// A publication is not idempotent (each one is a new version), so it is
+// retried only when it cannot have been recorded: the connection was never
+// opened, or the API answered 503 before doing anything. A timeout, a lost
+// answer or another 5xx is returned with errPublishUnknown instead of
+// risking a duplicate vN+1.
 func (c *Client) PublishPage(slug string, archive []byte, meta PagePublishMeta) (*PagePublishResult, error) {
 	if err := validateSlug(slug); err != nil {
 		return nil, err
@@ -140,7 +164,7 @@ func (c *Client) PublishPage(slug string, archive []byte, meta PagePublishMeta) 
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
-			time.Sleep(time.Duration(1<<uint(attempt-1)) * 2 * time.Second)
+			time.Sleep(time.Duration(1<<uint(attempt-1)) * pagesRetryDelay)
 		}
 		req, err := http.NewRequest(http.MethodPost, uploadURL, bytes.NewReader(archive))
 		if err != nil {
@@ -153,17 +177,23 @@ func (c *Client) PublishPage(slug string, archive []byte, meta PagePublishMeta) 
 
 		resp, err := uploadClient.Do(req)
 		if err != nil {
-			lastErr = err
-			if isTimeoutError(err) {
-				lastErr = fmt.Errorf("upload timed out after %s (attempt %d/%d): %w", artifactUploadTimeout, attempt+1, maxRetries, err)
+			if isDialError(err) {
+				lastErr = err
+				continue
 			}
-			continue
+			if isTimeoutError(err) {
+				return nil, fmt.Errorf("upload timed out after %s: %w (%w)", artifactUploadTimeout, err, errPublishUnknown)
+			}
+			return nil, fmt.Errorf("%w (%w)", err, errPublishUnknown)
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		_ = resp.Body.Close()
-		if resp.StatusCode >= 500 {
+		if resp.StatusCode == http.StatusServiceUnavailable {
 			lastErr = fmt.Errorf("API error %d: %s", resp.StatusCode, RedactToken(strings.TrimSpace(string(body))))
 			continue
+		}
+		if resp.StatusCode >= 500 {
+			return nil, fmt.Errorf("API error %d: %s (%w)", resp.StatusCode, RedactToken(strings.TrimSpace(string(body))), errPublishUnknown)
 		}
 		if resp.StatusCode >= 400 {
 			return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, RedactToken(strings.TrimSpace(string(body))))

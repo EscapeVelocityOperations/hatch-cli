@@ -94,6 +94,19 @@ func TestBuild_FolderNeedsIndex(t *testing.T) {
 	}
 }
 
+// N4: a symlinked index.html is refused here with a clear message, not
+// packed without it and refused by the server.
+func TestBuild_SymlinkedIndexRefused(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "real.html"), "x")
+	if err := os.Symlink("real.html", filepath.Join(dir, "index.html")); err != nil {
+		t.Skip(err)
+	}
+	if _, err := Build(dir); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("symlinked index: %v", err)
+	}
+}
+
 func TestBuild_RefusesUnsafeNames(t *testing.T) {
 	dir := t.TempDir()
 	write(t, filepath.Join(dir, "index.html"), "x")
