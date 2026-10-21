@@ -67,25 +67,26 @@ func TestPublishPage_SendsArchiveMetadataAndChecksum(t *testing.T) {
 func TestPublishPage_RetriesOnlyWhatCannotHavePublished(t *testing.T) {
 	pagesRetryDelay = time.Millisecond
 	t.Cleanup(func() { pagesRetryDelay = 2 * time.Second })
-	var calls int32
-	status := 503
+	var calls, status int32
+	status = 503
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if atomic.AddInt32(&calls, 1) == 1 {
-			w.WriteHeader(status)
+			w.WriteHeader(int(atomic.LoadInt32(&status)))
 			return
 		}
 		w.WriteHeader(201)
 		_, _ = io.WriteString(w, `{"name":"x","version":1}`)
 	}))
 	defer srv.Close()
-	if _, err := NewTestClient("tok", srv.URL).PublishPage("e", []byte("a"), PagePublishMeta{Name: "x"}); err != nil || calls != 2 {
+	if _, err := NewTestClient("tok", srv.URL).PublishPage("e", []byte("a"), PagePublishMeta{Name: "x"}); err != nil || atomic.LoadInt32(&calls) != 2 {
 		t.Fatalf("503 retry: err=%v calls=%d", err, calls)
 	}
 
 	// N1: a 502 (or a lost answer) may follow the commit: no second vN+1.
-	calls, status = 0, 502
+	atomic.StoreInt32(&calls, 0)
+	atomic.StoreInt32(&status, 502)
 	_, err := NewTestClient("tok", srv.URL).PublishPage("e", []byte("a"), PagePublishMeta{Name: "x"})
-	if !errors.Is(err, errPublishUnknown) || calls != 1 {
+	if !errors.Is(err, errPublishUnknown) || atomic.LoadInt32(&calls) != 1 {
 		t.Fatalf("502: err=%v calls=%d", err, calls)
 	}
 	hang := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -96,9 +97,9 @@ func TestPublishPage_RetriesOnlyWhatCannotHavePublished(t *testing.T) {
 		_ = conn.Close() // answer lost after the body was read
 	}))
 	defer hang.Close()
-	calls = 0
+	atomic.StoreInt32(&calls, 0)
 	_, err = NewTestClient("tok", hang.URL).PublishPage("e", []byte("a"), PagePublishMeta{Name: "x"})
-	if !errors.Is(err, errPublishUnknown) || calls != 1 {
+	if !errors.Is(err, errPublishUnknown) || atomic.LoadInt32(&calls) != 1 {
 		t.Fatalf("lost answer: err=%v calls=%d", err, calls)
 	}
 
@@ -111,7 +112,7 @@ func TestPublishPage_RetriesOnlyWhatCannotHavePublished(t *testing.T) {
 		t.Fatalf("refused: err=%v", err)
 	}
 
-	calls = 0
+	atomic.StoreInt32(&calls, 0)
 	srv4 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&calls, 1)
 		w.WriteHeader(409)
@@ -119,7 +120,7 @@ func TestPublishPage_RetriesOnlyWhatCannotHavePublished(t *testing.T) {
 	}))
 	defer srv4.Close()
 	_, err = NewTestClient("tok", srv4.URL).PublishPage("e", []byte("a"), PagePublishMeta{Name: "x"})
-	if err == nil || !strings.Contains(err.Error(), "pages_require_gateway") || calls != 1 {
+	if err == nil || !strings.Contains(err.Error(), "pages_require_gateway") || atomic.LoadInt32(&calls) != 1 {
 		t.Fatalf("4xx: err=%v calls=%d", err, calls)
 	}
 	if _, err := NewTestClient("tok", srv4.URL).PublishPage("Bad Slug", nil, PagePublishMeta{Name: "x"}); err == nil {
