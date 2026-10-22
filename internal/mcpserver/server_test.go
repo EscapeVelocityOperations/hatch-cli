@@ -948,6 +948,10 @@ func TestAddDomainHandler_Success(t *testing.T) {
 	if !strings.Contains(text, "CNAME") {
 		t.Errorf("expected DNS instructions, got: %s", text)
 	}
+	// h-zqbr: verify no longer implies a certificate; it arrives with traffic.
+	if !strings.Contains(text, "first HTTPS request after DNS points to hatch") || strings.Contains(text, "once DNS propagates") {
+		t.Errorf("expected on-demand certificate wording, got: %s", text)
+	}
 }
 
 // h-tzj2 / h-ma74 item 1: for an UNVERIFIED domain, add_domain must surface the
@@ -1037,6 +1041,43 @@ func TestListDomainsHandler_Success(t *testing.T) {
 
 	if !strings.Contains(text, "example.com") {
 		t.Errorf("expected domain in output, got: %s", text)
+	}
+}
+
+// h-zqbr: list_domains passes certificate readiness through, and its
+// description tells the agent that status/verified is ownership only.
+func TestListDomainsHandler_TLSStatus(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/apps/myapp-a1b2/domains": jsonHandler([]api.Domain{
+			{Domain: "example.com", Status: "active", Verified: true, TLSStatus: "awaiting_traffic",
+				TLS: &api.DomainTLS{Status: "awaiting_traffic"}},
+		}),
+	})
+
+	result, err := listDomainsHandler(context.Background(), makeReq(map[string]interface{}{
+		"app": "myapp-a1b2",
+	}))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, `"tls_status": "awaiting_traffic"`) {
+		t.Errorf("expected tls_status in output, got: %s", text)
+	}
+}
+
+func TestDomainToolDescriptions_TLS(t *testing.T) {
+	for _, tc := range []struct {
+		tool mcp.Tool
+		want string
+	}{
+		{listDomainsTool(), "tls_status"},
+		{getAppDetailsTool(), "tls_status"},
+		{addDomainTool(), "first HTTPS request"},
+	} {
+		if !strings.Contains(tc.tool.Description, tc.want) {
+			t.Errorf("%s description must mention %q; got %q", tc.tool.Name, tc.want, tc.tool.Description)
+		}
 	}
 }
 

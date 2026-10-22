@@ -989,7 +989,7 @@ func maskSensitiveEnvVars(vars []api.EnvVar) []api.EnvVar {
 
 func addDomainTool() mcp.Tool {
 	return mcp.NewTool("add_domain",
-		mcp.WithDescription("Add a custom domain to an app. Returns DNS instructions."),
+		mcp.WithDescription("Add a custom domain to an app. Returns DNS instructions. The TLS certificate is issued on the first HTTPS request after DNS points to hatch, not at add or verify time."),
 		mcp.WithString("app",
 			mcp.Required(),
 			mcp.Description("App slug (name) to add the domain to"),
@@ -1064,8 +1064,10 @@ For apex domains (e.g. example.com without www), CNAME records are not
 allowed by the DNS spec. Use ALIAS or ANAME if your provider supports it
 (Cloudflare, Route 53, DNSimple). Otherwise use a www subdomain.
 
-SSL is provisioned automatically via Let's Encrypt once DNS propagates AND the
-domain is verified (see above).
+Once the domain is verified (see above), its TLS certificate is issued
+automatically on the first HTTPS request after DNS points to hatch. You can
+verify before switching DNS: no certificate is requested until traffic arrives.
+list_domains shows tls_status (awaiting_traffic, pending, issued, ...).
 
 To verify DNS is configured correctly, run:
   dig +short CNAME %s
@@ -1195,7 +1197,7 @@ func deleteEnvHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 
 func listDomainsTool() mcp.Tool {
 	return mcp.NewTool("list_domains",
-		mcp.WithDescription("List custom domains configured for an app"),
+		mcp.WithDescription("List custom domains configured for an app. status/verified only mean domain ownership is proven; tls_status says whether HTTPS works (issued, awaiting_traffic, pending, error, rate_limited with tls.retry_after, expired, awaiting_verification, unknown)."),
 		mcp.WithString("app",
 			mcp.Required(),
 			mcp.Description("App slug (name) to list domains for"),
@@ -1468,7 +1470,7 @@ func checkAuthHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 
 func getAppDetailsTool() mcp.Tool {
 	return mcp.NewTool("get_app_details",
-		mcp.WithDescription("Get detailed app information including deployment history, framework, and domains"),
+		mcp.WithDescription("Get detailed app information including deployment history, framework, and domains. For custom-domain certificate readiness use list_domains (tls_status): a domain's status/verified only mean ownership is proven."),
 		mcp.WithString("app",
 			mcp.Required(),
 			mcp.Description("App slug (name) to get details for"),
