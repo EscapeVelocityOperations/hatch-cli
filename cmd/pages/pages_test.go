@@ -260,6 +260,16 @@ func TestErrorsExitNonZeroWithHints(t *testing.T) {
 	}
 }
 
+// h-8iz8 REWORK #3: pages switched off server-side is a 404 that must not
+// read as a missing egg.
+func TestPagesDisabledHint(t *testing.T) {
+	withDeps(t, &mockClient{err: errors.New(`API error 404: {"error":"pages_disabled","message":"Hatch pages are not available on this platform yet"}`)})
+	_, _, err := run(t, "", "list", "e")
+	if err == nil || !strings.Contains(err.Error(), "not open on this platform yet") || strings.Contains(err.Error(), "no such egg") {
+		t.Fatalf("pages disabled: %v", err)
+	}
+}
+
 func TestRemove_ConfirmationRules(t *testing.T) {
 	mock := &mockClient{}
 	withDeps(t, mock)

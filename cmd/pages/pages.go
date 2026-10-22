@@ -91,6 +91,8 @@ func apiErr(action, slug string, err error) error {
 	msg := err.Error()
 	hint := ""
 	switch {
+	case strings.Contains(msg, "pages_disabled"):
+		hint = "Hatch pages are not open on this platform yet"
 	case strings.Contains(msg, "pages_require_gateway"):
 		hint = fmt.Sprintf("pages are served by the Hatch gateway, so %s must be protected first: "+
 			"'hatch protect password enable' or 'hatch protect email enable'", slug)
