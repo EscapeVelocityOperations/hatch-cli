@@ -359,6 +359,27 @@ Erase comments permanently — no undo, not even in export. `--author` and `--be
 
 Limits: 5,000 characters per comment; 5,000 comments per egg (deleted ones included — purge frees room). Each new visitor comment fires a `comment.created` webhook carrying ids only. MCP tools: `enable_comments`, `disable_comments`, `list_comments`, `get_comment_thread`, `reply_to_comment`, `resolve_comment`, `reopen_comment` — delete, export and purge are CLI-only. See the [comments docs](https://gethatch.eu/docs/comments).
 
+### Pages
+
+Publish an HTML page — or a folder with an `index.html` — onto a password- or email-protected egg at `/pages/<name>/`, without a build or deploy (the egg may stay asleep). Publishing again at the same name creates the next version: `/pages/<name>/` always shows the latest, `/pages/<name>/v1/`, `v2/`… stay readable, and comments stay on the version they were made on. Visitors get a small version bar (disable it with `<meta name="hatch-pages-bar" content="off">`) and an index of all pages at `/pages/`.
+
+```sh
+hatch pages publish my-egg report.html --at /pages/bilan/ --title "Bilan"
+hatch pages publish my-egg ./site/bilan --as "Claude (bosco)"   # folder with index.html
+hatch pages list my-egg
+hatch pages versions my-egg bilan
+hatch pages remove my-egg bilan --version 1 --yes
+```
+
+| Command | Description |
+|---------|-------------|
+| `publish <egg> <file.html\|folder>` | `--at` (default: from `--title` or the file name), `--title`, `--as` label or `--owner`, `--date YYYY-MM-DD`, `--json` |
+| `list <egg>` | Pages with their latest version (`--json`) |
+| `versions <egg> <page>` | Versions, newest first (`--json`) |
+| `remove <egg> <page>` | All versions, or `--version N`; `--purge` also forgets the name; `--yes` required outside a terminal |
+
+Version numbers are never reused, so an old `/vN/` link never shows other content. Hidden files (`.git`, `.env`…) and symlinks are left out. Limits: 50 MB per file, 200 MB per publication, 2,000 files per version, 200 pages and 2 GB per egg, 50 versions per page. MCP tools: `publish_page` (also takes inline `html`), `list_pages`, `list_page_versions`, `remove_page`.
+
 ### AI Integration
 
 The [Claude Code plugin](#claude-code-plugin-recommended) is the
