@@ -16,6 +16,7 @@ import (
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/deploywait"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/telemetry"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/version"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -26,6 +27,8 @@ import (
 var (
 	getTokenFunc = auth.GetToken
 	newAPIClient = func(token string) *api.Client { return api.NewClient(token) }
+	// deployWaitOptions tunes the post-upload status poll of deploy_app (h-59ej).
+	deployWaitOptions = deploywait.Options{}
 )
 
 // redactError applies token redaction to error messages returned to the MCP client.
@@ -41,12 +44,17 @@ func toolError(format string, args ...interface{}) (*mcp.CallToolResult, error) 
 	return mcp.NewToolResultError(redactError(msg)), nil
 }
 
+// isNoRunningAllocationError reports whether a logs error only means the app
+// has nothing to read logs from. "no allocations found" is what the control
+// plane returns when the app never got an allocation, e.g. its build failed
+// (h-83n6).
 func isNoRunningAllocationError(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "no running allocation")
+	return strings.Contains(msg, "no running allocation") ||
+		strings.Contains(msg, "no allocations found")
 }
 
 func noRunningAllocationResult(client *api.Client, slug string) (*mcp.CallToolResult, error) {
@@ -135,6 +143,18 @@ func NewServer() *server.MCPServer {
 	s.AddTool(addEmailProtectionUserTool(), addEmailProtectionUserHandler)
 	s.AddTool(removeEmailProtectionUserTool(), removeEmailProtectionUserHandler)
 	s.AddTool(clearEmailProtectionTool(), clearEmailProtectionHandler)
+	s.AddTool(revokeEggSessionsTool(), revokeEggSessionsHandler)
+	s.AddTool(enableCommentsTool(), enableCommentsHandler)
+	s.AddTool(disableCommentsTool(), disableCommentsHandler)
+	s.AddTool(listCommentsTool(), listCommentsHandler)
+	s.AddTool(getCommentThreadTool(), getCommentThreadHandler)
+	s.AddTool(replyToCommentTool(), replyToCommentHandler)
+	s.AddTool(resolveCommentTool(), resolveCommentHandler)
+	s.AddTool(reopenCommentTool(), reopenCommentHandler)
+	s.AddTool(publishPageTool(), publishPageHandler)
+	s.AddTool(listPagesTool(), listPagesHandler)
+	s.AddTool(listPageVersionsTool(), listPageVersionsHandler)
+	s.AddTool(removePageTool(), removePageHandler)
 	s.AddTool(restartAppTool(), restartAppHandler)
 	s.AddTool(getBuildLogsTool(), getBuildLogsHandler)
 
@@ -426,6 +446,9 @@ WHAT THIS TOOL DOES:
 2. Validates the start-command entrypoint file exists in deploy-target
 3. Creates a tar.gz of the directory contents
 4. Uploads to Hatch which wraps it in a thin container image and deploys
+5. Waits until the app is running (default; up to ~6 min) and returns an
+   error if the deploy fails or times out. Pass wait=false to return as
+   soon as the upload is accepted.
 
 CONTAINER BEHAVIOR:
 - The ENTIRE contents of deploy_target are extracted to /app/ inside the container
@@ -474,13 +497,16 @@ EXAMPLES:
 			mcp.Description("Command to start the app (paths relative to /app/). Required for all runtimes except static."),
 		),
 		mcp.WithString("app",
-			mcp.Description("App slug to deploy to. If omitted, reads .hatch.toml or creates a new app."),
+			mcp.Description("App slug to deploy to. If omitted, reads .hatch.toml from the deploy_target directory or creates a new app."),
 		),
 		mcp.WithString("name",
 			mcp.Description("App name for new apps (defaults to directory name)"),
 		),
 		mcp.WithString("domain",
 			mcp.Description("Custom domain to configure (e.g. example.com)"),
+		),
+		mcp.WithBoolean("wait",
+			mcp.Description("Wait for the app to be running before returning (default true). false returns once the upload is accepted."),
 		),
 	)
 }
@@ -535,31 +561,19 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		return toolError("failed to deploy app: %v", err)
 	}
 
-	// Resolve app slug
-	slug := appSlug
-	if slug == "" {
-		tomlPath := filepath.Join(".", ".hatch.toml")
-		if data, err := os.ReadFile(tomlPath); err == nil {
-			if strings.Contains(string(data), "[app]") {
-				lines := strings.Split(string(data), "\n")
-				for _, line := range lines {
-					line = strings.TrimSpace(line)
-					if strings.HasPrefix(line, "slug") {
-						parts := strings.SplitN(line, "=", 2)
-						if len(parts) == 2 {
-							slug = strings.Trim(strings.TrimSpace(parts[1]), "\"")
-						}
-					}
-				}
-			}
-		}
+	// Resolve app slug from the app parameter or the deploy_target's toml —
+	// never from the MCP server's own working directory.
+	res, err := resolveDeploySlug(appSlug, name, deployTarget)
+	if err != nil {
+		return toolError("failed to deploy app: %v", err)
 	}
+	slug := res.Slug
 
 	if slug == "" {
 		appName := name
 		if appName == "" {
-			cwd, _ := os.Getwd()
-			appName = filepath.Base(cwd)
+			abs, _ := filepath.Abs(deployTarget)
+			appName = filepath.Base(abs)
 		}
 
 		app, err := client.CreateApp(appName)
@@ -567,10 +581,9 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 			return toolError("failed to deploy app: %v", err)
 		}
 		slug = app.Slug
+		res.Provenance = fmt.Sprintf("new app created from name %q", appName)
 
-		tomlPath := filepath.Join(".", ".hatch.toml")
-		content := fmt.Sprintf("[app]\nslug = %q\nname = %q\n", slug, appName)
-		_ = os.WriteFile(tomlPath, []byte(content), 0644)
+		_ = writeHatchToml(deployTarget, slug, appName)
 	}
 
 	// Upload
@@ -579,7 +592,16 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	}
 
 	appURL := fmt.Sprintf("https://%s.nest.gethatch.eu", slug)
-	return mcp.NewToolResultText(fmt.Sprintf("Deployed successfully!\nApp: %s\nURL: %s\nRuntime: %s", slug, appURL, rt)), nil
+	if !req.GetBool("wait", true) {
+		return mcp.NewToolResultText(fmt.Sprintf("Deploy started (not waiting).\nApp: %s\nURL: %s\nRuntime: %s\nApp resolved from: %s\nCheck progress with get_app_details.", slug, appURL, rt, res.Provenance)), nil
+	}
+
+	// The upload only starts the rollout: wait for a terminal app status.
+	app, err := deploywait.Wait(ctx, slug, func() (*api.App, error) { return client.GetApp(slug) }, deployWaitOptions)
+	if err != nil {
+		return toolError("failed to deploy app: %v. Use get_logs or get_build_logs for %s", err, slug)
+	}
+	return mcp.NewToolResultText(fmt.Sprintf("Deployed successfully!\nApp: %s\nURL: %s\nRuntime: %s\nStatus: %s\nApp resolved from: %s", slug, appURL, rt, app.Status, res.Provenance)), nil
 }
 
 // createMCPTarGz creates a tar.gz from a directory for MCP deploy_app tool.
