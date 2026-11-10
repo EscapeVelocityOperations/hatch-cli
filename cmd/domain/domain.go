@@ -13,6 +13,7 @@ import (
 // Deps holds injectable dependencies for testing.
 type Deps struct {
 	GetToken       func() (string, error)
+	ListApps       func(token string) ([]api.App, error)
 	ListDomains    func(token, slug string) ([]api.Domain, error)
 	AddDomain      func(token, slug, domain string) (*api.Domain, error)
 	RemoveDomain   func(token, slug, domain string) error
@@ -22,6 +23,9 @@ type Deps struct {
 func defaultDeps() *Deps {
 	return &Deps{
 		GetToken: auth.GetToken,
+		ListApps: func(token string) ([]api.App, error) {
+			return api.NewClient(token).ListApps()
+		},
 		ListDomains: func(token, slug string) ([]api.Domain, error) {
 			return api.NewClient(token).ListDomains(slug)
 		},
@@ -154,8 +158,10 @@ func resolveSlug(appSlug string) (string, error) {
 		return "", fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
 	}
 
-	client := api.NewClient(token)
-	apps, err := client.ListApps()
+	if deps.ListApps == nil {
+		return appSlug, nil
+	}
+	apps, err := deps.ListApps(token)
 	if err == nil {
 		// Check if appSlug matches any app name or slug
 		for _, app := range apps {

@@ -2,6 +2,9 @@ package domain
 
 import (
 	"encoding/json"
+	"io"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,9 +69,14 @@ func TestDomainDecodesTLSFields(t *testing.T) {
 }
 
 func TestListDomains_TLSColumn(t *testing.T) {
+	var gotSlug string
 	deps = &Deps{
 		GetToken: func() (string, error) { return "tok", nil },
+		ListApps: func(token string) ([]api.App, error) {
+			return []api.App{{Name: "test-app", Slug: "test-app-x1y2"}}, nil
+		},
 		ListDomains: func(token, slug string) ([]api.Domain, error) {
+			gotSlug = slug
 			return []api.Domain{
 				{Domain: "new.example.com", Status: "active", Verified: true, TLSStatus: "awaiting_traffic",
 					TLS: &api.DomainTLS{Status: "awaiting_traffic", Detail: "certificate is issued on the first HTTPS request after DNS points to hatch"}},
@@ -78,7 +86,84 @@ func TestListDomains_TLSColumn(t *testing.T) {
 	}
 	defer func() { deps = defaultDeps() }()
 
-	if err := runList("test-app"); err != nil {
-		t.Fatalf("runList: %v", err)
+	out := captureStdout(t, func() {
+		if err := runList("test-app"); err != nil {
+			t.Fatalf("runList: %v", err)
+		}
+	})
+
+	if gotSlug != "test-app-x1y2" {
+		t.Errorf("ListDomains slug = %q, want resolved slug %q", gotSlug, "test-app-x1y2")
 	}
+
+	lines := strings.Split(out, "\n")
+	if len(lines) == 0 || !hasField(lines[0], "TLS") {
+		t.Fatalf("table header has no TLS column:\n%s", out)
+	}
+	tlsIdx := fieldIndex(lines[0], "TLS")
+	wantTLS := map[string]string{
+		"new.example.com":    "awaiting_traffic",
+		"legacy.example.com": "unknown",
+	}
+	for domain, want := range wantTLS {
+		row := lineStartingWith(lines, domain)
+		if row == "" {
+			t.Errorf("no table row for %s:\n%s", domain, out)
+			continue
+		}
+		f := strings.Fields(row)
+		if tlsIdx >= len(f) || f[tlsIdx] != want {
+			t.Errorf("TLS cell for %s = %v, want %q (row %q)", domain, f, want, row)
+		}
+	}
+	if !strings.Contains(out, "new.example.com: certificate is issued on the first HTTPS request after DNS points to hatch") {
+		t.Errorf("missing TLS detail line for new.example.com:\n%s", out)
+	}
+	if strings.Contains(out, "legacy.example.com:") {
+		t.Errorf("unexpected detail line for domain without TLS detail:\n%s", out)
+	}
+}
+
+// captureStdout runs fn with os.Stdout redirected to a pipe and returns what
+// fn wrote there.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	done := make(chan string)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- string(b)
+	}()
+	defer func() {
+		os.Stdout = old
+	}()
+	fn()
+	os.Stdout = old
+	w.Close()
+	return <-done
+}
+
+func hasField(line, name string) bool { return fieldIndex(line, name) >= 0 }
+
+func fieldIndex(line, name string) int {
+	for i, f := range strings.Fields(line) {
+		if f == name {
+			return i
+		}
+	}
+	return -1
+}
+
+func lineStartingWith(lines []string, prefix string) string {
+	for _, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), prefix+" ") {
+			return l
+		}
+	}
+	return ""
 }
