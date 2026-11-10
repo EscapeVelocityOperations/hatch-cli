@@ -16,6 +16,7 @@ type mockAPIClient struct {
 	createAppFn      func(name string) (*api.App, error)
 	createPreviewFn  func(parentSlug string, prNumber int) (*api.Preview, error)
 	uploadArtifactFn func(slug string, artifact []byte, runtime, startCommand string) error
+	getAppFn         func(slug string) (*api.App, error)
 }
 
 func (m *mockAPIClient) CreateApp(name string) (*api.App, error) {
@@ -30,6 +31,14 @@ func (m *mockAPIClient) UploadArtifact(slug string, artifact []byte, runtime, st
 		return m.uploadArtifactFn(slug, artifact, runtime, startCommand)
 	}
 	return nil
+}
+
+// GetApp defaults to an immediately running egg so deploys finish at once.
+func (m *mockAPIClient) GetApp(slug string) (*api.App, error) {
+	if m.getAppFn != nil {
+		return m.getAppFn(slug)
+	}
+	return &api.App{Slug: slug, Status: "running"}, nil
 }
 
 func newMockAPIClient(mock *mockAPIClient) func(token string) APIClient {
@@ -159,9 +168,9 @@ func TestRunDeploy_ArtifactMode_StaticSuccess(t *testing.T) {
 
 	var uploadedSlug, uploadedRuntime string
 	deps = &Deps{
-		GetToken:     func() (string, error) { return "tok123", nil },
-		GetCwd:       func() (string, error) { return tmp, nil },
-		Confirm:      func(prompt string) bool { return true },
+		GetToken: func() (string, error) { return "tok123", nil },
+		GetCwd:   func() (string, error) { return tmp, nil },
+		Confirm:  func(prompt string) bool { return true },
 		NewAPIClient: newMockAPIClient(&mockAPIClient{
 			uploadArtifactFn: func(slug string, artifact []byte, rt, sc string) error {
 				uploadedSlug = slug
@@ -200,8 +209,8 @@ func TestRunDeploy_ArtifactMode_ReadsHatchToml(t *testing.T) {
 
 	var uploadedSlug string
 	deps = &Deps{
-		GetToken:     func() (string, error) { return "tok123", nil },
-		GetCwd:       func() (string, error) { return tmp, nil },
+		GetToken: func() (string, error) { return "tok123", nil },
+		GetCwd:   func() (string, error) { return tmp, nil },
 		NewAPIClient: newMockAPIClient(&mockAPIClient{
 			uploadArtifactFn: func(slug string, artifact []byte, rt, sc string) error {
 				uploadedSlug = slug

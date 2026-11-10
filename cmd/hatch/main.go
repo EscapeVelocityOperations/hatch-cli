@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/root"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/exitcode"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/telemetry"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/update"
 	"golang.org/x/term"
@@ -41,14 +42,7 @@ func main() {
 
 		fmt.Fprintln(os.Stderr, err)
 
-		// In MCP mode, never exit 1 — the protocol handles errors.
-		// In non-interactive mode (piped, used by agents), exit 0 so the
-		// agent can parse stderr and decide what to do.
-		// Only exit 1 in interactive terminals for human UX.
-		if root.LastMode() == "mcp" || !isInteractive() {
-			os.Exit(0)
-		}
-		os.Exit(1)
+		os.Exit(exitCode(err, root.LastMode(), isInteractive()))
 	}
 
 	// Show update notification (suppress in MCP mode, non-interactive, or dev builds)
@@ -62,6 +56,26 @@ func main() {
 			// Don't delay CLI exit waiting for update check
 		}
 	}
+}
+
+// exitCode picks the process exit status for a command error.
+// In MCP mode, never exit non-zero — the protocol handles errors.
+// An explicit *exitcode.Error (hatch deploy failures, h-59ej) is honored
+// everywhere else, so scripts and CI see a failed deploy.
+// Otherwise, in non-interactive mode (piped, used by agents), exit 0 so the
+// agent can parse stderr and decide what to do; exit 1 only in interactive
+// terminals for human UX.
+func exitCode(err error, mode string, interactive bool) int {
+	if mode == "mcp" {
+		return 0
+	}
+	if code, ok := exitcode.From(err); ok {
+		return code
+	}
+	if !interactive {
+		return 0
+	}
+	return 1
 }
 
 // isInteractive returns true if stderr is a terminal (not piped).

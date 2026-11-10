@@ -381,3 +381,63 @@ func TestCronLogs(t *testing.T) {
 		}
 	})
 }
+
+// h-5fgqt (AC #2): the run-logs endpoint (h-muuw5) reports 404/503/502 for
+// distinct failure modes. Users should see a short, actionable message, not
+// the raw "API error 503: {\"error\":\"...\"}" client-layer wrapping (locked in
+// by internal/api.TestGetCronRunLogs_ErrorStatusCodes).
+func TestCronLogs_FriendlyErrors(t *testing.T) {
+	runsMock := func(slug, cronID string) ([]api.CronRun, error) {
+		return []api.CronRun{{ID: "run-2", Status: "success"}}, nil
+	}
+
+	cases := []struct {
+		name       string
+		clientErr  error
+		wantSubstr string
+	}{
+		{
+			name:       "503 no log source",
+			clientErr:  fmt.Errorf(`API error 503: {"error":"log source not configured"}`),
+			wantSubstr: "log source not configured",
+		},
+		{
+			name:       "404 run not found",
+			clientErr:  fmt.Errorf(`API error 404: {"error":"run not found"}`),
+			wantSubstr: "run not found / produced no logs",
+		},
+		{
+			name:       "404 no alloc",
+			clientErr:  fmt.Errorf(`API error 404: {"error":"run produced no logs (it did not execute)"}`),
+			wantSubstr: "run not found / produced no logs",
+		},
+		{
+			name:       "502 fetch failed",
+			clientErr:  fmt.Errorf(`API error 502: {"error":"could not fetch run logs"}`),
+			wantSubstr: "could not fetch run logs",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := &mockAPIClient{
+				listRunsFn: runsMock,
+				getRunLogsFn: func(slug, cronID, runID string) (string, error) {
+					return "", tc.clientErr
+				},
+			}
+			defer setTestDeps(mock)()
+
+			err := execCron("logs", "cron-1")
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantSubstr) {
+				t.Errorf("error = %q, want substring %q", err.Error(), tc.wantSubstr)
+			}
+			if strings.Contains(err.Error(), "API error") {
+				t.Errorf("error = %q, leaked raw API-layer wrapping instead of a friendly message", err.Error())
+			}
+		})
+	}
+}

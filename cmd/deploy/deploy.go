@@ -3,6 +3,7 @@ package deploy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/deploywait"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -64,6 +66,7 @@ type APIClient interface {
 	CreateApp(name string) (*api.App, error)
 	CreatePreview(parentSlug string, prNumber int) (*api.Preview, error)
 	UploadArtifact(slug string, artifact []byte, runtime, startCommand string) error
+	GetApp(slug string) (*api.App, error)
 }
 
 // Deps holds injectable dependencies for testing.
@@ -72,6 +75,9 @@ type Deps struct {
 	GetCwd       func() (string, error)
 	NewAPIClient func(token string) APIClient
 	Confirm      func(prompt string) bool
+	// Sleep and Now drive the post-upload status poll; nil means real time.
+	Sleep func(time.Duration)
+	Now   func() time.Time
 }
 
 // realAPIClient wraps api.Client to implement APIClient interface.
@@ -91,6 +97,10 @@ func (r *realAPIClient) UploadArtifact(slug string, artifact []byte, runtime, st
 	return r.client.UploadArtifact(slug, bytes.NewReader(artifact), runtime, startCommand)
 }
 
+func (r *realAPIClient) GetApp(slug string) (*api.App, error) {
+	return r.client.GetApp(slug)
+}
+
 func defaultDeps() *Deps {
 	return &Deps{
 		GetToken: auth.GetToken,
@@ -99,12 +109,14 @@ func defaultDeps() *Deps {
 			return &realAPIClient{client: api.NewClient(token)}
 		},
 		Confirm: confirmPrompt,
+		Sleep:   time.Sleep,
+		Now:     time.Now,
 	}
 }
 
 // confirmPrompt asks the user a yes/no question and returns true if they confirm.
 func confirmPrompt(prompt string) bool {
-	fmt.Printf("%s [y/N] ", prompt)
+	ui.Printf("%s [y/N] ", prompt)
 	reader := bufio.NewReader(os.Stdin)
 	line, _ := reader.ReadString('\n')
 	answer := strings.TrimSpace(strings.ToLower(line))
@@ -119,8 +131,10 @@ var (
 	deployTarget string
 	runtime      string
 	startCommand string
-	previewRef   string // --preview pr-<n> | <n> (h-qtie8)
-	jsonOut      bool   // --json machine-readable result
+	previewRef   string        // --preview pr-<n> | <n> (h-qtie8)
+	jsonOut      bool          // --json machine-readable result
+	noWait       bool          // --no-wait: return once the upload is accepted (h-59ej)
+	waitTimeout  time.Duration // --timeout: max wait for a terminal status (h-59ej)
 )
 
 func NewCmd() *cobra.Command {
@@ -154,6 +168,32 @@ Platform constraints:
   - App must bind to 0.0.0.0 (not 127.0.0.1 or localhost)
   - Max artifact size: 500 MB
 
+Waiting and exit status:
+  After the upload, hatch deploy waits until the egg is running (or
+  sleeping) before reporting success. If the egg ends up failed, stopped
+  or crashed, the reason is printed (inspect with 'hatch logs <slug>');
+  if no final status is seen within --timeout (default 6m), the last
+  status is printed. --no-wait returns as soon as the upload is accepted
+  and prints "Deploy started"; check with 'hatch info <slug>'.
+
+  Unlike other hatch commands, a failed deploy exits non-zero even when
+  not attached to a terminal (scripts, agents, CI):
+    0  deployed (or started, with --no-wait)
+    1  deploy error: invalid flags, auth, upload or image build failure
+    2  rollout failed: the egg ended failed, stopped or crashed
+    3  timed out waiting for a final status (the deploy may still finish)
+
+JSON output (--json):
+  stdout holds exactly one JSON line, printed at the end; human messages
+  go to stderr. The JSON is printed on every outcome, before a non-zero
+  exit:
+    {"slug":"...","url":"...","status":"running","waited":true}
+  Optional keys: "status_reason" and "error" (on failure); previews add
+  "pr_number". With --no-wait, status is "deploying" and waited is false.
+  A failure before the rollout wait (exit 1) prints
+    {"status":"error","waited":false,"error":"...","slug":"..."}
+  where "slug" is present once the egg is known.
+
 Examples:
   # Node.js (Nuxt)
   cd my-nuxt-app && pnpm build
@@ -182,27 +222,24 @@ Examples:
 	cmd.Flags().StringVar(&startCommand, "start-command", "", "command to start the app (required for non-static runtimes)")
 	cmd.Flags().StringVar(&previewRef, "preview", "", "deploy a PR preview of the parent egg: pr-<n> or <n> (h-qtie8)")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "print a machine-readable JSON result (for CI/GitHub Actions)")
+	cmd.Flags().BoolVar(&noWait, "no-wait", false, "return once the upload is accepted, without waiting for the egg to be running")
+	cmd.Flags().DurationVar(&waitTimeout, "timeout", deploywait.DefaultTimeout, "max time to wait for the deploy to finish")
 	return cmd
 }
 
 func runDeploy(cmd *cobra.Command, args []string) error {
-	// Validate required flags
-	if deployTarget == "" {
-		return fmt.Errorf("--deploy-target is required\n\nUsage: hatch deploy --deploy-target <dir> --runtime <runtime> --start-command <cmd>\n\nRun 'hatch deploy --help' for details")
-	}
-	if runtime == "" {
-		return fmt.Errorf("--runtime is required (node, python, go, or static)\n\nRun 'hatch deploy --help' for details")
-	}
-
-	// Check auth
-	token, err := deps.GetToken()
+	token, err := deployPreflight()
 	if err != nil {
-		return fmt.Errorf("checking auth: %w", err)
-	}
-	if token == "" {
-		return fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
+		if jsonOut {
+			defer ui.SetOutput(os.Stderr)()
+		}
+		return finishDeploy(jsonOut, nil, err)
 	}
 
+	ctx := context.Background()
+	if cmd != nil && cmd.Context() != nil {
+		ctx = cmd.Context()
+	}
 	return RunArtifactDeploy(ArtifactDeployConfig{
 		Token:        token,
 		AppName:      appName,
@@ -212,7 +249,29 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		StartCommand: startCommand,
 		PreviewRef:   previewRef,
 		JSONOutput:   jsonOut,
+		NoWait:       noWait,
+		WaitTimeout:  waitTimeout,
+		Context:      ctx,
 	})
+}
+
+// deployPreflight validates the required flags and returns the auth token.
+func deployPreflight() (string, error) {
+	if deployTarget == "" {
+		return "", fmt.Errorf("--deploy-target is required\n\nUsage: hatch deploy --deploy-target <dir> --runtime <runtime> --start-command <cmd>\n\nRun 'hatch deploy --help' for details")
+	}
+	if runtime == "" {
+		return "", fmt.Errorf("--runtime is required (node, python, go, or static)\n\nRun 'hatch deploy --help' for details")
+	}
+
+	token, err := deps.GetToken()
+	if err != nil {
+		return "", fmt.Errorf("checking auth: %w", err)
+	}
+	if token == "" {
+		return "", fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
+	}
+	return token, nil
 }
 
 func getCwd() (string, error) {

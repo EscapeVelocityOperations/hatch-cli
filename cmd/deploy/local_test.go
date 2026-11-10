@@ -24,9 +24,9 @@ func captureUIOutput(fn func()) string {
 
 func TestRunArtifactDeploy_AllRuntimesValid(t *testing.T) {
 	tests := []struct {
-		name   string
+		name    string
 		runtime string
-		valid  bool
+		valid   bool
 	}{
 		{"node runtime", "node", true},
 		{"python runtime", "python", true},
