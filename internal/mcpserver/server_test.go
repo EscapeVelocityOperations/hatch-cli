@@ -2144,6 +2144,7 @@ func TestAcceptInviteHandler_Success(t *testing.T) {
 	saveAndRestore(t)
 	setAuthToken("tok")
 	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/invitations/pending": jsonHandler([]api.PendingInvite{}),
 		"POST /v1/invitations/tok-abc/accept": jsonHandler(api.Collaborator{
 			ID: "c1", AppID: "a1", Status: "accepted",
 		}),
@@ -2163,6 +2164,7 @@ func TestAcceptInviteHandler_WrongEmail(t *testing.T) {
 	saveAndRestore(t)
 	setAuthToken("tok")
 	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/invitations/pending":         jsonHandler([]api.PendingInvite{}),
 		"POST /v1/invitations/tok-abc/accept": errorHandler(403, `{"error":"this invitation was sent to a different email address"}`),
 	})
 

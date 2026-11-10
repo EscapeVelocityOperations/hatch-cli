@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -2010,7 +2011,7 @@ func unshareAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallT
 
 func listPendingInvitesTool() mcp.Tool {
 	return mcp.NewTool("list_pending_invites",
-		mcp.WithDescription("List your pending invitations to collaborate on other people's apps"),
+		mcp.WithDescription("List your pending invitations to collaborate on other people's apps. Pass an invitation's id to accept_invite to accept it."),
 	)
 }
 
@@ -2040,7 +2041,7 @@ func acceptInviteTool() mcp.Tool {
 		mcp.WithDescription("Accept an invitation to collaborate on an app. Accepting grants full operational access to that app, including deploying it and its environment variables/secrets — only accept invitations from people and apps you recognize."),
 		mcp.WithString("token",
 			mcp.Required(),
-			mcp.Description("Invitation token from the accept link in the invitation email"),
+			mcp.Description("Invitation id from list_pending_invites, or the token from the accept link in the invitation email"),
 		),
 	)
 }
@@ -2056,6 +2057,22 @@ func acceptInviteHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 		return toolError("failed to accept invite: %v", err)
 	}
 
+	// The id shown by list_pending_invites is the invitation row ID, not the
+	// token the API takes: resolve it (h-e3s1k.2). An unmatched value is sent
+	// as a token so the API answers its precise 403/404.
+	invites, err := client.ListPendingInvites()
+	if err != nil {
+		return toolError("failed to accept invite: %v", err)
+	}
+	if inv, ferr := api.FindPendingInvite(invites, token); ferr == nil {
+		token = inv.InviteToken
+	} else if !errors.Is(ferr, api.ErrNoMatchingInvite) {
+		return toolError("failed to accept invite: %v", ferr)
+	}
+
+	// Transport errors embed the request URL; toolError redacts the
+	// /invitations/{token} segment from both the result and telemetry
+	// (h-e3s1k.1).
 	collab, err := client.AcceptInvite(token)
 	if err != nil {
 		return toolError("failed to accept invite: %v", err)
