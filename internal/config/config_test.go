@@ -165,3 +165,12 @@ func TestLoadEmptyFile(t *testing.T) {
 		t.Errorf("expected empty token, got %q", cfg.Token)
 	}
 }
+
+func TestTermsAcceptedByEnv(t *testing.T) {
+	for v, want := range map[string]bool{"yes": true, "YES": true, " yes ": true, "": false, "1": false, "true": false, "y": false, "no": false} {
+		t.Setenv(AcceptTermsEnv, v)
+		if got := TermsAcceptedByEnv(); got != want {
+			t.Errorf("HATCH_ACCEPT_TERMS=%q: got %v, want %v", v, got, want)
+		}
+	}
+}

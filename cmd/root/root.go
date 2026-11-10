@@ -109,6 +109,13 @@ func init() {
 		if cfg.TosAcceptedAt != "" {
 			return // Already accepted
 		}
+		// Non-interactive acceptance for stateless runners (h-cmzf.4): an
+		// explicit, documented opt-in set by whoever configures the pipeline.
+		// Not persisted: it holds for this run only.
+		if config.TermsAcceptedByEnv() {
+			fmt.Fprintln(os.Stderr, "Hatch Terms of Service (https://gethatch.eu/terms) accepted via HATCH_ACCEPT_TERMS=yes.")
+			return
+		}
 
 		// Show TOS summary and prompt for acceptance
 		fmt.Fprintln(os.Stderr, "")
