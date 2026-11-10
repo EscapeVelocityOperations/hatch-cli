@@ -13,6 +13,7 @@ import (
 // Deps holds injectable dependencies for testing.
 type Deps struct {
 	GetToken       func() (string, error)
+	ListApps       func(token string) ([]api.App, error)
 	ListDomains    func(token, slug string) ([]api.Domain, error)
 	AddDomain      func(token, slug, domain string) (*api.Domain, error)
 	RemoveDomain   func(token, slug, domain string) error
@@ -22,6 +23,9 @@ type Deps struct {
 func defaultDeps() *Deps {
 	return &Deps{
 		GetToken: auth.GetToken,
+		ListApps: func(token string) ([]api.App, error) {
+			return api.NewClient(token).ListApps()
+		},
 		ListDomains: func(token, slug string) ([]api.Domain, error) {
 			return api.NewClient(token).ListDomains(slug)
 		},
@@ -58,7 +62,8 @@ Replace <slug> with your egg's slug (shown after "hatch domain add").
 For apex domains (e.g. example.com), use an ALIAS or ANAME record if your
 DNS provider supports it. Otherwise, use a subdomain (www.example.com).
 
-SSL certificates are provisioned automatically via Let's Encrypt.`,
+TLS certificates are issued automatically on the first HTTPS request after
+DNS points to hatch. The TLS column of 'hatch domain list' shows their state.`,
 	}
 
 	cmd.AddCommand(newListCmd())
@@ -102,7 +107,8 @@ After adding the domain, create a CNAME record at your DNS provider:
 
   CNAME  your-domain.com  →  <slug>.nest.gethatch.eu
 
-SSL is provisioned automatically once DNS propagates (usually a few minutes).
+The TLS certificate is issued automatically on the first HTTPS request after
+DNS points to hatch.
 
 Example:
   hatch domain add example.com --app my-app
@@ -152,8 +158,10 @@ func resolveSlug(appSlug string) (string, error) {
 		return "", fmt.Errorf("not logged in. Run 'hatch login', set HATCH_TOKEN, or use --token")
 	}
 
-	client := api.NewClient(token)
-	apps, err := client.ListApps()
+	if deps.ListApps == nil {
+		return appSlug, nil
+	}
+	apps, err := deps.ListApps(token)
 	if err == nil {
 		// Check if appSlug matches any app name or slug
 		for _, app := range apps {
@@ -194,15 +202,20 @@ func runList(appSlug string) error {
 		return nil
 	}
 
-	table := ui.NewTable(os.Stdout, "DOMAIN", "STATUS", "VERIFIED", "CNAME")
+	table := ui.NewTable(os.Stdout, "DOMAIN", "STATUS", "VERIFIED", "TLS", "CNAME")
 	for _, d := range domains {
 		verified := ui.Green("yes")
 		if !d.Verified {
 			verified = ui.Yellow("no")
 		}
-		table.AddRow(d.Domain, statusColor(d.Status), verified, d.CNAME)
+		table.AddRow(d.Domain, statusColor(d.Status), verified, tlsCell(d), d.CNAME)
 	}
 	table.Render()
+	for _, d := range domains {
+		if d.TLS != nil && d.TLS.Detail != "" && d.TLS.Status != "issued" {
+			fmt.Printf("  %s %s: %s\n", ui.Dim("→"), d.Domain, d.TLS.Detail)
+		}
+	}
 	return nil
 }
 
@@ -249,7 +262,7 @@ func runAdd(appSlug, domain string) error {
 	}
 	fmt.Printf("  %s Create a CNAME record pointing to: %s\n", ui.Dim("→"), ui.Bold(cname))
 	fmt.Printf("  %s For apex domains, use ALIAS/ANAME if your provider supports it.\n", ui.Dim("→"))
-	fmt.Printf("  %s SSL will be provisioned automatically once DNS propagates.\n", ui.Dim("→"))
+	fmt.Printf("  %s %s\n", ui.Dim("→"), certificateHint)
 	fmt.Println()
 
 	return nil
@@ -291,7 +304,9 @@ func newVerifyCmd() *cobra.Command {
 		Long: `Verify domain ownership by checking the DNS TXT record.
 
 After adding the required TXT record (_hatch-verify.domain.com), run this command
-to trigger verification. Once verified, Caddy will configure the route and provision SSL.
+to trigger verification. Once verified, hatch routes the domain; its TLS certificate is
+issued on the first HTTPS request after DNS points to hatch, so you can verify before
+switching DNS.
 
 Example:
   hatch domain verify example.com --app my-app`,
@@ -332,7 +347,7 @@ func runVerify(appSlug, domain string) error {
 
 	if d.Verified {
 		ui.Success(fmt.Sprintf("Domain '%s' verified successfully!", domain))
-		ui.Info("SSL certificate will be provisioned automatically.")
+		ui.Info(certificateHint)
 	} else {
 		ui.Warn(fmt.Sprintf("Domain '%s' verification failed", domain))
 		fmt.Println()
@@ -345,6 +360,39 @@ func runVerify(appSlug, domain string) error {
 	}
 
 	return nil
+}
+
+// certificateHint says when a verified domain gets its certificate (h-zqbr):
+// not at verify, but at the first HTTPS request that reaches hatch.
+const certificateHint = "The TLS certificate is issued automatically on the first HTTPS request after DNS points to hatch. Check 'hatch domain list'."
+
+// tlsCell renders a domain's certificate state for the TLS column. STATUS
+// only means ownership is proven; this says whether HTTPS works.
+func tlsCell(d api.Domain) string {
+	status := d.TLSStatus
+	if status == "" && d.TLS != nil {
+		status = d.TLS.Status
+	}
+	switch status {
+	case "":
+		return "unknown" // API without TLS status
+	case "issued":
+		if d.TLS != nil && d.TLS.ExpiresAt != nil {
+			return ui.Green("issued (until " + d.TLS.ExpiresAt.UTC().Format("2006-01-02") + ")")
+		}
+		return ui.Green(status)
+	case "rate_limited":
+		if d.TLS != nil && d.TLS.RetryAfter != nil {
+			return ui.Red("rate_limited (retry " + d.TLS.RetryAfter.UTC().Format("15:04Z") + ")")
+		}
+		return ui.Red(status)
+	case "pending", "awaiting_traffic", "awaiting_verification":
+		return ui.Yellow(status)
+	case "error", "expired":
+		return ui.Red(status)
+	default:
+		return status
+	}
 }
 
 func statusColor(status string) string {
