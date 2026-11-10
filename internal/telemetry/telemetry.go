@@ -29,6 +29,24 @@ type Event struct {
 	Mode       string `json:"mode"`
 }
 
+// SensitiveArgsAnnotation marks a cobra command whose positional args are
+// secrets (e.g. invite tokens, h-e3s1k.1). Set it in cmd.Annotations with any
+// non-empty value; root then records every arg as "****" for telemetry.
+const SensitiveArgsAnnotation = "hatch.telemetry/sensitive-args"
+
+// MaskArgs returns args unchanged, or every element replaced by "****" when
+// sensitive is true.
+func MaskArgs(args []string, sensitive bool) []string {
+	if !sensitive {
+		return args
+	}
+	masked := make([]string, len(args))
+	for i := range masked {
+		masked[i] = "****"
+	}
+	return masked
+}
+
 // kvRedactRegex matches key=value patterns where value may contain sensitive data.
 var kvRedactRegex = regexp.MustCompile(`((?i:token|key|password|secret|credential|auth))\s*[=:]\s*\S+`)
 
@@ -61,13 +79,15 @@ func Send(command, args, errMsg, mode string) {
 		Mode:       mode,
 	}
 
+	// Read APIHost in the caller's goroutine: tests swap it, and a read in
+	// the background goroutine raced with those writes under -race.
+	host := APIHost
 	go func() {
 		data, err := json.Marshal(event)
 		if err != nil {
 			return
 		}
 
-		host := APIHost
 		if !strings.HasPrefix(host, "http") {
 			host = "https://" + host
 		}

@@ -87,10 +87,29 @@ func ValidateDomain(domain string) error {
 	return nil
 }
 
-// RedactToken removes sensitive tokens from error messages.
+var (
+	hatchTokenRegex = regexp.MustCompile(`hatch_[a-zA-Z0-9_]+`)
+	// invitePathRegex matches the path segment after /invitations/, which
+	// carries the invite token for accept/decline (h-e3s1k.1). The token is a
+	// bearer-like secret for a pending invitation, so it must not reach
+	// verbose logs, transport errors, MCP results or telemetry.
+	invitePathRegex = regexp.MustCompile(`/invitations/[^/?#\s"'<>]+`)
+)
+
+// redactedInvitePath is what an invite token path segment is replaced with.
+const redactedInvitePath = "/invitations/****"
+
+// RedactToken removes sensitive tokens from error messages: hatch_* API
+// tokens and invite tokens in /invitations/{token}/... URL paths. The
+// /invitations/pending listing path is left as is.
 func RedactToken(s string) string {
-	re := regexp.MustCompile(`hatch_[a-zA-Z0-9_]+`)
-	return re.ReplaceAllString(s, "hatch_****")
+	s = hatchTokenRegex.ReplaceAllString(s, "hatch_****")
+	return invitePathRegex.ReplaceAllStringFunc(s, func(m string) string {
+		if m == "/invitations/pending" {
+			return m
+		}
+		return redactedInvitePath
+	})
 }
 
 // Client is the Hatch API client.
@@ -135,10 +154,10 @@ func NewTestClient(token, host string) *Client {
 
 // do executes an HTTP request with Bearer auth and returns the response.
 func (c *Client) do(method, path string, body io.Reader) (*http.Response, error) {
-	url := c.host + apiPath + path
-	req, err := http.NewRequest(method, url, body)
+	reqURL := c.host + apiPath + path
+	req, err := http.NewRequest(method, reqURL, body)
 	if err != nil {
-		return nil, fmt.Errorf("%w", err)
+		return nil, redactURLError(err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	if body != nil {
@@ -146,7 +165,7 @@ func (c *Client) do(method, path string, body io.Reader) (*http.Response, error)
 	}
 
 	if verboseEnabled {
-		fmt.Fprintf(os.Stderr, "> %s %s\n", method, url)
+		fmt.Fprintf(os.Stderr, "> %s %s\n", method, RedactToken(reqURL))
 		for k, v := range req.Header {
 			val := strings.Join(v, ", ")
 			if k == "Authorization" {
@@ -158,7 +177,7 @@ func (c *Client) do(method, path string, body io.Reader) (*http.Response, error)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%w", err)
+		return nil, redactURLError(err)
 	}
 
 	if verboseEnabled {
@@ -178,6 +197,18 @@ func (c *Client) do(method, path string, body io.Reader) (*http.Response, error)
 		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, body)
 	}
 	return resp, nil
+}
+
+// redactURLError strips secrets from the URL net/http embeds in request and
+// transport errors (*url.Error), e.g. an invite token in the request path
+// (h-e3s1k.1). Only the error text changes; the request already went out
+// with the real URL.
+func redactURLError(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		ue.URL = RedactToken(ue.URL)
+	}
+	return fmt.Errorf("%w", err)
 }
 
 // ListApps returns all apps for the authenticated user.

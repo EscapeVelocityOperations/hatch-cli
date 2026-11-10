@@ -11,6 +11,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/authcmd"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/boost"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/ci"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/collab"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/comments"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/configure"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/credits"
@@ -23,6 +24,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/env"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/initcmd"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/initignore"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/invite"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/login"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/logout"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/logs"
@@ -41,6 +43,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/config"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/telemetry"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -85,7 +88,9 @@ func init() {
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		// Track command for telemetry
 		lastCommandName = cmd.CommandPath()
-		lastCommandArgs = args
+		// Commands taking secret positionals (invite tokens) opt out of
+		// sending their args (h-e3s1k.1).
+		lastCommandArgs = telemetry.MaskArgs(args, cmd.Annotations[telemetry.SensitiveArgsAnnotation] != "")
 		lastMode = "cli"
 
 		if verbose {
@@ -161,6 +166,7 @@ func init() {
 	rootCmd.AddCommand(authcmd.NewCmd())
 	rootCmd.AddCommand(boost.NewCmd())
 	rootCmd.AddCommand(ci.NewCmd())
+	rootCmd.AddCommand(collab.NewCmd())
 	rootCmd.AddCommand(comments.NewCmd())
 	rootCmd.AddCommand(configure.NewCmd())
 	rootCmd.AddCommand(credits.NewCmd())
@@ -172,6 +178,7 @@ func init() {
 	rootCmd.AddCommand(energy.NewCmd())
 	rootCmd.AddCommand(initcmd.NewCmd())
 	rootCmd.AddCommand(initignore.NewCmd())
+	rootCmd.AddCommand(invite.NewCmd())
 	rootCmd.AddCommand(env.NewCmd())
 	rootCmd.AddCommand(login.NewCmd())
 	rootCmd.AddCommand(logout.NewCmd())
