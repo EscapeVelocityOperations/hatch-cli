@@ -198,23 +198,32 @@ func TestAcceptDeclineResolveListID(t *testing.T) {
 		}
 	}
 
+	// Decline rejects an unknown ref (the API would answer 204 for a no-op)
+	// without calling the API or echoing the ref.
 	const unknown = "feedfacefeedfacefeedfacefeedface"
 	var c call
 	setup(&c)
-	for name, run := range map[string]func(string) error{"accept": runAccept, "decline": runDecline} {
-		err := run(unknown)
-		if err == nil {
-			t.Fatalf("%s unknown ref: expected error", name)
-		}
-		if strings.Contains(err.Error(), unknown) {
-			t.Errorf("%s error echoes the ref: %v", name, err)
-		}
-		if !strings.Contains(err.Error(), "no pending invitation") {
-			t.Errorf("%s error = %v, want no pending invitation", name, err)
-		}
+	err := runDecline(unknown)
+	if err == nil {
+		t.Fatal("decline unknown ref: expected error")
 	}
-	if len(c.accepted)+len(c.declined) != 0 {
-		t.Errorf("unknown ref reached the API: %+v", c)
+	if strings.Contains(err.Error(), unknown) {
+		t.Errorf("decline error echoes the ref: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no pending invitation") {
+		t.Errorf("decline error = %v, want no pending invitation", err)
+	}
+	if len(c.declined) != 0 {
+		t.Errorf("unknown ref reached decline API: %v", c.declined)
+	}
+
+	// Accept passes an unknown ref through: the API validates it and answers
+	// a precise 403/404 (e.g. invitation sent to another email).
+	if err := runAccept(unknown); err != nil {
+		t.Fatalf("accept unknown ref: %v", err)
+	}
+	if len(c.accepted) != 1 || c.accepted[0] != unknown {
+		t.Errorf("accept unknown ref sent %v, want [%s]", c.accepted, unknown)
 	}
 }
 

@@ -1,6 +1,7 @@
 package invite
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -167,6 +168,20 @@ func resolveInvite(authToken, ref string) (*api.PendingInvite, error) {
 	return api.FindPendingInvite(invites, ref)
 }
 
+// acceptToken resolves ref like resolveInvite, but an unmatched ref is sent
+// to the API as a token: accept checks it server-side and answers a precise
+// 403 (invitation for another email) or 404, unlike decline's blind 204.
+func acceptToken(authToken, ref string) (string, error) {
+	inv, err := resolveInvite(authToken, ref)
+	if errors.Is(err, api.ErrNoMatchingInvite) {
+		return ref, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return inv.InviteToken, nil
+}
+
 func runAccept(ref string) error {
 	authToken, err := getAuthToken()
 	if err != nil {
@@ -176,9 +191,9 @@ func runAccept(ref string) error {
 	sp := ui.NewSpinner("Accepting invitation...")
 	sp.Start()
 	var collab *api.Collaborator
-	inv, err := resolveInvite(authToken, ref)
+	inviteToken, err := acceptToken(authToken, ref)
 	if err == nil {
-		collab, err = deps.AcceptInvite(authToken, inv.InviteToken)
+		collab, err = deps.AcceptInvite(authToken, inviteToken)
 	}
 	sp.Stop()
 

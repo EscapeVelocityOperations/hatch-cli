@@ -150,8 +150,9 @@ var ErrNoMatchingInvite = errors.New("no pending invitation matches that ID or t
 // FindPendingInvite returns the pending invitation whose ID or invite token
 // equals ref, so accept/decline can take the ID shown by 'hatch invite ls'
 // as well as the token from the invitation email (h-e3s1k.2). Unknown refs
-// are rejected rather than sent to the API: decline answers 204 even when no
-// row matches. The error never echoes ref, which may be a secret token.
+// yield ErrNoMatchingInvite: decline must reject them (the API answers 204
+// even when no row matches), accept may pass them on for the API's precise
+// 403/404. The error never echoes ref, which may be a secret token.
 func FindPendingInvite(invites []PendingInvite, ref string) (*PendingInvite, error) {
 	if ref == "" {
 		return nil, ErrNoMatchingInvite
