@@ -1,6 +1,7 @@
 package apps
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -31,6 +32,8 @@ func defaultDeps() *Deps {
 
 var deps = defaultDeps()
 
+var infoJSON bool // --json on hatch info (h-59ej)
+
 // NewCmd returns the apps command with info subcommand.
 func NewCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -44,13 +47,18 @@ func NewCmd() *cobra.Command {
 
 // NewInfoCmd returns the info command.
 func NewInfoCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "info [slug]",
 		Short: "Show details for an egg",
-		Long:  "Display detailed information about a specific Hatch egg.",
-		Args:  cobra.ExactArgs(1),
-		RunE:  runInfo,
+		Long: `Display detailed information about a specific Hatch egg.
+
+With --json, prints the egg as a JSON object (slug, name, status,
+status_reason, url, region, created_at, updated_at) on stdout.`,
+		Args: cobra.ExactArgs(1),
+		RunE: runInfo,
 	}
+	cmd.Flags().BoolVar(&infoJSON, "json", false, "print the egg as JSON")
+	return cmd
 }
 
 func runList(cmd *cobra.Command, args []string) error {
@@ -99,6 +107,16 @@ func runInfo(cmd *cobra.Command, args []string) error {
 
 	slug := args[0]
 
+	if infoJSON {
+		app, err := deps.GetApp(token, slug)
+		if err != nil {
+			return fmt.Errorf("fetching egg: %w", err)
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(app)
+	}
+
 	sp := ui.NewSpinner("Fetching egg details...")
 	sp.Start()
 	app, err := deps.GetApp(token, slug)
@@ -112,6 +130,9 @@ func runInfo(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  %s\n", ui.Bold(app.Name))
 	fmt.Printf("  %s %s\n", ui.Dim("Slug:"), app.Slug)
 	fmt.Printf("  %s %s\n", ui.Dim("Status:"), statusColor(app.Status))
+	if app.StatusReason != "" {
+		fmt.Printf("  %s %s\n", ui.Dim("Reason:"), app.StatusReason)
+	}
 	fmt.Printf("  %s %s\n", ui.Dim("URL:"), app.URL)
 	fmt.Printf("  %s %s\n", ui.Dim("Region:"), app.Region)
 	fmt.Printf("  %s %s\n", ui.Dim("Created:"), app.CreatedAt.Format("2006-01-02 15:04:05"))

@@ -11,6 +11,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/authcmd"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/boost"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/ci"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/comments"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/configure"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/credits"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/cron"
@@ -28,7 +29,9 @@ import (
 	mcpcmd "github.com/EscapeVelocityOperations/hatch-cli/cmd/mcp"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/open"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/packs"
+	pagescmd "github.com/EscapeVelocityOperations/hatch-cli/cmd/pages"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/preview"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/protect"
 	rediscmd "github.com/EscapeVelocityOperations/hatch-cli/cmd/redis"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/resources"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/restart"
@@ -58,6 +61,9 @@ var rootCmd = &cobra.Command{
 	Short:        "Hatch CLI - Developer tools for Hatch",
 	Long:         "Hatch is a command-line interface for deploying and managing eggs on the Hatch platform.",
 	SilenceUsage: true,
+	// main prints the returned error itself; letting cobra print it too
+	// doubled every error message on stderr.
+	SilenceErrors: true,
 }
 
 func Execute() error {
@@ -102,6 +108,13 @@ func init() {
 		}
 		if cfg.TosAcceptedAt != "" {
 			return // Already accepted
+		}
+		// Non-interactive acceptance for stateless runners (h-cmzf.4): an
+		// explicit, documented opt-in set by whoever configures the pipeline.
+		// Not persisted: it holds for this run only.
+		if config.TermsAcceptedByEnv() {
+			fmt.Fprintln(os.Stderr, "Hatch Terms of Service (https://gethatch.eu/terms) accepted via HATCH_ACCEPT_TERMS=yes.")
+			return
 		}
 
 		// Show TOS summary and prompt for acceptance
@@ -148,6 +161,7 @@ func init() {
 	rootCmd.AddCommand(authcmd.NewCmd())
 	rootCmd.AddCommand(boost.NewCmd())
 	rootCmd.AddCommand(ci.NewCmd())
+	rootCmd.AddCommand(comments.NewCmd())
 	rootCmd.AddCommand(configure.NewCmd())
 	rootCmd.AddCommand(credits.NewCmd())
 	rootCmd.AddCommand(cron.NewCmd())
@@ -165,7 +179,9 @@ func init() {
 	rootCmd.AddCommand(mcpcmd.NewCmd())
 	rootCmd.AddCommand(open.NewCmd())
 	rootCmd.AddCommand(packs.NewCmd())
+	rootCmd.AddCommand(pagescmd.NewCmd())
 	rootCmd.AddCommand(preview.NewCmd())
+	rootCmd.AddCommand(protect.NewCmd())
 	rootCmd.AddCommand(rediscmd.NewCmd())
 	rootCmd.AddCommand(resources.NewCmd())
 	rootCmd.AddCommand(restart.NewCmd())

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 
 	detect "github.com/EscapeVelocityOperations/hatch-cli/internal/ci"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -23,6 +24,10 @@ type Deps struct {
 	Stat      func(path string) bool                  // reports whether path exists
 	LookPath  func(bin string) bool                   // reports whether a binary is installed
 	Run       func(bin string, args ...string) error  // executes a command
+	// FetchRelease resolves the sha256 pins of a published CLI release.
+	FetchRelease func(version string) (detect.CLIRelease, error)
+	// CLIVersion is the version of this binary (default --cli-version).
+	CLIVersion func() string
 }
 
 func defaultDeps() *Deps {
@@ -51,6 +56,8 @@ func defaultDeps() *Deps {
 		Run: func(bin string, args ...string) error {
 			return exec.Command(bin, args...).Run()
 		},
+		FetchRelease: detect.FetchCLIRelease,
+		CLIVersion:   version.Version,
 	}
 }
 
@@ -62,6 +69,7 @@ type ciOptions struct {
 	runtime      string
 	deployTarget string
 	startCommand string
+	cliVersion   string
 	printOnly    bool
 	overwrite    bool
 	token        string
@@ -76,17 +84,23 @@ func NewCmd() *cobra.Command {
 		Short: "Generate a CI/CD deploy pipeline for your app",
 		Long: "Detect your CI provider and project runtime and generate the deploy workflow " +
 			"(GitHub Actions or GitLab CI). Writes the file for you to review + commit; it never " +
-			"commits, pushes, or writes secret values. Use --print to preview without writing.",
+			"commits, pushes, or writes secret values. Use --print to preview without writing.\n\n" +
+			"The workflow deploys to --app (default: the slug in .hatch.toml) and needs --deploy-target " +
+			"and, except for static sites, --start-command. It installs a pinned Hatch CLI release " +
+			"(--cli-version, default: this CLI's version) whose sha256 is checked on the runner, and " +
+			"sets HATCH_ACCEPT_TERMS=yes: committing it records your acceptance of https://gethatch.eu/terms " +
+			"for that pipeline.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runCI(cmd, opts)
 		},
 	}
 	f := cmd.Flags()
 	f.StringVar(&opts.provider, "provider", "", "CI provider override (github, gitlab)")
-	f.StringVar(&opts.app, "app", "", "Hatch app slug to deploy")
+	f.StringVar(&opts.app, "app", "", "Hatch egg slug to deploy to (default: slug in .hatch.toml)")
 	f.StringVar(&opts.runtime, "runtime", "", "Runtime override (node, go, python, rust, php, bun, static)")
-	f.StringVar(&opts.deployTarget, "deploy-target", "", "Build output directory to deploy")
-	f.StringVar(&opts.startCommand, "start-command", "", "Start command for the app")
+	f.StringVar(&opts.deployTarget, "deploy-target", "", "Build output directory to deploy (required)")
+	f.StringVar(&opts.startCommand, "start-command", "", "Start command for the app (required unless runtime is static)")
+	f.StringVar(&opts.cliVersion, "cli-version", "", "Hatch CLI release the workflow installs (default: this CLI's version)")
 	f.BoolVar(&opts.printOnly, "print", false, "Print the generated workflow to stdout only (no file writes)")
 	f.BoolVar(&opts.overwrite, "yes", false, "Allow overwriting an existing CI workflow file")
 	f.StringVar(&opts.token, "token", "", "HATCH_TOKEN value to wire as the CI secret (mint with: hatch auth keys create)")
@@ -104,9 +118,11 @@ func runCI(cmd *cobra.Command, opts ciOptions) error {
 		}
 	}
 
+	wd, wdErr := deps.Getwd()
+
 	runtime := opts.runtime
 	if runtime == "" {
-		if wd, err := deps.Getwd(); err == nil {
+		if wdErr == nil {
 			runtime = detect.DetectRuntime(wd)
 		} else {
 			runtime = "static"
@@ -114,8 +130,12 @@ func runCI(cmd *cobra.Command, opts ciOptions) error {
 	}
 
 	app := opts.app
-	if app == "" {
-		app = "(set with --app)"
+	if app == "" && wdErr == nil {
+		app = detect.AppSlugFromHatchToml(wd)
+	}
+	appLabel := app
+	if appLabel == "" {
+		appLabel = "(none — set with --app)"
 	}
 
 	out := cmd.OutOrStdout()
@@ -123,16 +143,41 @@ func runCI(cmd *cobra.Command, opts ciOptions) error {
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "  Provider:  %s\n", provider)
 	fmt.Fprintf(out, "  Runtime:   %s\n", runtime)
-	fmt.Fprintf(out, "  App:       %s\n", app)
+	fmt.Fprintf(out, "  App:       %s\n", appLabel)
 	fmt.Fprintf(out, "  CI secret: HATCH_TOKEN  (mint with: hatch auth keys create)\n")
 
-	wf, err := detect.RenderWorkflow(provider, detect.WorkflowParams{
+	if provider != "github" && provider != "gitlab" {
+		fmt.Fprintf(out, "\n  Provider %q not recognized — pass --provider github|gitlab.\n", provider)
+		return fmt.Errorf("unsupported CI provider %q (use github or gitlab)", provider)
+	}
+
+	params := detect.WorkflowParams{
+		App:          app,
 		Runtime:      runtime,
 		DeployTarget: opts.deployTarget,
 		StartCommand: opts.startCommand,
-	})
+	}
+	// Refuse an unusable or unsafe workflow before any network call or write.
+	if err := params.ValidateInputs(); err != nil {
+		return err
+	}
+
+	cliVersion := opts.cliVersion
+	if cliVersion == "" {
+		cliVersion = deps.CLIVersion()
+	}
+	if err := detect.CheckCIVersion(cliVersion); err != nil {
+		return err
+	}
+	rel, err := deps.FetchRelease(cliVersion)
 	if err != nil {
-		fmt.Fprintf(out, "\n  Provider %q not recognized — pass --provider github|gitlab.\n", provider)
+		return err
+	}
+	params.CLI = rel
+	fmt.Fprintf(out, "  CLI:       %s (sha256-pinned)\n", rel.Version)
+
+	wf, err := detect.RenderWorkflow(provider, params)
+	if err != nil {
 		return err
 	}
 
@@ -146,6 +191,7 @@ func runCI(cmd *cobra.Command, opts ciOptions) error {
 			return fmt.Errorf("writing %s: %w", wf.Path, err)
 		}
 		fmt.Fprintf(out, "\nWrote %s (review + commit it; nothing was committed or pushed).\n", wf.Path)
+		fmt.Fprintln(out, "Committing it accepts the Hatch Terms (https://gethatch.eu/terms) for that pipeline (HATCH_ACCEPT_TERMS).")
 	}
 
 	return wireSecret(cmd, opts, provider)

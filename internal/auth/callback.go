@@ -47,6 +47,7 @@ func (s *CallbackServer) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to listen on port %d: %w", s.port, err)
 	}
+	s.port = s.listener.Addr().(*net.TCPAddr).Port
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/callback", s.handleCallback)

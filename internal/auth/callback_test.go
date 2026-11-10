@@ -215,6 +215,39 @@ func TestCallbackServerPort(t *testing.T) {
 	}
 }
 
+func TestCallbackServerPortAfterStart(t *testing.T) {
+	srv := NewCallbackServer(0, "test-state")
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+
+	port := srv.Port()
+	if port <= 0 {
+		t.Fatalf("Port() after Start() with ephemeral port = %d, want >0", port)
+	}
+
+	url := fmt.Sprintf("http://localhost:%d/callback?state=test-state&token=tok123", port)
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	token, err := srv.WaitForResult(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "tok123" {
+		t.Errorf("token = %q, want tok123", token)
+	}
+}
+
 func listenFreePort() (net.Listener, error) {
 	return net.Listen("tcp", "localhost:0")
 }

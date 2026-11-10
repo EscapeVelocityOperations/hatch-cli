@@ -1,6 +1,8 @@
 package root
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -205,6 +207,9 @@ func TestRootCmdStructure(t *testing.T) {
 	if !rootCmd.SilenceUsage {
 		t.Error("expected SilenceUsage to be true")
 	}
+	if !rootCmd.SilenceErrors {
+		t.Error("expected SilenceErrors to be true (main prints errors)")
+	}
 }
 
 // The preview command group (hatch preview list|rm, h-qtie8) must be
@@ -228,4 +233,41 @@ func captureExec(args []string) (string, error) {
 	// For this test, we're mainly checking the code paths execute without panic
 	err := testCmd.Execute()
 	return "", err
+}
+
+// h-cmzf.4: on a fresh runner (no config), HATCH_ACCEPT_TERMS=yes accepts the
+// Terms without the interactive prompt — which would os.Exit(1) on a closed
+// stdin — and the acceptance is not persisted.
+func TestPersistentPreRun_TOSAcceptedByEnv(t *testing.T) {
+	home := setupTestConfig(t)
+	verbose = false
+	tokenFlag = ""
+	t.Setenv("HATCH_ACCEPT_TERMS", "yes")
+
+	devnull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devnull.Close()
+	oldIn, oldErr := os.Stdin, os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stdin, os.Stderr = devnull, w
+	_, execErr := captureExec([]string{"deploy"}) // no flags: fails in preflight, after the guard
+	w.Close()
+	os.Stdin, os.Stderr = oldIn, oldErr
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+
+	if execErr == nil || !strings.Contains(execErr.Error(), "--deploy-target is required") {
+		t.Errorf("want deploy preflight error after the guard, got %v", execErr)
+	}
+	if !strings.Contains(buf.String(), "accepted via HATCH_ACCEPT_TERMS=yes") {
+		t.Errorf("stderr = %q, want the env acceptance notice", buf.String())
+	}
+	if strings.Contains(buf.String(), "Do you accept these terms?") {
+		t.Error("must not prompt when HATCH_ACCEPT_TERMS=yes")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".hatch", "config.json")); err == nil {
+		t.Error("env acceptance must not be persisted to config.json")
+	}
 }
