@@ -43,6 +43,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/config"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/telemetry"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -87,7 +88,9 @@ func init() {
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		// Track command for telemetry
 		lastCommandName = cmd.CommandPath()
-		lastCommandArgs = args
+		// Commands taking secret positionals (invite tokens) opt out of
+		// sending their args (h-e3s1k.1).
+		lastCommandArgs = telemetry.MaskArgs(args, cmd.Annotations[telemetry.SensitiveArgsAnnotation] != "")
 		lastMode = "cli"
 
 		if verbose {

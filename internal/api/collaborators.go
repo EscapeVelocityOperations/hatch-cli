@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"time"
@@ -40,8 +41,14 @@ type Collaborator struct {
 
 // PendingInvite represents a pending invitation for the authenticated user,
 // as returned by GET /v1/invitations/pending.
+//
+// ID is the invitation row ID, safe to display. InviteToken is the secret the
+// accept/decline endpoints take: it is decoded by ListPendingInvites but
+// tagged json:"-" so marshaling a PendingInvite (CLI output, MCP results)
+// never prints it (h-e3s1k.2).
 type PendingInvite struct {
 	ID             string    `json:"id"`
+	InviteToken    string    `json:"-"`
 	Email          string    `json:"email"`
 	Role           string    `json:"role"`
 	Status         string    `json:"status"`
@@ -119,11 +126,46 @@ func (c *Client) ListPendingInvites() ([]PendingInvite, error) {
 	}
 	defer resp.Body.Close()
 
-	var invites []PendingInvite
-	if err := json.NewDecoder(resp.Body).Decode(&invites); err != nil {
+	// The wire type adds the invite_token field that PendingInvite hides from
+	// marshaling; the outer field shadows the embedded json:"-" one.
+	var wire []struct {
+		PendingInvite
+		InviteToken string `json:"invite_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&wire); err != nil {
 		return nil, fmt.Errorf("decoding response: %w", err)
 	}
+	invites := make([]PendingInvite, len(wire))
+	for i, w := range wire {
+		invites[i] = w.PendingInvite
+		invites[i].InviteToken = w.InviteToken
+	}
 	return invites, nil
+}
+
+// ErrNoMatchingInvite is returned by FindPendingInvite when ref matches no
+// pending invitation.
+var ErrNoMatchingInvite = errors.New("no pending invitation matches that ID or token (run 'hatch invite ls')")
+
+// FindPendingInvite returns the pending invitation whose ID or invite token
+// equals ref, so accept/decline can take the ID shown by 'hatch invite ls'
+// as well as the token from the invitation email (h-e3s1k.2). Unknown refs
+// are rejected rather than sent to the API: decline answers 204 even when no
+// row matches. The error never echoes ref, which may be a secret token.
+func FindPendingInvite(invites []PendingInvite, ref string) (*PendingInvite, error) {
+	if ref == "" {
+		return nil, ErrNoMatchingInvite
+	}
+	for i := range invites {
+		inv := &invites[i]
+		if inv.ID == ref || (inv.InviteToken != "" && inv.InviteToken == ref) {
+			if inv.InviteToken == "" {
+				return nil, errors.New("the API did not return a token for this invitation; use the accept link from the invitation email")
+			}
+			return inv, nil
+		}
+	}
+	return nil, ErrNoMatchingInvite
 }
 
 // AcceptInvite accepts a pending invitation by token.
