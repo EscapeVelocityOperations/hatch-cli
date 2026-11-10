@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -172,6 +173,13 @@ func NewServer() *server.MCPServer {
 	s.AddTool(checkEnergyTool(), checkEnergyHandler)
 	s.AddTool(getAppEnergyTool(), getAppEnergyHandler)
 	s.AddTool(boostAppTool(), boostAppHandler)
+
+	// Collaboration operations (ADR-0022)
+	s.AddTool(shareAppTool(), shareAppHandler)
+	s.AddTool(listCollaboratorsTool(), listCollaboratorsHandler)
+	s.AddTool(unshareAppTool(), unshareAppHandler)
+	s.AddTool(listPendingInvitesTool(), listPendingInvitesHandler)
+	s.AddTool(acceptInviteTool(), acceptInviteHandler)
 
 	// Resources
 	s.AddResource(
@@ -1902,4 +1910,218 @@ func boostAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToo
 		slug, checkout.Duration, checkout.AmountEur, checkout.CheckoutURL)
 
 	return mcp.NewToolResultText(result), nil
+}
+
+// --- share_app (ADR-0022 P3) ---
+
+func shareAppTool() mcp.Tool {
+	return mcp.NewTool("share_app",
+		mcp.WithDescription("Invite someone to collaborate on an app. Sharing an app shares its secrets: an accepted collaborator can deploy the app, and deploying exposes its environment variables. Only invite people you trust with full operational access."),
+		mcp.WithString("app",
+			mcp.Required(),
+			mcp.Description("App slug (name) to share"),
+		),
+		mcp.WithString("email",
+			mcp.Required(),
+			mcp.Description("Email address of the person to invite"),
+		),
+	)
+}
+
+func shareAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	slug, err := req.RequireString("app")
+	if err != nil {
+		return toolError("failed to share app: missing required parameter 'app'")
+	}
+	email, err := req.RequireString("email")
+	if err != nil {
+		return toolError("failed to share app: missing required parameter 'email'")
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return toolError("failed to share app: %v", err)
+	}
+
+	collab, err := client.InviteCollaborator(slug, email)
+	if err != nil {
+		return toolError("failed to share app: %v", err)
+	}
+
+	result := fmt.Sprintf(`Invited %s to '%s'.
+
+This grants %s full operational access to '%s' once accepted, including
+deploying it and viewing its environment variables/secrets. They'll receive
+an email with a link to accept. Check status with list_collaborators.`,
+		collab.Email, slug, collab.Email, slug)
+
+	return mcp.NewToolResultText(result), nil
+}
+
+// --- list_collaborators (ADR-0022 P3) ---
+
+func listCollaboratorsTool() mcp.Tool {
+	return mcp.NewTool("list_collaborators",
+		mcp.WithDescription("List collaborators on an app"),
+		mcp.WithString("app",
+			mcp.Required(),
+			mcp.Description("App slug (name) to list collaborators for"),
+		),
+	)
+}
+
+func listCollaboratorsHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	slug, err := req.RequireString("app")
+	if err != nil {
+		return toolError("failed to list collaborators: missing required parameter 'app'")
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return toolError("failed to list collaborators: %v", err)
+	}
+
+	collabs, err := client.ListCollaborators(slug)
+	if err != nil {
+		return toolError("failed to list collaborators: %v", err)
+	}
+
+	if len(collabs) == 0 {
+		return mcp.NewToolResultText("No collaborators on this app."), nil
+	}
+
+	data, _ := json.MarshalIndent(collabs, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// --- unshare_app (ADR-0022 P3) ---
+
+func unshareAppTool() mcp.Tool {
+	return mcp.NewTool("unshare_app",
+		mcp.WithDescription("Remove a collaborator from an app, by email or collaborator ID"),
+		mcp.WithString("app",
+			mcp.Required(),
+			mcp.Description("App slug (name) to remove the collaborator from"),
+		),
+		mcp.WithString("collaborator",
+			mcp.Required(),
+			mcp.Description("Collaborator's email address or ID"),
+		),
+	)
+}
+
+func unshareAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	slug, err := req.RequireString("app")
+	if err != nil {
+		return toolError("failed to unshare app: missing required parameter 'app'")
+	}
+	target, err := req.RequireString("collaborator")
+	if err != nil {
+		return toolError("failed to unshare app: missing required parameter 'collaborator'")
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return toolError("failed to unshare app: %v", err)
+	}
+
+	collaboratorID := target
+	if strings.Contains(target, "@") {
+		// No server-side remove-by-email endpoint: resolve client-side,
+		// mirroring the CLI's `hatch collab rm`.
+		collabs, err := client.ListCollaborators(slug)
+		if err != nil {
+			return toolError("failed to unshare app: %v", err)
+		}
+		collaboratorID = ""
+		for _, c := range collabs {
+			if strings.EqualFold(c.Email, target) {
+				collaboratorID = c.ID
+				break
+			}
+		}
+		if collaboratorID == "" {
+			return toolError("failed to unshare app: no collaborator found with email %q on '%s'", target, slug)
+		}
+	}
+
+	if err := client.RemoveCollaborator(slug, collaboratorID); err != nil {
+		return toolError("failed to unshare app: %v", err)
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("Removed collaborator from '%s'", slug)), nil
+}
+
+// --- list_pending_invites (ADR-0022 P3) ---
+
+func listPendingInvitesTool() mcp.Tool {
+	return mcp.NewTool("list_pending_invites",
+		mcp.WithDescription("List your pending invitations to collaborate on other people's apps. Pass an invitation's id to accept_invite to accept it."),
+	)
+}
+
+func listPendingInvitesHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	client, err := newClient()
+	if err != nil {
+		return toolError("failed to list pending invites: %v", err)
+	}
+
+	invites, err := client.ListPendingInvites()
+	if err != nil {
+		return toolError("failed to list pending invites: %v", err)
+	}
+
+	if len(invites) == 0 {
+		return mcp.NewToolResultText("No pending invitations."), nil
+	}
+
+	data, _ := json.MarshalIndent(invites, "", "  ")
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+// --- accept_invite (ADR-0022 P3) ---
+
+func acceptInviteTool() mcp.Tool {
+	return mcp.NewTool("accept_invite",
+		mcp.WithDescription("Accept an invitation to collaborate on an app. Accepting grants full operational access to that app, including deploying it and its environment variables/secrets — only accept invitations from people and apps you recognize."),
+		mcp.WithString("token",
+			mcp.Required(),
+			mcp.Description("Invitation id from list_pending_invites, or the token from the accept link in the invitation email"),
+		),
+	)
+}
+
+func acceptInviteHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	token, err := req.RequireString("token")
+	if err != nil {
+		return toolError("failed to accept invite: missing required parameter 'token'")
+	}
+
+	client, err := newClient()
+	if err != nil {
+		return toolError("failed to accept invite: %v", err)
+	}
+
+	// The id shown by list_pending_invites is the invitation row ID, not the
+	// token the API takes: resolve it (h-e3s1k.2). An unmatched value is sent
+	// as a token so the API answers its precise 403/404.
+	invites, err := client.ListPendingInvites()
+	if err != nil {
+		return toolError("failed to accept invite: %v", err)
+	}
+	if inv, ferr := api.FindPendingInvite(invites, token); ferr == nil {
+		token = inv.InviteToken
+	} else if !errors.Is(ferr, api.ErrNoMatchingInvite) {
+		return toolError("failed to accept invite: %v", ferr)
+	}
+
+	// Transport errors embed the request URL; toolError redacts the
+	// /invitations/{token} segment from both the result and telemetry
+	// (h-e3s1k.1).
+	collab, err := client.AcceptInvite(token)
+	if err != nil {
+		return toolError("failed to accept invite: %v", err)
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("Invitation accepted — status: %s. You can now deploy and view logs for this app.", collab.Status)), nil
 }
