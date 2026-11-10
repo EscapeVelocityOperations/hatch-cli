@@ -149,6 +149,183 @@ func TestNewServer(t *testing.T) {
 	}
 }
 
+func TestNewServer_HasLoginTool(t *testing.T) {
+	s := NewServer()
+	if s.GetTool("login") == nil {
+		t.Fatal("expected NewServer() to register a 'login' tool")
+	}
+}
+
+func TestNewServer_HasGetStartedTool(t *testing.T) {
+	s := NewServer()
+	if s.GetTool("get_started") == nil {
+		t.Fatal("expected NewServer() to register a 'get_started' tool")
+	}
+}
+
+// TestNewServer_HasEmailProtectionTools (h-oazj, h-ppn8 tests-green gate):
+// email_protection_test.go exercises the set/get/disable handlers directly,
+// never through NewServer()/AddTool — so a future accidental deletion of the
+// AddTool calls in NewServer would leave every handler test green while the
+// real MCP server silently stopped exposing the tools. Mirrors
+// TestNewServer_HasLoginTool/TestNewServer_HasGetStartedTool above.
+func TestNewServer_HasEmailProtectionTools(t *testing.T) {
+	s := NewServer()
+	for _, name := range []string{"set_email_protection", "get_email_protection", "disable_email_protection"} {
+		if s.GetTool(name) == nil {
+			t.Errorf("expected NewServer() to register a %q tool", name)
+		}
+	}
+}
+
+// --- hatch://tos resource ---
+
+func withTosResourceURL(t *testing.T, url string) {
+	t.Helper()
+	orig := tosResourceURL
+	tosResourceURL = url
+	t.Cleanup(func() { tosResourceURL = orig })
+}
+
+func TestTosResourceHandler_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("# Hatch TOS (agent version)"))
+	}))
+	defer srv.Close()
+	withTosResourceURL(t, srv.URL)
+
+	contents, err := tosResourceHandler(context.Background(), mcp.ReadResourceRequest{})
+	if err != nil {
+		t.Fatalf("tosResourceHandler: %v", err)
+	}
+	if len(contents) != 1 {
+		t.Fatalf("expected 1 resource content, got %d", len(contents))
+	}
+	tc, ok := contents[0].(mcp.TextResourceContents)
+	if !ok {
+		t.Fatalf("expected TextResourceContents, got %T", contents[0])
+	}
+	if tc.Text != "# Hatch TOS (agent version)" {
+		t.Errorf("Text = %q, want the TOS body", tc.Text)
+	}
+}
+
+// A non-200 must error out rather than pass the error page through as if it
+// were the TOS text (recon-found bug, h-e2hf T-025).
+func TestTosResourceHandler_NonOKStatusReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("<html>Internal Server Error</html>"))
+	}))
+	defer srv.Close()
+	withTosResourceURL(t, srv.URL)
+
+	_, err := tosResourceHandler(context.Background(), mcp.ReadResourceRequest{})
+	if err == nil {
+		t.Fatal("expected an error for a non-200 TOS response")
+	}
+	if strings.Contains(err.Error(), "<html>") {
+		t.Errorf("error must not embed the raw error-page body, got: %v", err)
+	}
+}
+
+// --- get_started ---
+
+func TestGetStartedHandler_Unauthenticated(t *testing.T) {
+	saveAndRestore(t)
+	setNoAuth()
+
+	result, err := getStartedHandler(context.Background(), makeReq(nil))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, `"authenticated": false`) {
+		t.Errorf("expected authenticated=false, got: %s", text)
+	}
+	if !strings.Contains(text, `"cli_version": "dev"`) {
+		t.Errorf("expected cli_version in output, got: %s", text)
+	}
+	if !strings.Contains(text, "deploy_app") {
+		t.Errorf("expected quickstart to mention deploy_app, got: %s", text)
+	}
+	if !strings.Contains(text, `"next_action": "login"`) {
+		t.Errorf("expected next_action=login when unauthenticated, got: %s", text)
+	}
+}
+
+func TestGetStartedHandler_Authenticated(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("hatch_tok")
+	newMockServer(t, map[string]http.HandlerFunc{}) // no whoami route: exercises the degrade path
+
+	result, err := getStartedHandler(context.Background(), makeReq(nil))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, `"authenticated": true`) {
+		t.Errorf("expected authenticated=true, got: %s", text)
+	}
+	if strings.Contains(text, `"next_action": "login"`) {
+		t.Errorf("expected deploy guidance (not 'login') as next_action when authenticated, got: %s", text)
+	}
+	if !strings.Contains(text, "deploy_app") {
+		t.Errorf("expected deploy guidance to mention deploy_app, got: %s", text)
+	}
+}
+
+func fakeWhoamiRoute(email string, tosAccepted bool) map[string]http.HandlerFunc {
+	return map[string]http.HandlerFunc{
+		"GET /v1/account/whoami": jsonHandler(api.WhoamiResult{
+			Email:       email,
+			TosAccepted: tosAccepted,
+			CreatedAt:   "2026-05-01T00:00:00Z",
+		}),
+	}
+}
+
+func TestGetStartedHandler_IncludesMaskedAccountEmailAndTosAccepted(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("hatch_tok")
+	newMockServer(t, fakeWhoamiRoute("eric@voxist.com", true))
+
+	result, err := getStartedHandler(context.Background(), makeReq(nil))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, `"account_email": "e***@voxist.com"`) {
+		t.Errorf("expected masked account_email, got: %s", text)
+	}
+	if !strings.Contains(text, `"tos_accepted": true`) {
+		t.Errorf("expected tos_accepted=true, got: %s", text)
+	}
+}
+
+func TestGetStartedHandler_WhoamiFailureOmitsIdentityFields(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("hatch_tok")
+	newMockServer(t, map[string]http.HandlerFunc{}) // whoami 404s
+
+	result, err := getStartedHandler(context.Background(), makeReq(nil))
+	text := assertSuccess(t, result, err)
+
+	if strings.Contains(text, "account_email") {
+		t.Errorf("expected account_email to be omitted when whoami fails, got: %s", text)
+	}
+	if strings.Contains(text, "tos_accepted") {
+		t.Errorf("expected tos_accepted to be omitted when whoami fails, got: %s", text)
+	}
+}
+
+func TestGetStartedHandler_TokenErrorTreatedAsUnauthenticated(t *testing.T) {
+	saveAndRestore(t)
+	setAuthError(fmt.Errorf("disk read error"))
+
+	result, err := getStartedHandler(context.Background(), makeReq(nil))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, `"authenticated": false`) {
+		t.Errorf("expected a token-read error to degrade to authenticated=false (get_started must never fail), got: %s", text)
+	}
+}
+
 // --- get_platform_info ---
 
 func TestGetPlatformInfoHandler(t *testing.T) {
@@ -173,12 +350,58 @@ func TestGetPlatformInfoHandler(t *testing.T) {
 func TestCheckAuthHandler_Success(t *testing.T) {
 	saveAndRestore(t)
 	setAuthToken("hatch_test_token123")
+	newMockServer(t, map[string]http.HandlerFunc{}) // no whoami route: exercises the degrade path
 
 	result, err := checkAuthHandler(context.Background(), makeReq(nil))
 	text := assertSuccess(t, result, err)
 
 	if !strings.Contains(text, "Authenticated") {
 		t.Errorf("expected 'Authenticated' in response, got: %s", text)
+	}
+}
+
+func TestCheckAuthHandler_ShowsAccountAndTosAccepted(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("hatch_test_token123")
+	newMockServer(t, fakeWhoamiRoute("eric@voxist.com", true))
+
+	result, err := checkAuthHandler(context.Background(), makeReq(nil))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, "Account: e***@voxist.com") {
+		t.Errorf("expected masked account line, got: %s", text)
+	}
+	if !strings.Contains(text, "TOS: accepted") {
+		t.Errorf("expected TOS: accepted, got: %s", text)
+	}
+}
+
+func TestCheckAuthHandler_ShowsTosNotAccepted(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("hatch_test_token123")
+	newMockServer(t, fakeWhoamiRoute("eric@voxist.com", false))
+
+	result, err := checkAuthHandler(context.Background(), makeReq(nil))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, "TOS: not accepted") {
+		t.Errorf("expected TOS: not accepted, got: %s", text)
+	}
+	if !strings.Contains(text, "https://gethatch.eu/terms/accept") {
+		t.Errorf("expected the accept-terms URL in the not-accepted copy, got: %s", text)
+	}
+}
+
+func TestCheckAuthHandler_WhoamiFailureDegradesGracefully(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("hatch_test_token123")
+	newMockServer(t, map[string]http.HandlerFunc{}) // whoami 404s
+
+	result, err := checkAuthHandler(context.Background(), makeReq(nil))
+	text := assertSuccess(t, result, err)
+
+	if text != "Authenticated. Token source: config file" {
+		t.Errorf("expected today's exact text when whoami fails (must not error), got: %q", text)
 	}
 }
 
@@ -196,6 +419,36 @@ func TestCheckAuthHandler_TokenError(t *testing.T) {
 
 	result, err := checkAuthHandler(context.Background(), makeReq(nil))
 	assertError(t, result, err, "disk read error")
+}
+
+// D2: the unauth error copy must point an agent at the login tool, the
+// HATCH_TOKEN env var, and the terminal fallback — not just "run 'hatch login'".
+func TestNewClient_UnauthErrorCopy(t *testing.T) {
+	saveAndRestore(t)
+	setNoAuth()
+
+	_, err := newClient()
+	if err == nil {
+		t.Fatal("expected error when not authenticated")
+	}
+	for _, want := range []string{"login' MCP tool", "HATCH_TOKEN", "'hatch login' in a terminal"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("expected newClient() unauth error to mention %q, got: %s", want, err.Error())
+		}
+	}
+}
+
+func TestCheckAuthHandler_UnauthErrorCopy(t *testing.T) {
+	saveAndRestore(t)
+	setNoAuth()
+
+	result, _ := checkAuthHandler(context.Background(), makeReq(nil))
+	text := resultText(t, result)
+	for _, want := range []string{"login' MCP tool", "HATCH_TOKEN", "'hatch login' in a terminal"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("expected check_auth unauth error to mention %q, got: %s", want, text)
+		}
+	}
 }
 
 func TestCheckAuthHandler_TokenRedaction(t *testing.T) {
@@ -1022,6 +1275,45 @@ func TestGetLogsHandler_AuthFailure(t *testing.T) {
 		"app": "myapp-a1b2",
 	}))
 	assertError(t, result, err, "not authenticated")
+}
+
+// h-83n6: a failed build leaves the app without any allocation; the control
+// plane answers "no allocations found" (500 before hatch-control#89, 404
+// after). Both log tools must return the status_reason, not a tool error.
+func TestLogTools_NoAllocationsFoundReturnsFailureReason(t *testing.T) {
+	handlers := map[string]func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error){
+		"get_logs":       getLogsHandler,
+		"get_build_logs": getBuildLogsHandler,
+	}
+	for name, handler := range handlers {
+		for _, status := range []int{500, 404} {
+			t.Run(fmt.Sprintf("%s/%d", name, status), func(t *testing.T) {
+				saveAndRestore(t)
+				setAuthToken("tok")
+				now := time.Now()
+
+				newMockServer(t, map[string]http.HandlerFunc{
+					"GET /v1/apps/myapp-a1b2/logs": errorHandler(status, "no allocations found for myapp-a1b2\n"),
+					"GET /v1/apps/myapp-a1b2": jsonHandler(api.App{
+						Slug: "myapp-a1b2", Name: "myapp", Status: "failed",
+						StatusReason: "Build failed at tar: tar: can't create hardlink 'a/b.png'",
+						URL:          "https://myapp-a1b2.nest.gethatch.eu",
+						CreatedAt:    now, UpdatedAt: now,
+					}),
+				})
+
+				result, err := handler(context.Background(), makeReq(map[string]interface{}{
+					"app": "myapp-a1b2",
+				}))
+				text := assertSuccess(t, result, err)
+
+				if !strings.Contains(text, "App status: failed") ||
+					!strings.Contains(text, "Failure reason: Build failed at tar: tar: can't create hardlink 'a/b.png'") {
+					t.Fatalf("expected status and failure reason, got: %s", text)
+				}
+			})
+		}
+	}
 }
 
 // --- get_build_logs ---

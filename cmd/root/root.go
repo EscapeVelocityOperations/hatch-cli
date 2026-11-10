@@ -12,6 +12,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/boost"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/ci"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/collab"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/comments"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/configure"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/credits"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/cron"
@@ -30,7 +31,9 @@ import (
 	mcpcmd "github.com/EscapeVelocityOperations/hatch-cli/cmd/mcp"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/open"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/packs"
+	pagescmd "github.com/EscapeVelocityOperations/hatch-cli/cmd/pages"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/preview"
+	"github.com/EscapeVelocityOperations/hatch-cli/cmd/protect"
 	rediscmd "github.com/EscapeVelocityOperations/hatch-cli/cmd/redis"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/resources"
 	"github.com/EscapeVelocityOperations/hatch-cli/cmd/restart"
@@ -60,6 +63,9 @@ var rootCmd = &cobra.Command{
 	Short:        "Hatch CLI - Developer tools for Hatch",
 	Long:         "Hatch is a command-line interface for deploying and managing eggs on the Hatch platform.",
 	SilenceUsage: true,
+	// main prints the returned error itself; letting cobra print it too
+	// doubled every error message on stderr.
+	SilenceErrors: true,
 }
 
 func Execute() error {
@@ -151,6 +157,7 @@ func init() {
 	rootCmd.AddCommand(boost.NewCmd())
 	rootCmd.AddCommand(ci.NewCmd())
 	rootCmd.AddCommand(collab.NewCmd())
+	rootCmd.AddCommand(comments.NewCmd())
 	rootCmd.AddCommand(configure.NewCmd())
 	rootCmd.AddCommand(credits.NewCmd())
 	rootCmd.AddCommand(cron.NewCmd())
@@ -169,7 +176,9 @@ func init() {
 	rootCmd.AddCommand(mcpcmd.NewCmd())
 	rootCmd.AddCommand(open.NewCmd())
 	rootCmd.AddCommand(packs.NewCmd())
+	rootCmd.AddCommand(pagescmd.NewCmd())
 	rootCmd.AddCommand(preview.NewCmd())
+	rootCmd.AddCommand(protect.NewCmd())
 	rootCmd.AddCommand(rediscmd.NewCmd())
 	rootCmd.AddCommand(resources.NewCmd())
 	rootCmd.AddCommand(restart.NewCmd())
