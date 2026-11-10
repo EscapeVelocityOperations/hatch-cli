@@ -163,6 +163,28 @@ func TestNewServer_HasGetStartedTool(t *testing.T) {
 	}
 }
 
+// TestNewServer_HasEmailProtectionTools (h-oazj, h-ppn8 tests-green gate):
+// email_protection_test.go exercises the set/get/disable handlers directly,
+// never through NewServer()/AddTool — so a future accidental deletion of the
+// AddTool calls in NewServer would leave every handler test green while the
+// real MCP server silently stopped exposing the tools. Mirrors
+// TestNewServer_HasLoginTool/TestNewServer_HasGetStartedTool above.
+func TestNewServer_HasEmailProtectionTools(t *testing.T) {
+	s := NewServer()
+	for _, name := range []string{"set_email_protection", "get_email_protection", "disable_email_protection"} {
+		if s.GetTool(name) == nil {
+			t.Errorf("expected NewServer() to register a %q tool", name)
+		}
+	}
+}
+
+func TestNewServer_HasVerifyDomainTool(t *testing.T) {
+	s := NewServer()
+	if s.GetTool("verify_domain") == nil {
+		t.Fatal("expected NewServer() to register a 'verify_domain' tool")
+	}
+}
+
 // --- hatch://tos resource ---
 
 func withTosResourceURL(t *testing.T, url string) {
@@ -1098,6 +1120,47 @@ func TestRemoveDomainHandler_AuthFailure(t *testing.T) {
 	assertError(t, result, err, "not authenticated")
 }
 
+// --- verify_domain ---
+
+func TestVerifyDomainHandler_Success(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	newMockServer(t, map[string]http.HandlerFunc{
+		"POST /v1/apps/myapp-a1b2/domains/example.com/verify": jsonHandler(api.Domain{
+			Domain:   "example.com",
+			Status:   "active",
+			Verified: true,
+		}),
+	})
+
+	result, err := verifyDomainHandler(context.Background(), makeReq(map[string]interface{}{
+		"app":    "myapp-a1b2",
+		"domain": "example.com",
+	}))
+	text := assertSuccess(t, result, err)
+
+	if !strings.Contains(text, "example.com") {
+		t.Errorf("expected domain in output, got: %s", text)
+	}
+	if !strings.Contains(text, "verified") {
+		t.Errorf("expected verification confirmation, got: %s", text)
+	}
+}
+
+func TestVerifyDomainHandler_TXTNotFound(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+	newMockServer(t, map[string]http.HandlerFunc{
+		"POST /v1/apps/myapp-a1b2/domains/example.com/verify": errorHandler(422, "verification failed: TXT record not found"),
+	})
+
+	result, err := verifyDomainHandler(context.Background(), makeReq(map[string]interface{}{
+		"app":    "myapp-a1b2",
+		"domain": "example.com",
+	}))
+	assertError(t, result, err, "TXT record not found")
+}
+
 // --- get_logs ---
 
 func TestGetLogsHandler_MissingApp(t *testing.T) {
@@ -1260,6 +1323,45 @@ func TestGetLogsHandler_AuthFailure(t *testing.T) {
 		"app": "myapp-a1b2",
 	}))
 	assertError(t, result, err, "not authenticated")
+}
+
+// h-83n6: a failed build leaves the app without any allocation; the control
+// plane answers "no allocations found" (500 before hatch-control#89, 404
+// after). Both log tools must return the status_reason, not a tool error.
+func TestLogTools_NoAllocationsFoundReturnsFailureReason(t *testing.T) {
+	handlers := map[string]func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error){
+		"get_logs":       getLogsHandler,
+		"get_build_logs": getBuildLogsHandler,
+	}
+	for name, handler := range handlers {
+		for _, status := range []int{500, 404} {
+			t.Run(fmt.Sprintf("%s/%d", name, status), func(t *testing.T) {
+				saveAndRestore(t)
+				setAuthToken("tok")
+				now := time.Now()
+
+				newMockServer(t, map[string]http.HandlerFunc{
+					"GET /v1/apps/myapp-a1b2/logs": errorHandler(status, "no allocations found for myapp-a1b2\n"),
+					"GET /v1/apps/myapp-a1b2": jsonHandler(api.App{
+						Slug: "myapp-a1b2", Name: "myapp", Status: "failed",
+						StatusReason: "Build failed at tar: tar: can't create hardlink 'a/b.png'",
+						URL:          "https://myapp-a1b2.nest.gethatch.eu",
+						CreatedAt:    now, UpdatedAt: now,
+					}),
+				})
+
+				result, err := handler(context.Background(), makeReq(map[string]interface{}{
+					"app": "myapp-a1b2",
+				}))
+				text := assertSuccess(t, result, err)
+
+				if !strings.Contains(text, "App status: failed") ||
+					!strings.Contains(text, "Failure reason: Build failed at tar: tar: can't create hardlink 'a/b.png'") {
+					t.Fatalf("expected status and failure reason, got: %s", text)
+				}
+			})
+		}
+	}
 }
 
 // --- get_build_logs ---
