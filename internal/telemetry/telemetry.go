@@ -79,13 +79,15 @@ func Send(command, args, errMsg, mode string) {
 		Mode:       mode,
 	}
 
+	// Read APIHost in the caller's goroutine: tests swap it, and a read in
+	// the background goroutine raced with those writes under -race.
+	host := APIHost
 	go func() {
 		data, err := json.Marshal(event)
 		if err != nil {
 			return
 		}
 
-		host := APIHost
 		if !strings.HasPrefix(host, "http") {
 			host = "https://" + host
 		}
