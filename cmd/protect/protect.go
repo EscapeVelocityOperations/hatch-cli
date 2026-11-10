@@ -1,0 +1,76 @@
+// Package protect implements `hatch protect` — access protection for eggs.
+// email.go is the email-allowlist subtree (h-oazj); password.go is
+// password-only protection (h-abmr), wired directly on this parent command;
+// sessions.go signs every visitor out (h-pbhn).
+package protect
+
+import (
+	"fmt"
+	"io"
+
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
+	"github.com/spf13/cobra"
+)
+
+// NewCmd returns the `hatch protect` command group. Password protection
+// (h-abmr) is a single credential, not a list, so it lives on this parent
+// command as flags (--password, --off) rather than its own verb subtree —
+// `hatch protect [slug] --password <p>` / `--off` / bare for status.
+//
+// Args is set explicitly: cobra only rejects unknown positionals on the root
+// command, so without it `hatch protect other-app --off` would silently
+// ignore other-app and mutate the cwd egg (h-abmr F1).
+func NewCmd() *cobra.Command {
+	cmd := newProtectCmd()
+	cmd.AddCommand(NewEmailCmd(), newSessionsCmd())
+	return cmd
+}
+
+// newProtectCmd builds the parent command without the email subtree, whose
+// subcommands are package-level and can only be mounted once per process.
+func newProtectCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "protect [slug]",
+		Short: "Manage access protection for your eggs",
+		Long: "Manage access protection for an egg. The egg is the [slug] argument " +
+			"if given, otherwise the app in the current directory (.hatch.toml).",
+		Args: cobra.MaximumNArgs(1),
+		RunE: runProtect,
+	}
+	cmd.Flags().String("password", "", "Set a password, enabling password protection")
+	cmd.Flags().Bool("off", false, "Disable password protection")
+	return cmd
+}
+
+// pagesLister is the slice of *api.Client warnUnservedPages needs; test
+// doubles that do not implement it skip the check.
+type pagesLister interface {
+	ListPages(slug string) (*api.PageList, error)
+}
+
+// warnUnservedPages tells the user, after protection was turned off, that
+// the egg's Hatch pages are no longer served (h-8iz8 D11): pages live on
+// the gateway, which only fronts protected eggs. Best effort — silent on any
+// error or when the egg is still protected by the other verifier.
+func warnUnservedPages(w io.Writer, client any, slug string) {
+	pl, ok := client.(pagesLister)
+	if !ok {
+		return
+	}
+	l, err := pl.ListPages(slug)
+	if err != nil || l.Gateway || len(l.Pages) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "Note: %s has %d Hatch page(s); they are not served while it is unprotected (they are kept and come back when you protect it again).\n",
+		slug, len(l.Pages))
+}
+
+// ListPages lets warnUnservedPages see the egg's pages through the real
+// adapters.
+func (r *realEmailAPIClient) ListPages(slug string) (*api.PageList, error) {
+	return r.client.ListPages(slug)
+}
+
+func (r *realPasswordAPIClient) ListPages(slug string) (*api.PageList, error) {
+	return r.client.ListPages(slug)
+}

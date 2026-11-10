@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"sync"
 
@@ -44,7 +45,32 @@ func Blue(s string) string   { return colorize(blue, s) }
 func Bold(s string) string   { return colorize(bold, s) }
 func Dim(s string) string    { return colorize(dim, s) }
 
-func Success(msg string) { fmt.Println(Green("✓ " + msg)) }
-func Error(msg string)   { fmt.Println(Red("✗ " + msg)) }
-func Warn(msg string)    { fmt.Println(Yellow("! " + msg)) }
-func Info(msg string)    { fmt.Println(Blue("→ " + msg)) }
+// out overrides where human-facing messages go; nil means os.Stdout,
+// resolved at call time so tests that swap os.Stdout keep working.
+var out io.Writer
+
+// Out returns the writer used for human-facing messages.
+func Out() io.Writer {
+	if out != nil {
+		return out
+	}
+	return os.Stdout
+}
+
+// SetOutput redirects human-facing messages (e.g. to os.Stderr so stdout
+// stays machine-readable under --json) and returns a func restoring the
+// previous writer.
+func SetOutput(w io.Writer) (restore func()) {
+	prev := out
+	out = w
+	return func() { out = prev }
+}
+
+// Printf and Println write human-facing text to Out().
+func Printf(format string, a ...any) { _, _ = fmt.Fprintf(Out(), format, a...) }
+func Println(a ...any)               { _, _ = fmt.Fprintln(Out(), a...) }
+
+func Success(msg string) { Println(Green("✓ " + msg)) }
+func Error(msg string)   { Println(Red("✗ " + msg)) }
+func Warn(msg string)    { Println(Yellow("! " + msg)) }
+func Info(msg string)    { Println(Blue("→ " + msg)) }
