@@ -6,6 +6,7 @@ import (
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/telemetry"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -41,7 +42,8 @@ func NewCmd() *cobra.Command {
 		Use:   "invite",
 		Short: "Manage invitations to collaborate on eggs",
 		Long: `List, accept, and decline invitations to collaborate on other people's
-eggs (ADR-0022). The token comes from the accept link in the invitation email.
+eggs (ADR-0022). accept/decline take either the invitation ID shown by
+'hatch invite ls' or the token from the accept link in the invitation email.
 
 Accepting grants you full operational access to that egg, including
 deploying it and its environment variables/secrets — only accept invitations
@@ -71,7 +73,7 @@ Example:
 
 func newAcceptCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "accept <token>",
+		Use:   "accept <id|token>",
 		Short: "Accept an invitation",
 		Long: `Accept an invitation to collaborate on an egg.
 
@@ -80,8 +82,10 @@ and its environment variables/secrets. Only accept invitations from people
 and eggs you recognize.
 
 Example:
-  hatch invite accept abc123...`,
-		Args: cobra.ExactArgs(1),
+  hatch invite accept 3f2b1c9e-...   # ID from 'hatch invite ls'
+  hatch invite accept abc123...       # token from the invitation email`,
+		Args:        cobra.ExactArgs(1),
+		Annotations: sensitiveArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAccept(args[0])
 		},
@@ -90,18 +94,24 @@ Example:
 
 func newDeclineCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "decline <token>",
+		Use:   "decline <id|token>",
 		Short: "Decline an invitation",
 		Long: `Decline an invitation to collaborate on an egg.
 
 Example:
-  hatch invite decline abc123...`,
-		Args: cobra.ExactArgs(1),
+  hatch invite decline 3f2b1c9e-...   # ID from 'hatch invite ls'
+  hatch invite decline abc123...       # token from the invitation email`,
+		Args:        cobra.ExactArgs(1),
+		Annotations: sensitiveArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runDecline(args[0])
 		},
 	}
 }
+
+// sensitiveArgs keeps the positional (possibly an invite token) out of
+// telemetry (h-e3s1k.1).
+var sensitiveArgs = map[string]string{telemetry.SensitiveArgsAnnotation: "true"}
 
 func getAuthToken() (string, error) {
 	token, err := deps.GetToken()
@@ -134,17 +144,30 @@ func runList() error {
 		return nil
 	}
 
-	table := ui.NewTable(os.Stdout, "TOKEN ID", "EGG", "INVITED BY")
+	// ID is the invitation row ID, not the secret invite token: accept and
+	// decline resolve it to the token themselves (h-e3s1k.2).
+	table := ui.NewTable(os.Stdout, "ID", "EGG", "INVITED BY")
 	for _, inv := range invites {
 		table.AddRow(inv.ID, fmt.Sprintf("%s (%s)", inv.AppName, inv.AppSlug), inv.InvitedByEmail)
 	}
 	table.Render()
 	fmt.Println()
-	fmt.Printf("Use the accept link from the invitation email, or run %s\n", ui.Bold("hatch invite accept <token>"))
+	fmt.Printf("Use the accept link from the invitation email, or run %s\n", ui.Bold("hatch invite accept <id>"))
 	return nil
 }
 
-func runAccept(token string) error {
+// resolveInvite maps ref (invitation ID or invite token) to a pending
+// invitation of the authenticated user, rejecting unknown refs instead of
+// reporting an action the API silently ignored (h-e3s1k.2).
+func resolveInvite(authToken, ref string) (*api.PendingInvite, error) {
+	invites, err := deps.ListPendingInvites(authToken)
+	if err != nil {
+		return nil, fmt.Errorf("fetching invitations: %w", err)
+	}
+	return api.FindPendingInvite(invites, ref)
+}
+
+func runAccept(ref string) error {
 	authToken, err := getAuthToken()
 	if err != nil {
 		return err
@@ -152,7 +175,11 @@ func runAccept(token string) error {
 
 	sp := ui.NewSpinner("Accepting invitation...")
 	sp.Start()
-	collab, err := deps.AcceptInvite(authToken, token)
+	var collab *api.Collaborator
+	inv, err := resolveInvite(authToken, ref)
+	if err == nil {
+		collab, err = deps.AcceptInvite(authToken, inv.InviteToken)
+	}
 	sp.Stop()
 
 	if err != nil {
@@ -164,7 +191,7 @@ func runAccept(token string) error {
 	return nil
 }
 
-func runDecline(token string) error {
+func runDecline(ref string) error {
 	authToken, err := getAuthToken()
 	if err != nil {
 		return err
@@ -172,7 +199,10 @@ func runDecline(token string) error {
 
 	sp := ui.NewSpinner("Declining invitation...")
 	sp.Start()
-	err = deps.DeclineInvite(authToken, token)
+	inv, err := resolveInvite(authToken, ref)
+	if err == nil {
+		err = deps.DeclineInvite(authToken, inv.InviteToken)
+	}
 	sp.Stop()
 
 	if err != nil {
