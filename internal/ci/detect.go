@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 )
 
 // DetectProvider classifies a git remote URL into a CI provider. github.com →
@@ -75,4 +77,27 @@ func runtimeFromHatchToml(dir string) string {
 		return string(m[1])
 	}
 	return ""
+}
+
+// AppSlugFromHatchToml returns the egg slug declared in dir/.hatch.toml (flat
+// `slug = ".."` or under `[app]`), or "" if the file is absent, unreadable or
+// declares none. `hatch ci` uses it as the default --app (h-cmzf.2).
+func AppSlugFromHatchToml(dir string) string {
+	data, err := os.ReadFile(filepath.Join(dir, ".hatch.toml"))
+	if err != nil {
+		return ""
+	}
+	var cfg struct {
+		Slug string `toml:"slug"`
+		App  struct {
+			Slug string `toml:"slug"`
+		} `toml:"app"`
+	}
+	if _, err := toml.Decode(string(data), &cfg); err != nil {
+		return ""
+	}
+	if cfg.Slug != "" {
+		return cfg.Slug
+	}
+	return cfg.App.Slug
 }

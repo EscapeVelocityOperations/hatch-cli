@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type Config struct {
@@ -94,4 +95,14 @@ func Clear() error {
 		return nil
 	}
 	return err
+}
+
+// AcceptTermsEnv is the environment variable a non-interactive run (CI) sets to
+// "yes" to accept the Terms of Service without the interactive prompt.
+const AcceptTermsEnv = "HATCH_ACCEPT_TERMS"
+
+// TermsAcceptedByEnv reports whether HATCH_ACCEPT_TERMS is exactly "yes"
+// (case-insensitive). Any other value, including "1" or "true", does not accept.
+func TermsAcceptedByEnv() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv(AcceptTermsEnv)), "yes")
 }

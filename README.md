@@ -95,6 +95,19 @@ hatch deploy --name my-app
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--name` | `-n` | Custom app name (defaults to directory name) |
+| `--app` | | Slug of an existing egg to deploy to (overrides `.hatch.toml`) |
+
+#### `hatch ci`
+
+Generate a GitHub Actions or GitLab CI deploy workflow for review and commit (it never commits or pushes).
+
+```sh
+hatch ci --app my-egg --deploy-target dist --start-command 'node server.js'
+```
+
+`--app` defaults to the slug in `.hatch.toml`; `--deploy-target` is required, and `--start-command` too unless the runtime is `static`. The workflow installs a pinned CLI release (`--cli-version`, default: the running CLI's version) and checks its sha256 on the runner; actions and images are pinned to commit SHAs and digests. Parameters are written as YAML data and passed to `hatch deploy` as quoted arguments, never as shell code.
+
+On a runner, `HATCH_TOKEN` authenticates and `HATCH_ACCEPT_TERMS=yes` accepts the [Terms of Service](https://gethatch.eu/terms) for that run without the interactive prompt (nothing is persisted). The generated workflow sets it: committing the file records your acceptance for that pipeline.
 
 ### App Management
 

@@ -127,6 +127,7 @@ var deps = defaultDeps()
 
 var (
 	appName      string
+	appSlug      string // --app <slug>: existing egg, overrides .hatch.toml (h-cmzf.2)
 	domainName   string
 	deployTarget string
 	runtime      string
@@ -151,6 +152,17 @@ Required flags:
   --deploy-target <dir>    Path to the build output directory
   --runtime <runtime>      Base container image: node, python, go, rust, php, bun, or static
   --start-command <cmd>    Command to start your app (not needed for static)
+
+Target egg:
+  --app <slug> deploys to that existing egg. Without it, the slug in
+  ./.hatch.toml is used; with neither, a new egg is created after a
+  confirmation prompt (which a non-interactive run cancels).
+
+Non-interactive use (CI):
+  Authenticate with HATCH_TOKEN. A fresh runner has never accepted the
+  Terms of Service: set HATCH_ACCEPT_TERMS=yes to accept them
+  (https://gethatch.eu/terms) for that run. 'hatch ci' generates a
+  workflow that does both.
 
 Artifact filtering:
   Create a .hatchignore file in your deploy target to control which files
@@ -216,6 +228,7 @@ Examples:
 		RunE: runDeploy,
 	}
 	cmd.Flags().StringVarP(&appName, "name", "n", "", "custom egg name (defaults to directory name)")
+	cmd.Flags().StringVar(&appSlug, "app", "", "slug of an existing egg to deploy to (overrides .hatch.toml)")
 	cmd.Flags().StringVarP(&domainName, "domain", "d", "", "custom domain (e.g. example.com)")
 	cmd.Flags().StringVar(&deployTarget, "deploy-target", "", "path to the build output directory (required)")
 	cmd.Flags().StringVar(&runtime, "runtime", "", "base container image: node, python, go, or static (required)")
@@ -243,6 +256,7 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	return RunArtifactDeploy(ArtifactDeployConfig{
 		Token:        token,
 		AppName:      appName,
+		AppSlug:      appSlug,
 		Domain:       domainName,
 		DeployTarget: deployTarget,
 		Runtime:      runtime,
