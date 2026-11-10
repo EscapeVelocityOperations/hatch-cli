@@ -148,6 +148,10 @@ func NewServer() *server.MCPServer {
 	s.AddTool(replyToCommentTool(), replyToCommentHandler)
 	s.AddTool(resolveCommentTool(), resolveCommentHandler)
 	s.AddTool(reopenCommentTool(), reopenCommentHandler)
+	s.AddTool(publishPageTool(), publishPageHandler)
+	s.AddTool(listPagesTool(), listPagesHandler)
+	s.AddTool(listPageVersionsTool(), listPageVersionsHandler)
+	s.AddTool(removePageTool(), removePageHandler)
 	s.AddTool(restartAppTool(), restartAppHandler)
 	s.AddTool(getBuildLogsTool(), getBuildLogsHandler)
 
