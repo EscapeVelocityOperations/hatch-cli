@@ -128,6 +128,17 @@ func disableEmailProtectionHandler(ctx context.Context, req mcp.CallToolRequest)
 		return toolError("failed to disable email protection: %v", err)
 	}
 
+	// No-op when protection is already off (h-ftx7t.1): DELETE is not a
+	// pure flag flip — it also resets the session TTL and switches comments
+	// off — so a call that changes nothing must not write.
+	current, err := client.GetEmailProtection(slug)
+	if err != nil {
+		return toolError("failed to disable email protection: %v", err)
+	}
+	if !current.EmailProtected {
+		return mcp.NewToolResultText(fmt.Sprintf("Email protection is already disabled for %s; nothing changed.", slug)), nil
+	}
+
 	if err := client.DeleteEmailProtection(slug); err != nil {
 		return toolError("failed to disable email protection: %v", err)
 	}
@@ -174,6 +185,21 @@ func mergeAdd(existing, add []string, normalize func(string) string) []string {
 	return out
 }
 
+// sameList reports whether a and b hold the same entries in the same
+// order. The merge helpers preserve order, so an unchanged list compares
+// equal and the handler can skip the write (h-ftx7t.1).
+func sameList(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // --- add_email_protection_user ---
 
 func addEmailProtectionUserTool() mcp.Tool {
@@ -217,6 +243,20 @@ func addEmailProtectionUserHandler(ctx context.Context, req mcp.CallToolRequest)
 
 	newEmails := mergeAdd(current.Emails, emails, normalizeEmail)
 	newDomains := mergeAdd(current.Domains, domains, normalizeDomain)
+
+	// Never write when nothing changes (h-ftx7t.1). An already-protected
+	// egg whose lists already hold every entry is a no-op; a public egg is
+	// only switched on with a non-empty allowlist, never an empty one
+	// (e.g. every argument blank) that would block every visitor.
+	if sameList(newEmails, current.Emails) && sameList(newDomains, current.Domains) {
+		if !current.EmailProtected {
+			return toolError("failed to add to email protection: no valid email or domain given; %s stays public", slug)
+		}
+		return mcp.NewToolResultText(fmt.Sprintf(
+			"Email protection unchanged for %s (entries already present).\nEmails: %s\nDomains: %s",
+			slug, strings.Join(current.Emails, ", "), strings.Join(current.Domains, ", "),
+		)), nil
+	}
 
 	ep, err := client.SetEmailProtection(slug, newEmails, newDomains, nil) // nil: keep session TTL (h-pbhn)
 	if err != nil {
@@ -270,6 +310,14 @@ func removeEmailProtectionUserHandler(ctx context.Context, req mcp.CallToolReque
 		return toolError("failed to remove from email protection: %v", err)
 	}
 
+	// A public egg has nothing to remove: POSTing would switch protection
+	// on with an empty allowlist and lock every visitor out (h-ftx7t.1).
+	if !current.EmailProtected {
+		return mcp.NewToolResultText(fmt.Sprintf(
+			"Email protection is not enabled for %s; nothing to remove, the egg stays public.", slug,
+		)), nil
+	}
+
 	normEmails := make([]string, len(emails))
 	for i, e := range emails {
 		normEmails[i] = normalizeEmail(e)
@@ -281,6 +329,14 @@ func removeEmailProtectionUserHandler(ctx context.Context, req mcp.CallToolReque
 
 	newEmails := allowlist.RemoveAll(current.Emails, normEmails)
 	newDomains := allowlist.RemoveAll(current.Domains, normDomains)
+
+	// No entry was on the list: a no-op, not a write (h-ftx7t.1).
+	if sameList(newEmails, current.Emails) && sameList(newDomains, current.Domains) {
+		return mcp.NewToolResultText(fmt.Sprintf(
+			"Email protection unchanged for %s (no matching entry).\nEmails: %s\nDomains: %s",
+			slug, strings.Join(current.Emails, ", "), strings.Join(current.Domains, ", "),
+		)), nil
+	}
 
 	ep, err := client.SetEmailProtection(slug, newEmails, newDomains, nil) // nil: keep session TTL (h-pbhn)
 	if err != nil {

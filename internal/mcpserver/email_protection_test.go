@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mark3labs/mcp-go/mcp"
+
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 )
 
@@ -142,6 +144,7 @@ func TestDisableEmailProtectionHandler_Success(t *testing.T) {
 	saveAndRestore(t)
 	setAuthToken("tok")
 	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/apps/myapp-a1b2/email-protect":    jsonHandler(api.EmailProtection{EmailProtected: true, Emails: []string{"a@b.com"}}),
 		"DELETE /v1/apps/myapp-a1b2/email-protect": jsonHandler(api.EmailProtection{EmailProtected: false}),
 	})
 
@@ -293,15 +296,13 @@ func TestRemoveEmailProtectionUserHandler_UnknownEntryIsNoOpSuccess(t *testing.T
 	saveAndRestore(t)
 	setAuthToken("tok")
 
+	var posts int
 	newMockServer(t, map[string]http.HandlerFunc{
 		"GET /v1/apps/myapp-a1b2/email-protect": jsonHandler(api.EmailProtection{
 			EmailProtected: true,
 			Emails:         []string{"a@b.com"},
 		}),
-		"POST /v1/apps/myapp-a1b2/email-protect": jsonHandler(api.EmailProtection{
-			EmailProtected: true,
-			Emails:         []string{"a@b.com"},
-		}),
+		"POST /v1/apps/myapp-a1b2/email-protect": countingHandler(&posts, api.EmailProtection{EmailProtected: true}),
 	})
 
 	result, err := removeEmailProtectionUserHandler(context.Background(), makeReq(map[string]interface{}{
@@ -312,6 +313,196 @@ func TestRemoveEmailProtectionUserHandler_UnknownEntryIsNoOpSuccess(t *testing.T
 
 	if !strings.Contains(text, "a@b.com") {
 		t.Errorf("expected the unchanged list in result, got: %s", text)
+	}
+	if posts != 0 {
+		t.Errorf("POST count = %d, want 0: removing an absent entry must not write (h-ftx7t.1)", posts)
+	}
+}
+
+// countingHandler answers with body and counts how often it was hit, so a
+// test can assert a no-op never reached the write endpoint (h-ftx7t.1).
+func countingHandler(n *int, body any) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		*n++
+		jsonHandler(body)(w, r)
+	}
+}
+
+// --- no-op guards (h-ftx7t.1): a call that changes nothing never writes
+// and never switches protection on. ---
+
+// TestRemoveEmailProtectionUserHandler_PublicEggStaysPublic is the Vigie
+// scenario: remove on a public egg used to POST empty lists, which enables
+// protection with an empty allowlist and blocks every visitor.
+func TestRemoveEmailProtectionUserHandler_PublicEggStaysPublic(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+
+	var posts int
+	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/apps/demo/email-protect":  jsonHandler(api.EmailProtection{EmailProtected: false}),
+		"POST /v1/apps/demo/email-protect": countingHandler(&posts, api.EmailProtection{EmailProtected: true}),
+	})
+
+	result, err := removeEmailProtectionUserHandler(context.Background(), makeReq(map[string]interface{}{
+		"app":     "demo",
+		"emails":  []interface{}{"absent@example.invalid"},
+		"domains": []interface{}{"example.invalid"},
+	}))
+	text := assertSuccess(t, result, err)
+
+	if posts != 0 {
+		t.Errorf("POST count = %d, want 0: a public egg must stay public", posts)
+	}
+	if !strings.Contains(text, "stays public") {
+		t.Errorf("expected the egg-stays-public message, got: %s", text)
+	}
+	if strings.Contains(text, "blocks every visitor") {
+		t.Errorf("no lockout warning expected on a public egg, got: %s", text)
+	}
+}
+
+// TestRemoveEmailProtectionUserHandler_UnknownDomainKeepsProtection: on a
+// protected egg an absent entry (domain, case/@ variant included) keeps
+// the existing status and lists — no write.
+func TestRemoveEmailProtectionUserHandler_UnknownDomainKeepsProtection(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+
+	var posts int
+	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/apps/myapp-a1b2/email-protect": jsonHandler(api.EmailProtection{
+			EmailProtected: true,
+			Domains:        []string{"corp.com"},
+		}),
+		"POST /v1/apps/myapp-a1b2/email-protect": countingHandler(&posts, api.EmailProtection{EmailProtected: true}),
+	})
+
+	result, err := removeEmailProtectionUserHandler(context.Background(), makeReq(map[string]interface{}{
+		"app":     "myapp-a1b2",
+		"domains": []interface{}{"@Other.com"},
+	}))
+	text := assertSuccess(t, result, err)
+
+	if posts != 0 {
+		t.Errorf("POST count = %d, want 0", posts)
+	}
+	if !strings.Contains(text, "unchanged") || !strings.Contains(text, "corp.com") {
+		t.Errorf("expected unchanged state with corp.com, got: %s", text)
+	}
+}
+
+// TestAddEmailProtectionUserHandler_AlreadyPresentIsNoOp: adding entries
+// already on a protected egg's list (after normalization) does not write.
+func TestAddEmailProtectionUserHandler_AlreadyPresentIsNoOp(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+
+	var posts int
+	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/apps/myapp-a1b2/email-protect": jsonHandler(api.EmailProtection{
+			EmailProtected: true,
+			Emails:         []string{"a@b.com"},
+			Domains:        []string{"corp.com"},
+		}),
+		"POST /v1/apps/myapp-a1b2/email-protect": countingHandler(&posts, api.EmailProtection{EmailProtected: true}),
+	})
+
+	result, err := addEmailProtectionUserHandler(context.Background(), makeReq(map[string]interface{}{
+		"app":     "myapp-a1b2",
+		"emails":  []interface{}{" A@B.com"},
+		"domains": []interface{}{"@CORP.com"},
+	}))
+	text := assertSuccess(t, result, err)
+
+	if posts != 0 {
+		t.Errorf("POST count = %d, want 0", posts)
+	}
+	if !strings.Contains(text, "unchanged") {
+		t.Errorf("expected unchanged message, got: %s", text)
+	}
+}
+
+// TestAddEmailProtectionUserHandler_BlankOnPublicEggDoesNotEnable: every
+// argument normalizes to empty, so the egg must not be switched on with
+// an empty allowlist.
+func TestAddEmailProtectionUserHandler_BlankOnPublicEggDoesNotEnable(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+
+	var posts int
+	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/apps/demo/email-protect":  jsonHandler(api.EmailProtection{EmailProtected: false}),
+		"POST /v1/apps/demo/email-protect": countingHandler(&posts, api.EmailProtection{EmailProtected: true}),
+	})
+
+	result, err := addEmailProtectionUserHandler(context.Background(), makeReq(map[string]interface{}{
+		"app":     "demo",
+		"emails":  []interface{}{"  "},
+		"domains": []interface{}{"@"},
+	}))
+	assertError(t, result, err, "stays public")
+
+	if posts != 0 {
+		t.Errorf("POST count = %d, want 0", posts)
+	}
+}
+
+// TestAddEmailProtectionUserHandler_PublicEggEnables: a real add on a
+// public egg is a state change and still enables protection (documented
+// tool behavior).
+func TestAddEmailProtectionUserHandler_PublicEggEnables(t *testing.T) {
+	saveAndRestore(t)
+	setAuthToken("tok")
+
+	var posts int
+	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/apps/demo/email-protect": jsonHandler(api.EmailProtection{EmailProtected: false}),
+		"POST /v1/apps/demo/email-protect": countingHandler(&posts, api.EmailProtection{
+			EmailProtected: true,
+			Emails:         []string{"a@b.com"},
+		}),
+	})
+
+	result, err := addEmailProtectionUserHandler(context.Background(), makeReq(map[string]interface{}{
+		"app":    "demo",
+		"emails": []interface{}{"a@b.com"},
+	}))
+	assertSuccess(t, result, err)
+
+	if posts != 1 {
+		t.Errorf("POST count = %d, want 1", posts)
+	}
+}
+
+// TestClearEmailProtectionHandler_AlreadyDisabledIsNoOp: DELETE also resets
+// the session TTL and comments, so clear/disable on a public egg must not
+// call it.
+func TestClearEmailProtectionHandler_AlreadyDisabledIsNoOp(t *testing.T) {
+	for name, h := range map[string]func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error){
+		"clear":   clearEmailProtectionHandler,
+		"disable": disableEmailProtectionHandler,
+	} {
+		t.Run(name, func(t *testing.T) {
+			saveAndRestore(t)
+			setAuthToken("tok")
+
+			var deletes int
+			newMockServer(t, map[string]http.HandlerFunc{
+				"GET /v1/apps/demo/email-protect":    jsonHandler(api.EmailProtection{EmailProtected: false}),
+				"DELETE /v1/apps/demo/email-protect": countingHandler(&deletes, api.EmailProtection{EmailProtected: false}),
+			})
+
+			result, err := h(context.Background(), makeReq(map[string]interface{}{"app": "demo"}))
+			text := assertSuccess(t, result, err)
+
+			if deletes != 0 {
+				t.Errorf("DELETE count = %d, want 0", deletes)
+			}
+			if !strings.Contains(text, "already disabled") {
+				t.Errorf("expected already-disabled message, got: %s", text)
+			}
+		})
 	}
 }
 
@@ -328,6 +519,7 @@ func TestClearEmailProtectionHandler_Success(t *testing.T) {
 	saveAndRestore(t)
 	setAuthToken("tok")
 	newMockServer(t, map[string]http.HandlerFunc{
+		"GET /v1/apps/myapp-a1b2/email-protect":    jsonHandler(api.EmailProtection{EmailProtected: true, Emails: []string{"a@b.com"}}),
 		"DELETE /v1/apps/myapp-a1b2/email-protect": jsonHandler(api.EmailProtection{EmailProtected: false}),
 	})
 
