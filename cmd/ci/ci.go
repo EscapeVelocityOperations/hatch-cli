@@ -6,14 +6,19 @@
 package ci
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	detect "github.com/EscapeVelocityOperations/hatch-cli/internal/ci"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/version"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 // Deps holds injectable dependencies for testing.
@@ -23,7 +28,13 @@ type Deps struct {
 	WriteFile func(path string, content []byte) error // creates parent dirs
 	Stat      func(path string) bool                  // reports whether path exists
 	LookPath  func(bin string) bool                   // reports whether a binary is installed
-	Run       func(bin string, args ...string) error  // executes a command
+	// Run executes a command, feeding stdin to its standard input. Secrets are
+	// only ever passed this way, never in args.
+	Run func(stdin io.Reader, bin string, args ...string) error
+	// ReadToken reads the HATCH_TOKEN value for --set-secret from this
+	// process's standard input: a masked prompt (written to prompt) on a
+	// terminal, otherwise the piped content.
+	ReadToken func(prompt io.Writer) (string, error)
 	// FetchRelease resolves the sha256 pins of a published CLI release.
 	FetchRelease func(version string) (detect.CLIRelease, error)
 	// CLIVersion is the version of this binary (default --cli-version).
@@ -53,9 +64,12 @@ func defaultDeps() *Deps {
 			_, err := exec.LookPath(bin)
 			return err == nil
 		},
-		Run: func(bin string, args ...string) error {
-			return exec.Command(bin, args...).Run()
+		Run: func(stdin io.Reader, bin string, args ...string) error {
+			c := exec.Command(bin, args...)
+			c.Stdin = stdin
+			return c.Run()
 		},
+		ReadToken:    readTokenFromStdin,
 		FetchRelease: detect.FetchCLIRelease,
 		CLIVersion:   version.Version,
 	}
@@ -72,7 +86,6 @@ type ciOptions struct {
 	cliVersion   string
 	printOnly    bool
 	overwrite    bool
-	token        string
 	setSecret    bool
 }
 
@@ -103,8 +116,7 @@ func NewCmd() *cobra.Command {
 	f.StringVar(&opts.cliVersion, "cli-version", "", "Hatch CLI release the workflow installs (default: this CLI's version)")
 	f.BoolVar(&opts.printOnly, "print", false, "Print the generated workflow to stdout only (no file writes)")
 	f.BoolVar(&opts.overwrite, "yes", false, "Allow overwriting an existing CI workflow file")
-	f.StringVar(&opts.token, "token", "", "HATCH_TOKEN value to wire as the CI secret (mint with: hatch auth keys create)")
-	f.BoolVar(&opts.setSecret, "set-secret", false, "Run the provider CLI (gh/glab) to set the HATCH_TOKEN secret (default: print the command only)")
+	f.BoolVar(&opts.setSecret, "set-secret", false, "Run the provider CLI (gh/glab) to set the HATCH_TOKEN secret; the token is read from stdin (masked prompt on a terminal) and passed to gh/glab on stdin, never in arguments (default: print the command only)")
 	return cmd
 }
 
@@ -199,40 +211,65 @@ func runCI(cmd *cobra.Command, opts ciOptions) error {
 
 // wireSecret prints (or, under --set-secret, runs) the provider command that sets
 // the HATCH_TOKEN CI secret. Default is print-only — it never silently pushes a
-// secret; --set-secret runs it only after confirming the provider CLI is
-// installed, and falls back to manual instructions on any failure.
+// secret. The token value is never printed nor placed in any argv: --set-secret
+// reads it from this process's stdin (masked prompt on a terminal) and hands it
+// to gh/glab on their stdin, after confirming the provider CLI is installed; any
+// failure falls back to manual instructions.
 func wireSecret(cmd *cobra.Command, opts ciOptions, provider string) error {
 	out := cmd.OutOrStdout()
 	ownerRepo := ""
 	if remote, err := deps.GitRemote(); err == nil {
 		ownerRepo = detect.OwnerRepoFromRemote(remote)
 	}
-	bin, args, ok := detect.SecretCommand(provider, ownerRepo, opts.token)
+	bin, args, ok := detect.SecretCommand(provider, ownerRepo)
 	if !ok {
 		return nil
 	}
+	manual := detect.SecretCommandString(provider, ownerRepo)
 
 	if !opts.setSecret {
-		fmt.Fprintln(out, "\nWire the HATCH_TOKEN secret in your CI:")
-		fmt.Fprintf(out, "  %s\n", detect.SecretCommandString(provider, ownerRepo, opts.token))
-		if opts.token == "" {
-			fmt.Fprintln(out, "  (mint the token with `hatch auth keys create` — shown once — then pass it as --token, or run the command above.)")
-		}
+		fmt.Fprintln(out, "\nWire the HATCH_TOKEN secret in your CI (the command reads the token from stdin):")
+		fmt.Fprintf(out, "  %s\n", manual)
+		fmt.Fprintln(out, "  (mint the token with `hatch auth keys create` — shown once — then paste it when prompted, or re-run with --set-secret.)")
 		return nil
 	}
 
-	if opts.token == "" {
-		return fmt.Errorf("--set-secret needs the token value: pass --token <HATCH_TOKEN> (mint with: hatch auth keys create)")
-	}
-	manual := detect.SecretCommandString(provider, ownerRepo, "<HATCH_TOKEN>")
 	if !deps.LookPath(bin) {
 		fmt.Fprintf(out, "\n%s is not installed — set the secret manually in your repo settings, or run:\n  %s\n", bin, manual)
 		return nil
 	}
-	if err := deps.Run(bin, args...); err != nil {
+	token, err := deps.ReadToken(cmd.ErrOrStderr())
+	if err != nil {
+		return fmt.Errorf("reading the HATCH_TOKEN value from stdin: %w", err)
+	}
+	if token == "" {
+		return errors.New("--set-secret needs the token value on stdin (mint with: hatch auth keys create)")
+	}
+	if err := deps.Run(strings.NewReader(token), bin, args...); err != nil {
 		fmt.Fprintf(out, "\n%s failed (is it authenticated? try `%s auth login`). Set it manually:\n  %s\n", bin, bin, manual)
 		return nil
 	}
 	fmt.Fprintf(out, "\nSet the HATCH_TOKEN secret via %s.\n", bin)
 	return nil
+}
+
+// readTokenFromStdin reads the token from os.Stdin: a masked prompt on a
+// terminal (nothing echoed), otherwise the first line of the piped input.
+// Surrounding whitespace is trimmed.
+func readTokenFromStdin(prompt io.Writer) (string, error) {
+	fd := int(os.Stdin.Fd())
+	if term.IsTerminal(fd) {
+		fmt.Fprint(prompt, "HATCH_TOKEN (input hidden): ")
+		b, err := term.ReadPassword(fd)
+		fmt.Fprintln(prompt)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(b)), nil
+	}
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
 }

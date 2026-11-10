@@ -3,6 +3,7 @@ package ci
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -221,66 +222,175 @@ func TestCI_SecretGuidance_DefaultPrintsCommand(t *testing.T) {
 	}
 }
 
-// --set-secret --token runs the provider CLI via the injected runner.
+// recorder captures a provider CLI invocation made through Deps.Run.
+type recorder struct {
+	ran   bool
+	bin   string
+	args  []string
+	stdin string
+}
+
+func (r *recorder) run(stdin io.Reader, bin string, args ...string) error {
+	r.ran, r.bin, r.args = true, bin, args
+	if stdin != nil {
+		b, _ := io.ReadAll(stdin)
+		r.stdin = string(b)
+	}
+	return nil
+}
+
+// --set-secret reads the token via ReadToken and runs the provider CLI with it on stdin.
 func TestCI_SetSecret_RunsViaRunner(t *testing.T) {
-	var ranBin string
-	var ranArgs []string
+	rec := &recorder{}
 	restore := setMockDeps(&Deps{
 		GitRemote: func() (string, error) { return "git@github.com:acme/repo.git", nil },
 		Getwd:     func() (string, error) { return "", os.ErrNotExist },
 		Stat:      func(string) bool { return false },
 		WriteFile: func(string, []byte) error { return nil },
 		LookPath:  func(string) bool { return true },
-		Run:       func(bin string, args ...string) error { ranBin = bin; ranArgs = args; return nil },
+		Run:       rec.run,
+		ReadToken: func(io.Writer) (string, error) { return "hatch_secret", nil },
 	})
 	defer restore()
-	cmd := NewCmd()
-	cmd.SetArgs(args("--provider", "github", "--runtime", "node", "--token", "hatch_secret", "--set-secret"))
-	buf := new(bytes.Buffer)
-	cmd.SetOut(buf)
-	cmd.SetErr(buf)
-	if err := cmd.Execute(); err != nil {
+	out, err := execCI(t, args("--provider", "github", "--runtime", "node", "--set-secret"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if ranBin != "gh" {
-		t.Errorf("ran %q, want gh", ranBin)
+	if rec.bin != "gh" {
+		t.Errorf("ran %q, want gh", rec.bin)
 	}
-	joined := strings.Join(ranArgs, " ")
-	for _, want := range []string{"secret set HATCH_TOKEN", "hatch_secret", "acme/repo"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("gh args missing %q: %v", want, ranArgs)
+	if got := strings.Join(rec.args, " "); got != "secret set HATCH_TOKEN -R acme/repo" {
+		t.Errorf("gh args = %q", got)
+	}
+	if rec.stdin != "hatch_secret" {
+		t.Errorf("token must reach gh on stdin; got %q", rec.stdin)
+	}
+	if !strings.Contains(out, "Set the HATCH_TOKEN secret") {
+		t.Errorf("missing success message:\n%s", out)
+	}
+}
+
+// h-8tvak.1 (Vigie): on both providers, in the default print path and under
+// --set-secret (success and provider failure), a synthetic token never appears
+// in stdout/stderr, returned errors or the provider argv — it only reaches the
+// provider CLI on stdin.
+func TestCI_TokenNeverDisclosed(t *testing.T) {
+	const sentinel = "SENTINEL-not-a-real-token-8tvak"
+	for _, provider := range []string{"github", "gitlab"} {
+		for _, mode := range []string{"print", "set-secret", "set-secret-provider-fails"} {
+			t.Run(provider+"/"+mode, func(t *testing.T) {
+				rec := &recorder{}
+				run := rec.run
+				if mode == "set-secret-provider-fails" {
+					run = func(stdin io.Reader, bin string, args ...string) error {
+						_ = rec.run(stdin, bin, args...)
+						return errors.New("exit status 1")
+					}
+				}
+				readCalled := false
+				restore := setMockDeps(&Deps{
+					GitRemote: func() (string, error) { return "git@example.com:acme/repo.git", nil },
+					Getwd:     func() (string, error) { return "", os.ErrNotExist },
+					Stat:      func(string) bool { return false },
+					WriteFile: func(string, []byte) error { return nil },
+					LookPath:  func(string) bool { return true },
+					Run:       run,
+					ReadToken: func(io.Writer) (string, error) { readCalled = true; return sentinel, nil },
+				})
+				defer restore()
+				argv := args("--provider", provider, "--runtime", "node")
+				if mode != "print" {
+					argv = append(argv, "--set-secret")
+				}
+				out, err := execCI(t, argv)
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if strings.Contains(out, sentinel) {
+					t.Errorf("token disclosed in stdout/stderr:\n%s", out)
+				}
+				if mode == "print" {
+					if rec.ran || readCalled {
+						t.Error("default path must neither read the token nor run the provider CLI")
+					}
+					if !strings.Contains(out, "HATCH_TOKEN") {
+						t.Errorf("default path must print the wiring command:\n%s", out)
+					}
+					return
+				}
+				if !rec.ran {
+					t.Fatal("--set-secret must run the provider CLI")
+				}
+				if strings.Contains(strings.Join(rec.args, " "), sentinel) {
+					t.Errorf("token disclosed in provider argv: %v", rec.args)
+				}
+				if rec.stdin != sentinel {
+					t.Errorf("token must reach the provider CLI on stdin; got %q", rec.stdin)
+				}
+			})
 		}
 	}
-	if !strings.Contains(buf.String(), "Set the HATCH_TOKEN secret") {
-		t.Errorf("missing success message:\n%s", buf.String())
+}
+
+// --set-secret with nothing on stdin is refused before running the provider CLI.
+func TestCI_SetSecret_EmptyToken(t *testing.T) {
+	rec := &recorder{}
+	restore := setMockDeps(&Deps{
+		GitRemote: func() (string, error) { return "git@github.com:acme/repo.git", nil },
+		Getwd:     func() (string, error) { return "", os.ErrNotExist },
+		Stat:      func(string) bool { return false },
+		WriteFile: func(string, []byte) error { return nil },
+		LookPath:  func(string) bool { return true },
+		Run:       rec.run,
+		ReadToken: func(io.Writer) (string, error) { return "", nil },
+	})
+	defer restore()
+	_, err := execCI(t, args("--provider", "github", "--runtime", "node", "--set-secret"))
+	if err == nil || !strings.Contains(err.Error(), "stdin") {
+		t.Fatalf("want stdin error, got %v", err)
+	}
+	if rec.ran {
+		t.Error("must not run the provider CLI without a token")
+	}
+}
+
+// --token no longer exists: the value would sit in this process's argv.
+func TestCI_TokenFlagRemoved(t *testing.T) {
+	restore := setMockDeps(&Deps{
+		GitRemote: func() (string, error) { return "git@github.com:acme/repo.git", nil },
+		Getwd:     func() (string, error) { return "", os.ErrNotExist },
+		Stat:      func(string) bool { return false },
+		WriteFile: func(string, []byte) error { return nil },
+	})
+	defer restore()
+	if _, err := execCI(t, args("--provider", "github", "--runtime", "node", "--token", "x")); err == nil {
+		t.Fatal("--token must be rejected")
 	}
 }
 
 // --set-secret with the provider CLI not installed falls back to manual instructions.
 func TestCI_SetSecret_MissingCLI_Fallback(t *testing.T) {
-	ran := false
+	rec := &recorder{}
+	readCalled := false
 	restore := setMockDeps(&Deps{
 		GitRemote: func() (string, error) { return "git@github.com:acme/repo.git", nil },
 		Getwd:     func() (string, error) { return "", os.ErrNotExist },
 		Stat:      func(string) bool { return false },
 		WriteFile: func(string, []byte) error { return nil },
 		LookPath:  func(string) bool { return false },
-		Run:       func(string, ...string) error { ran = true; return nil },
+		Run:       rec.run,
+		ReadToken: func(io.Writer) (string, error) { readCalled = true; return "t", nil },
 	})
 	defer restore()
-	cmd := NewCmd()
-	cmd.SetArgs(args("--provider", "github", "--runtime", "node", "--token", "hatch_secret", "--set-secret"))
-	buf := new(bytes.Buffer)
-	cmd.SetOut(buf)
-	cmd.SetErr(buf)
-	if err := cmd.Execute(); err != nil {
+	out, err := execCI(t, args("--provider", "github", "--runtime", "node", "--set-secret"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if ran {
-		t.Error("must not run when the provider CLI is not installed")
+	if rec.ran || readCalled {
+		t.Error("must neither prompt for the token nor run when the provider CLI is not installed")
 	}
-	if !strings.Contains(buf.String(), "not installed") {
-		t.Errorf("missing not-installed fallback:\n%s", buf.String())
+	if !strings.Contains(out, "not installed") {
+		t.Errorf("missing not-installed fallback:\n%s", out)
 	}
 }
 
@@ -411,5 +521,46 @@ func TestCI_CLIVersionPin(t *testing.T) {
 	}
 	if cap2.called {
 		t.Error("nothing may be written when the CLI pin cannot be resolved")
+	}
+}
+
+// The real ReadToken reads the first line of piped stdin, trimmed.
+func TestReadTokenFromStdin_Piped(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = old }()
+	if _, err := w.WriteString("  tok-from-pipe \nignored\n"); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	prompt := new(bytes.Buffer)
+	got, err := readTokenFromStdin(prompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "tok-from-pipe" {
+		t.Errorf("got %q", got)
+	}
+	if prompt.Len() != 0 {
+		t.Errorf("no prompt expected off a terminal, got %q", prompt.String())
+	}
+}
+
+// The real Run hands stdin to the child process (and nothing in argv).
+func TestDefaultRun_FeedsStdin(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "got")
+	if err := defaultDeps().Run(strings.NewReader("via-stdin"), "sh", "-c", `cat > "$0"`, out); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "via-stdin" {
+		t.Errorf("child stdin = %q", b)
 	}
 }

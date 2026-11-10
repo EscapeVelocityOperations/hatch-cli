@@ -4,19 +4,22 @@ import "strings"
 
 // SecretCommand builds the provider CLI command that sets the HATCH_TOKEN CI
 // secret: `gh secret set` for GitHub, `glab variable set --masked` for GitLab.
-// bin is the executable and args its arguments. ownerRepo (owner/repo) may be
-// "" → the -R flag is omitted and the provider CLI targets the current repo.
-// ok is false for an unsupported provider.
-func SecretCommand(provider, ownerRepo, token string) (bin string, args []string, ok bool) {
+// The command never carries the secret value: both CLIs read it from standard
+// input when it is omitted from the arguments, so the token never appears in
+// argv (visible to other local users via the process list) nor in any printed
+// command. bin is the executable and args its arguments. ownerRepo (owner/repo)
+// may be "" → the -R flag is omitted and the provider CLI targets the current
+// repo. ok is false for an unsupported provider.
+func SecretCommand(provider, ownerRepo string) (bin string, args []string, ok bool) {
 	switch provider {
 	case "github":
-		args = []string{"secret", "set", "HATCH_TOKEN", "--body", token}
+		args = []string{"secret", "set", "HATCH_TOKEN"}
 		if ownerRepo != "" {
 			args = append(args, "-R", ownerRepo)
 		}
 		return "gh", args, true
 	case "gitlab":
-		args = []string{"variable", "set", "HATCH_TOKEN", token, "--masked"}
+		args = []string{"variable", "set", "HATCH_TOKEN", "--masked"}
 		if ownerRepo != "" {
 			args = append(args, "-R", ownerRepo)
 		}
@@ -26,13 +29,11 @@ func SecretCommand(provider, ownerRepo, token string) (bin string, args []string
 	}
 }
 
-// SecretCommandString renders a copy-pasteable command. An empty token shows a
-// <HATCH_TOKEN> placeholder so the command can be displayed without a real secret.
-func SecretCommandString(provider, ownerRepo, token string) string {
-	if token == "" {
-		token = "<HATCH_TOKEN>"
-	}
-	bin, args, ok := SecretCommand(provider, ownerRepo, token)
+// SecretCommandString renders a copy-pasteable command. It contains no secret
+// value: the provider CLI reads the token from standard input (gh prompts for it
+// on a terminal).
+func SecretCommandString(provider, ownerRepo string) string {
+	bin, args, ok := SecretCommand(provider, ownerRepo)
 	if !ok {
 		return ""
 	}
