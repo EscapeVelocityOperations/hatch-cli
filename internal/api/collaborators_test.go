@@ -165,3 +165,105 @@ func TestDeclineInvite(t *testing.T) {
 		t.Errorf("request = %s %s, want POST /v1/invitations/tok-abc/decline", gotMethod, gotPath)
 	}
 }
+
+// TestInviteCollaborator_EmailSpecialCharsJSONEncoded: an email with '+' and
+// '/' travels intact in the JSON body and never touches the URL path.
+func TestInviteCollaborator_EmailSpecialCharsJSONEncoded(t *testing.T) {
+	const email = `a+b/c"d@example.com`
+	var gotURI string
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURI = r.RequestURI
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("body is not valid JSON: %v", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"c1","email":"x"}`))
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+
+	if _, err := c.InviteCollaborator("my-app", email); err != nil {
+		t.Fatalf("InviteCollaborator: %v", err)
+	}
+	if gotURI != "/v1/apps/my-app/collaborators" {
+		t.Errorf("request URI = %q, want /v1/apps/my-app/collaborators", gotURI)
+	}
+	if body["email"] != email {
+		t.Errorf("body email = %v, want %q", body["email"], email)
+	}
+}
+
+// TestCollaboratorPathSegmentsEscaped: collaborator IDs and invite tokens are
+// untrusted (CLI args, LLM-supplied MCP args) and are path-escaped, so '/',
+// '?', '#' cannot add segments or a query; '+' and '@' are path-legal and
+// pass through.
+func TestCollaboratorPathSegmentsEscaped(t *testing.T) {
+	var gotURI string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURI = r.RequestURI
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"c1"}`))
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+
+	tests := []struct {
+		name string
+		call func() error
+		want string
+	}{
+		{"remove id with + and /", func() error { return c.RemoveCollaborator("my-app", "a+b/c@example.com") },
+			"/v1/apps/my-app/collaborators/a+b%2Fc@example.com"},
+		{"remove id with traversal-ish path", func() error { return c.RemoveCollaborator("my-app", "../../apps/other") },
+			"/v1/apps/my-app/collaborators/..%2F..%2Fapps%2Fother"},
+		{"accept token with ? and #", func() error { _, err := c.AcceptInvite("t?x=1#f"); return err },
+			"/v1/invitations/t%3Fx=1%23f/accept"},
+		{"decline token with /", func() error { return c.DeclineInvite("a/b") },
+			"/v1/invitations/a%2Fb/decline"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotURI = ""
+			if err := tt.call(); err != nil {
+				t.Fatalf("call: %v", err)
+			}
+			if gotURI != tt.want {
+				t.Errorf("request URI = %q, want %q", gotURI, tt.want)
+			}
+		})
+	}
+}
+
+// TestCollaboratorPathSegmentsRejectDotSegments: "." and ".." survive
+// url.PathEscape unchanged and stay traversal-meaningful, so they (and "")
+// are rejected before any request is made.
+func TestCollaboratorPathSegmentsRejectDotSegments(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	}))
+	defer server.Close()
+
+	c := NewClient("tok123")
+	c.host = server.URL
+
+	for _, v := range []string{"", ".", ".."} {
+		if err := c.RemoveCollaborator("my-app", v); err == nil {
+			t.Errorf("RemoveCollaborator(%q) error = nil, want rejection", v)
+		}
+		if _, err := c.AcceptInvite(v); err == nil {
+			t.Errorf("AcceptInvite(%q) error = nil, want rejection", v)
+		}
+		if err := c.DeclineInvite(v); err == nil {
+			t.Errorf("DeclineInvite(%q) error = nil, want rejection", v)
+		}
+	}
+	if called {
+		t.Error("a rejected path segment must not reach the server")
+	}
+}
