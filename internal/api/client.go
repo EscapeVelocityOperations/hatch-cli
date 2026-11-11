@@ -710,6 +710,34 @@ func (c *Client) GetCronRunLogs(slug, cronID, runID string) (string, error) {
 	return string(data), nil
 }
 
+// MaxArtifactBytes is the largest artifact hatch accepts (100 MB, 2^20-byte
+// MB). hatch-api and hatch-control refuse anything bigger with 413; the CLI
+// checks it before uploading so a too-big artifact never leaves the machine
+// (h-yqo6k: the help used to promise 500 MB while the server cut uploads at
+// 100 MB and the build then failed on a truncated tarball).
+const MaxArtifactBytes = 100 * 1024 * 1024
+
+// CheckArtifactSize refuses an artifact of n bytes over MaxArtifactBytes,
+// with the same wording as the server's 413.
+func CheckArtifactSize(n int) error {
+	if n <= MaxArtifactBytes {
+		return nil
+	}
+	return fmt.Errorf("artifact is %s, maximum is %s: exclude build caches, sources or media with a .hatchignore file",
+		FormatArtifactMB(int64(n)), FormatArtifactMB(MaxArtifactBytes))
+}
+
+// FormatArtifactMB renders n bytes in MB with at most one decimal, rounded up
+// so that a size just over the limit never prints as the limit.
+func FormatArtifactMB(n int64) string {
+	const mb = 1024 * 1024
+	tenths := (n*10 + mb - 1) / mb
+	if tenths%10 == 0 {
+		return fmt.Sprintf("%d MB", tenths/10)
+	}
+	return fmt.Sprintf("%d.%d MB", tenths/10, tenths%10)
+}
+
 // UploadArtifact uploads a pre-built tar.gz artifact for deployment.
 func (c *Client) UploadArtifact(slug string, artifact io.Reader, runtime, startCommand string) error {
 	if err := validateSlug(slug); err != nil {

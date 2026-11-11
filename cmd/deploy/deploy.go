@@ -178,7 +178,7 @@ Platform constraints:
   - Container runs linux/amd64
   - App must listen on PORT env var (always 8080)
   - App must bind to 0.0.0.0 (not 127.0.0.1 or localhost)
-  - Max artifact size: 500 MB
+  - Max artifact size: 100 MB (compressed); larger uploads are refused
 
 Waiting and exit status:
   After the upload, hatch deploy waits until the egg is running (or

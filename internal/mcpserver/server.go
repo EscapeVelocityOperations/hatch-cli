@@ -295,7 +295,7 @@ func getPlatformInfoHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		Platform: PlatformSpec{
 			Arch:              "linux/amd64",
 			Port:              8080,
-			MaxArtifactSizeMB: 500,
+			MaxArtifactSizeMB: api.MaxArtifactBytes / (1024 * 1024),
 		},
 		DeployTarget: DeployTargetSpec{
 			Description: "Directory containing your build output. Entire contents extracted to /app/ in container.",
@@ -683,8 +683,8 @@ func createMCPTarGz(dir string) ([]byte, error) {
 		return nil, err
 	}
 
-	if buf.Len() > 500*1024*1024 {
-		return nil, fmt.Errorf("artifact too large (%.0f MB, max 500 MB)", float64(buf.Len())/1024/1024)
+	if err := api.CheckArtifactSize(buf.Len()); err != nil {
+		return nil, err
 	}
 
 	return buf.Bytes(), nil
