@@ -594,9 +594,8 @@ func createTarGz(dir string) ([]byte, []string, error) {
 		return nil, nil, err
 	}
 
-	// Check artifact size
-	if buf.Len() > 500*1024*1024 {
-		return nil, nil, fmt.Errorf("artifact too large (%.0f MB, max 500 MB)", float64(buf.Len())/1024/1024)
+	if err := api.CheckArtifactSize(buf.Len()); err != nil {
+		return nil, nil, err
 	}
 
 	return buf.Bytes(), excluded, nil

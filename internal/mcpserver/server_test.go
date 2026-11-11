@@ -353,6 +353,11 @@ func TestGetPlatformInfoHandler(t *testing.T) {
 	if !strings.Contains(text, "deploy") {
 		t.Error("expected deploy info in output")
 	}
+	// h-yqo6k: the platform contract must announce the limit the server
+	// enforces (100 MB), not the 500 MB it used to claim.
+	if !strings.Contains(text, `"max_artifact_size_mb": 100`) && !strings.Contains(text, `"max_artifact_size_mb":100`) {
+		t.Errorf("expected max_artifact_size_mb 100 in output, got: %s", text)
+	}
 }
 
 // --- check_auth ---
