@@ -3,6 +3,7 @@ package authcmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 const (
@@ -37,6 +39,9 @@ type Deps struct {
 	ListKeys      func(token string) ([]api.APIKey, error)
 	CreateKey     func(token, name string) (string, error)
 	GetTokenSource func() string
+	// IsTerminal reports whether w is an interactive terminal. nil → inspect w
+	// itself (an *os.File on a tty).
+	IsTerminal func(w io.Writer) bool
 }
 
 func defaultDeps() *Deps {
@@ -57,7 +62,15 @@ func defaultDeps() *Deps {
 			return api.NewClient(token).CreateKey(name)
 		},
 		GetTokenSource: getTokenSource,
+		IsTerminal:     isTerminalWriter,
 	}
+}
+
+// isTerminalWriter reports whether w is a file attached to a terminal. Buffers,
+// pipes and redirected files are not.
+func isTerminalWriter(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
 }
 
 var deps = defaultDeps()
@@ -121,7 +134,11 @@ func newKeysCreateCmd() *cobra.Command {
 		Use:   "create",
 		Short: "Create a CI deploy token (HATCH_TOKEN)",
 		Long: "Mint a new deploy token for non-interactive / CI use. The plaintext token is " +
-			"shown ONCE and cannot be retrieved later — store it as your CI's HATCH_TOKEN secret.",
+			"shown ONCE and cannot be retrieved later — store it as your CI's HATCH_TOKEN secret.\n\n" +
+			"When stdout is not a terminal (a pipe or a redirect) only the token is written to stdout " +
+			"and the messages go to stderr, so it can be piped straight into the provider CLI:\n" +
+			"  hatch auth keys create | gh secret set HATCH_TOKEN\n" +
+			"  hatch auth keys create | glab variable set HATCH_TOKEN --masked",
 		RunE: runKeysCreate,
 	}
 	c.Flags().String("name", "", "Name for the key (default: ci-<owner>-<repo> from the git remote)")
@@ -262,6 +279,21 @@ func runKeysCreate(cmd *cobra.Command, args []string) error {
 
 	// Print the token EXACTLY ONCE — the server cannot return it again.
 	out := cmd.OutOrStdout()
+	isTerminal := isTerminalWriter
+	if deps.IsTerminal != nil {
+		isTerminal = deps.IsTerminal
+	}
+	if !isTerminal(out) {
+		// Piped / redirected / captured: stdout is the machine-readable channel and
+		// carries the token ALONE, so `hatch auth keys create | gh secret set
+		// HATCH_TOKEN` stores the token and not a message. Messages go to stderr.
+		fmt.Fprintln(out, created)
+		msg := cmd.ErrOrStderr()
+		fmt.Fprintf(msg, "Created deploy token %q — the token itself is on stdout.\n", name)
+		fmt.Fprintln(msg, "It is shown ONCE and cannot be retrieved later — pipe it straight into your CI's HATCH_TOKEN secret,")
+		fmt.Fprintln(msg, "e.g. hatch auth keys create | gh secret set HATCH_TOKEN")
+		return nil
+	}
 	fmt.Fprintf(out, "Created deploy token %q\n\n", name)
 	fmt.Fprintf(out, "  %s\n", created)
 	fmt.Fprintln(out, "  Save this now — store it as the HATCH_TOKEN secret in your CI; it cannot be retrieved later.")
