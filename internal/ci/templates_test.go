@@ -20,8 +20,11 @@ var testCLI = CLIRelease{
 
 func validParams(runtime string) WorkflowParams {
 	p := WorkflowParams{App: "fixture-stage", Runtime: runtime, DeployTarget: "dist", StartCommand: "node server.js", CLI: testCLI}
-	if runtime == "static" {
+	switch runtime {
+	case "static":
 		p.StartCommand = ""
+	case "go":
+		p.StartCommand, p.GoPackage = "./server", "./cmd/server"
 	}
 	return p
 }

@@ -28,6 +28,9 @@ func setMockDeps(d *Deps) func() {
 	if d.CLIVersion == nil {
 		d.CLIVersion = func() string { return "v0.21.0" }
 	}
+	if d.GoMainPackages == nil { // hermetic: no checkout is scanned unless a test asks
+		d.GoMainPackages = func(string) ([]string, error) { return nil, nil }
+	}
 	old := deps
 	deps = d
 	return func() { deps = old }
@@ -112,7 +115,7 @@ func TestCI_ProviderAndRuntimeOverride(t *testing.T) {
 	defer restore()
 
 	cmd := NewCmd()
-	cmd.SetArgs(args("--provider", "gitlab", "--runtime", "go"))
+	cmd.SetArgs(args("--provider", "gitlab", "--runtime", "go", "--start-command", "./server", "--go-package", "./cmd/server"))
 	buf := new(bytes.Buffer)
 	cmd.SetOut(buf)
 	cmd.SetErr(buf)
@@ -122,8 +125,8 @@ func TestCI_ProviderAndRuntimeOverride(t *testing.T) {
 	if cap.path != ".gitlab-ci.yml" {
 		t.Errorf("wrote %q, want .gitlab-ci.yml", cap.path)
 	}
-	if !strings.Contains(string(cap.content), "go build") {
-		t.Errorf("generated gitlab/go workflow missing the go build:\n%s", cap.content)
+	if !strings.Contains(string(cap.content), "go build -o") || !strings.Contains(string(cap.content), `"./cmd/server"`) {
+		t.Errorf("generated gitlab/go workflow missing the go build of the chosen package:\n%s", cap.content)
 	}
 }
 
@@ -700,5 +703,184 @@ func TestDefaultRun_FeedsStdin(t *testing.T) {
 	}
 	if string(b) != "via-stdin" {
 		t.Errorf("child stdin = %q", b)
+	}
+}
+
+// goCheckout writes a Go project into a temp dir and returns it.
+func goCheckout(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, content := range files {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+const (
+	goMod   = "module example.com/fix\n\ngo 1.22\n"
+	goMain  = "package main\n\nfunc main() {}\n"
+	goLib   = "package example\n\nfunc Name() string { return \"x\" }\n"
+	goStart = "./server"
+)
+
+// runGoCI runs `hatch ci` for the go runtime in dir with the real checkout scan.
+func runGoCI(t *testing.T, dir string, extra ...string) (string, string, bool, error) {
+	t.Helper()
+	var cap capture
+	restore := setMockDeps(&Deps{
+		GitRemote:      func() (string, error) { return "git@github.com:acme/repo.git", nil },
+		Getwd:          func() (string, error) { return dir, nil },
+		Stat:           func(string) bool { return false },
+		WriteFile:      cap.write,
+		GoMainPackages: detect.FindGoMainPackages,
+	})
+	defer restore()
+	argv := append([]string{"--app", "fixture-stage", "--deploy-target", "dist", "--start-command", goStart, "--print"}, extra...)
+	out, err := execCI(t, argv)
+	return out, string(cap.content), cap.called, err
+}
+
+// h-8tvak.4: a classic cmd/server + internal/example checkout. `go build ./...`
+// compiles it and writes nothing, so the generated workflow names the main
+// package (deduced: it is the only one) and builds it into the deploy-target.
+func TestCI_GoDeducesTheOnlyMainPackage(t *testing.T) {
+	dir := goCheckout(t, map[string]string{
+		"go.mod": goMod, "cmd/server/main.go": goMain, "internal/example/example.go": goLib,
+	})
+	out, _, written, err := runGoCI(t, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written {
+		t.Error("--print wrote a file")
+	}
+	for _, want := range []string{
+		"Go build:  ./cmd/server -> dist/server (static linux/amd64)",
+		`HATCH_CI_GO_PACKAGE: "./cmd/server"`,
+		`HATCH_CI_GO_OUTPUT: "dist/server"`,
+		`go build -o "$HATCH_CI_GO_OUTPUT" "$HATCH_CI_GO_PACKAGE"`,
+		"GOOS=linux GOARCH=amd64",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "go build ./...") {
+		t.Errorf("the workflow still builds with `go build ./...`:\n%s", out)
+	}
+}
+
+func TestCI_GoPicksTheMainPackageNamedLikeTheBinary(t *testing.T) {
+	dir := goCheckout(t, map[string]string{
+		"go.mod": goMod, "cmd/server/main.go": goMain, "cmd/worker/main.go": goMain,
+	})
+	out, _, _, err := runGoCI(t, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `HATCH_CI_GO_PACKAGE: "./cmd/server"`) {
+		t.Errorf("did not pick cmd/server (binary is ./server):\n%s", out)
+	}
+}
+
+// Ambiguous or missing: nothing is written and the error says how to decide.
+func TestCI_GoRefusesWhenTheMainPackageIsAmbiguousOrMissing(t *testing.T) {
+	cases := []struct {
+		name    string
+		files   map[string]string
+		extra   []string
+		wantErr string
+	}{
+		{"several, none named like the binary", map[string]string{"go.mod": goMod, "cmd/api/main.go": goMain, "cmd/worker/main.go": goMain},
+			nil, "several Go main packages found (./cmd/api, ./cmd/worker): pass --go-package"},
+		{"no main package", map[string]string{"go.mod": goMod, "internal/example/example.go": goLib},
+			nil, "no Go main package found: pass --go-package"},
+		{"explicit package is a library", map[string]string{"go.mod": goMod, "cmd/server/main.go": goMain, "internal/example/example.go": goLib},
+			[]string{"--go-package", "./internal/example"}, "--go-package ./internal/example is not a main package (found: ./cmd/server)"},
+		{"explicit package does not exist", map[string]string{"go.mod": goMod, "cmd/server/main.go": goMain},
+			[]string{"--go-package", "./cmd/absent"}, "is not a main package"},
+		{"explicit package is not a path", map[string]string{"go.mod": goMod, "cmd/server/main.go": goMain},
+			[]string{"--go-package", "-ldflags=-X"}, "invalid --go-package"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, _, written, err := runGoCI(t, goCheckout(t, tc.files), tc.extra...)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v\noutput:\n%s\nwant %q", err, out, tc.wantErr)
+			}
+			if written || strings.Contains(out, "go build") {
+				t.Errorf("a workflow was generated despite the refusal:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestCI_GoExplicitPackageIsUsed(t *testing.T) {
+	dir := goCheckout(t, map[string]string{"go.mod": goMod, "cmd/api/main.go": goMain, "cmd/worker/main.go": goMain})
+	out, _, _, err := runGoCI(t, dir, "--go-package", "./cmd/worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `HATCH_CI_GO_PACKAGE: "./cmd/worker"`) || !strings.Contains(out, `HATCH_CI_GO_OUTPUT: "dist/server"`) {
+		t.Errorf("explicit package not used (binary is named by the start command):\n%s", out)
+	}
+}
+
+// The start command must name the binary to build; a wrapper is refused.
+func TestCI_GoRefusesAStartCommandThatDoesNotNameTheBinary(t *testing.T) {
+	dir := goCheckout(t, map[string]string{"go.mod": goMod, "cmd/server/main.go": goMain})
+	var cap capture
+	restore := setMockDeps(&Deps{
+		GitRemote: func() (string, error) { return "git@github.com:acme/repo.git", nil },
+		Getwd:     func() (string, error) { return dir, nil },
+		Stat:      func(string) bool { return false },
+		WriteFile: cap.write,
+	})
+	defer restore()
+	_, err := execCI(t, []string{"--app", "fixture-stage", "--deploy-target", "dist", "--start-command", "sh -c ./server"})
+	if err == nil || !strings.Contains(err.Error(), "cannot tell which binary") {
+		t.Fatalf("err = %v", err)
+	}
+	if cap.called {
+		t.Error("a workflow was written")
+	}
+}
+
+func TestCI_GoPackageFlagIsGoOnly(t *testing.T) {
+	var cap capture
+	restore := setMockDeps(&Deps{
+		GitRemote: func() (string, error) { return "git@github.com:acme/repo.git", nil },
+		Getwd:     func() (string, error) { return t.TempDir(), nil },
+		Stat:      func(string) bool { return false },
+		WriteFile: cap.write,
+	})
+	defer restore()
+	_, err := execCI(t, args("--runtime", "node", "--go-package", "./cmd/server"))
+	if err == nil || !strings.Contains(err.Error(), "only applies to the go runtime") {
+		t.Fatalf("err = %v", err)
+	}
+	if cap.called {
+		t.Error("a workflow was written")
+	}
+}
+
+// Without a readable working directory nothing can be deduced: the package must be explicit.
+func TestCI_GoWithoutWorkingDirectoryNeedsAnExplicitPackage(t *testing.T) {
+	restore := setMockDeps(&Deps{
+		GitRemote: func() (string, error) { return "", os.ErrNotExist },
+		Getwd:     func() (string, error) { return "", os.ErrNotExist },
+		Stat:      func(string) bool { return false },
+		WriteFile: (&capture{}).write,
+	})
+	defer restore()
+	_, err := execCI(t, []string{"--provider", "github", "--runtime", "go", "--app", "a", "--deploy-target", "dist", "--start-command", goStart, "--print"})
+	if err == nil || !strings.Contains(err.Error(), "pass --go-package") {
+		t.Fatalf("err = %v", err)
 	}
 }

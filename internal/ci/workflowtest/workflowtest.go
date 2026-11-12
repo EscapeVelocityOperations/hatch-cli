@@ -33,6 +33,17 @@ type Deploy struct {
 	Shell  string            // GitHub step shell ("" for GitLab)
 	// NoExpand lists GitLab variables declared with expand: false.
 	NoExpand map[string]bool
+	// Build holds the shell steps that run before the deploy step, in order
+	// (GitHub `run:` steps; GitLab script entries). Actions without a `run:` are
+	// not included: the runner's toolchain setup is not reproduced.
+	Build []BuildStep
+}
+
+// BuildStep is one shell step that runs before the deploy step.
+type BuildStep struct {
+	Env    map[string]string // the step's environment (GitLab: the job variables)
+	Script string
+	Shell  string // GitHub step shell ("" = the runner default)
 }
 
 // Extract parses a generated workflow and returns its deploy step.
@@ -57,7 +68,13 @@ func Extract(provider, content string) (Deploy, error) {
 			return Deploy{}, fmt.Errorf("github workflow has no deploy steps")
 		}
 		last := steps[len(steps)-1]
-		return Deploy{Env: last.Env, Script: last.Run, Shell: last.Shell}, nil
+		d := Deploy{Env: last.Env, Script: last.Run, Shell: last.Shell}
+		for _, s := range steps[:len(steps)-1] {
+			if s.Run != "" {
+				d.Build = append(d.Build, BuildStep{Env: s.Env, Script: s.Run, Shell: s.Shell})
+			}
+		}
+		return d, nil
 	case "gitlab":
 		var wf struct {
 			Deploy struct {
@@ -80,6 +97,9 @@ func Extract(provider, content string) (Deploy, error) {
 			if v.Expand != nil && !*v.Expand {
 				d.NoExpand[k] = true
 			}
+		}
+		for _, line := range wf.Deploy.Script[:len(wf.Deploy.Script)-1] {
+			d.Build = append(d.Build, BuildStep{Env: d.Env, Script: line})
 		}
 		return d, nil
 	}
@@ -145,3 +165,45 @@ func Run(d Deploy, workdir string, served string, extra map[string]string) (Resu
 }
 
 func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// RunBuild executes the shell steps that precede the deploy step, in order,
+// with /bin/sh in workdir — a minimal environment (PATH, HOME, the step env,
+// extra) plus the host's Go toolchain and caches, so a Go build step really
+// compiles offline. It stops at the first failing step and returns the combined
+// output of all steps run.
+func RunBuild(d Deploy, workdir string, extra map[string]string) (string, error) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		return "", fmt.Errorf("the go toolchain is needed to run a Go build step: %w", err)
+	}
+	var out bytes.Buffer
+	for i, step := range d.Build {
+		env := []string{
+			"PATH=" + filepath.Dir(goBin) + ":/usr/bin:/bin", "HOME=" + workdir, "GOTOOLCHAIN=local",
+			"GOFLAGS=-buildvcs=false", "GOPROXY=off",
+		}
+		if b, err := exec.Command(goBin, "env", "GOCACHE", "GOMODCACHE").Output(); err == nil {
+			if lines := strings.Split(strings.TrimSpace(string(b)), "\n"); len(lines) == 2 {
+				env = append(env, "GOCACHE="+lines[0], "GOMODCACHE="+lines[1])
+			}
+		}
+		for k, v := range step.Env {
+			env = append(env, k+"="+v)
+		}
+		for k, v := range extra {
+			env = append(env, k+"="+v)
+		}
+		args := []string{"-c", step.Script}
+		if step.Shell == "sh" { // GitHub `shell: sh` runs `sh -e {0}`
+			args = []string{"-e", "-c", step.Script}
+		}
+		cmd := exec.Command("/bin/sh", args...)
+		cmd.Dir = workdir
+		cmd.Env = env
+		cmd.Stdout, cmd.Stderr = &out, &out
+		if err := cmd.Run(); err != nil {
+			return out.String(), fmt.Errorf("build step %d failed: %w", i+1, err)
+		}
+	}
+	return out.String(), nil
+}
