@@ -23,6 +23,9 @@ func validParams(runtime string) WorkflowParams {
 	if runtime == "static" {
 		p.StartCommand = ""
 	}
+	if runtime == "python" {
+		p.PythonManifest = PythonRequirements
+	}
 	return p
 }
 
@@ -307,5 +310,95 @@ func TestAppSlugFromHatchToml(t *testing.T) {
 	}
 	if got := AppSlugFromHatchToml(t.TempDir()); got != "" {
 		t.Errorf("absent file: got %q", got)
+	}
+}
+
+// h-8tvak.5: the python build installs from the manifest the project has. A
+// pyproject.toml-only project must not be sent to `pip install -r
+// requirements.txt`; the generated build steps are run against a fake pip that
+// fails like pip does on a missing file, in a project holding only that manifest.
+func TestWorkflow_PythonInstallFollowsManifest(t *testing.T) {
+	cases := []struct {
+		name         string
+		manifest     string            // WorkflowParams.PythonManifest
+		files        map[string]string // what the checked-out project contains
+		wantInstalls []string
+		wantNoText   string // must not appear anywhere in the workflow
+	}{
+		{"requirements.txt only", PythonRequirements, map[string]string{"requirements.txt": "flask\n"}, []string{"-r requirements.txt"}, "pip install ."},
+		{"pyproject.toml only", PythonPyproject, map[string]string{"pyproject.toml": "[project]\nname = \"x\"\n"}, []string{"."}, "requirements.txt"},
+		{"both: requirements.txt wins", PythonRequirements, map[string]string{"requirements.txt": "flask\n", "pyproject.toml": "[project]\nname = \"x\"\n"}, []string{"-r requirements.txt"}, "pip install ."},
+	}
+	for _, provider := range []string{"github", "gitlab"} {
+		for _, tc := range cases {
+			t.Run(provider+"/"+tc.name, func(t *testing.T) {
+				p := validParams("python")
+				p.PythonManifest = tc.manifest
+				wf, err := RenderWorkflow(provider, p)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(wf.Content, tc.wantNoText) {
+					t.Errorf("workflow must not contain %q:\n%s", tc.wantNoText, wf.Content)
+				}
+				cmds, err := workflowtest.BuildCommands(provider, wf.Content)
+				if err != nil {
+					t.Fatalf("%v\n%s", err, wf.Content)
+				}
+				project := t.TempDir()
+				for name, content := range tc.files {
+					if err := os.WriteFile(filepath.Join(project, name), []byte(content), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				installs, out, err := workflowtest.RunBuild(cmds, project)
+				if err != nil {
+					t.Fatalf("build step failed in a project holding %v: %v\n%s\n%s", tc.files, err, out, wf.Content)
+				}
+				if !reflect.DeepEqual(installs, tc.wantInstalls) {
+					t.Errorf("pip install requests = %q, want %q", installs, tc.wantInstalls)
+				}
+			})
+		}
+	}
+}
+
+// h-8tvak.5: guard the harness — the old requirements.txt-only workflow really
+// does fail in a pyproject.toml-only project, so the test above proves something.
+func TestWorkflow_PythonRequirementsStepFailsWithoutRequirementsFile(t *testing.T) {
+	wf, err := RenderWorkflow("github", validParams("python")) // requirements.txt install
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmds, err := workflowtest.BuildCommands("github", wf.Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := t.TempDir()
+	if err := os.WriteFile(filepath.Join(project, "pyproject.toml"), []byte("[project]\nname = \"x\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, out, err := workflowtest.RunBuild(cmds, project); err == nil || !strings.Contains(out, "Could not open requirements file") {
+		t.Fatalf("expected the requirements.txt install to fail in a pyproject-only project; err=%v out=%q", err, out)
+	}
+}
+
+// h-8tvak.5: a python workflow with no usable manifest is refused before it is
+// rendered, for both providers; other runtimes ignore the field.
+func TestRenderWorkflow_PythonNeedsAManifest(t *testing.T) {
+	for _, provider := range []string{"github", "gitlab"} {
+		for _, manifest := range []string{"", "Pipfile", "requirements.txt; printf injected"} {
+			p := validParams("python")
+			p.PythonManifest = manifest
+			_, err := RenderWorkflow(provider, p)
+			if err == nil || !strings.Contains(err.Error(), "no Python dependency manifest") {
+				t.Errorf("%s manifest %q: err = %v, want a refusal naming the missing manifest", provider, manifest, err)
+			}
+		}
+		p := validParams("node")
+		p.PythonManifest = "" // not python: the manifest is irrelevant
+		if _, err := RenderWorkflow(provider, p); err != nil {
+			t.Errorf("%s node: %v", provider, err)
+		}
 	}
 }

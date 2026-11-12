@@ -105,7 +105,7 @@ Generate a GitHub Actions or GitLab CI deploy workflow for review and commit (it
 hatch ci --app my-egg --deploy-target dist --start-command 'node server.js'
 ```
 
-`--app` defaults to the slug in `.hatch.toml`; `--deploy-target` is required, and `--start-command` too unless the runtime is `static`. The workflow installs a pinned CLI release (`--cli-version`, default: the running CLI's version) and checks its sha256 on the runner; actions and images are pinned to commit SHAs and digests. Parameters are written as YAML data and passed to `hatch deploy` as quoted arguments, never as shell code.
+`--app` defaults to the slug in `.hatch.toml`; `--deploy-target` is required, and `--start-command` too unless the runtime is `static`. The workflow installs a pinned CLI release (`--cli-version`, default: the running CLI's version) and checks its sha256 on the runner; actions and images are pinned to commit SHAs and digests. Parameters are written as YAML data and passed to `hatch deploy` as quoted arguments, never as shell code. For `python`, the build installs from `requirements.txt` (`pip install -r`), else from `pyproject.toml` (`pip install .`); a Python project with neither is refused before anything is written.
 
 To wire the `HATCH_TOKEN` secret, pipe a freshly minted token into the provider CLI — it reads the secret from stdin, so the token never appears in a command line or on screen:
 
