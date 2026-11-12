@@ -3,7 +3,10 @@ package ci
 import "strings"
 
 // SecretCommand builds the provider CLI command that sets the HATCH_TOKEN CI
-// secret: `gh secret set` for GitHub, `glab variable set --masked` for GitLab.
+// secret: `gh secret set` for GitHub, `glab variable set --masked --protected`
+// for GitLab. --masked only hides the value in job logs; --protected is what
+// restricts the variable to protected branches and tags, so a pipeline on an
+// unprotected branch (e.g. a contributor's own job) never receives the token.
 // The command never carries the secret value: both CLIs read it from standard
 // input when it is omitted from the arguments, so the token never appears in
 // argv (visible to other local users via the process list) nor in any printed
@@ -19,7 +22,7 @@ func SecretCommand(provider, ownerRepo string) (bin string, args []string, ok bo
 		}
 		return "gh", args, true
 	case "gitlab":
-		args = []string{"variable", "set", "HATCH_TOKEN", "--masked"}
+		args = []string{"variable", "set", "HATCH_TOKEN", "--masked", "--protected"}
 		if ownerRepo != "" {
 			args = append(args, "-R", ownerRepo)
 		}

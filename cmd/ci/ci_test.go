@@ -664,7 +664,7 @@ func TestCI_SetSecret_PipedMessageLine_IsRefused(t *testing.T) {
 func TestCI_PrintedInstruction_PipesTheToken(t *testing.T) {
 	for provider, want := range map[string]string{
 		"github": "hatch auth keys create | gh secret set HATCH_TOKEN -R acme/repo",
-		"gitlab": "hatch auth keys create | glab variable set HATCH_TOKEN --masked -R acme/repo",
+		"gitlab": "hatch auth keys create | glab variable set HATCH_TOKEN --masked --protected -R acme/repo",
 	} {
 		t.Run(provider, func(t *testing.T) {
 			restore := setMockDeps(&Deps{
@@ -683,6 +683,33 @@ func TestCI_PrintedInstruction_PipesTheToken(t *testing.T) {
 			}
 			if strings.Contains(out, "when prompted") {
 				t.Errorf("must not promise a prompt:\n%s", out)
+			}
+		})
+	}
+}
+
+// h-8tvak.3: a protected GitLab variable is only exposed to protected branches
+// and tags, and the generated job runs `only: main`. The GitLab instructions
+// must therefore say that the deploy branch has to be protected (otherwise the
+// job gets no token), and GitHub — whose secrets have no such flag — must not
+// be told anything about it.
+func TestCI_GitLabInstruction_NamesBranchProtection(t *testing.T) {
+	for provider, wantNote := range map[string]bool{"gitlab": true, "github": false} {
+		t.Run(provider, func(t *testing.T) {
+			restore := setMockDeps(&Deps{
+				GitRemote: func() (string, error) { return "git@example.com:acme/repo.git", nil },
+				Getwd:     func() (string, error) { return "", os.ErrNotExist },
+				Stat:      func(string) bool { return false },
+				WriteFile: func(string, []byte) error { return nil },
+			})
+			defer restore()
+			out, err := execCI(t, args("--provider", provider, "--runtime", "node"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			has := strings.Contains(out, "protected branch")
+			if has != wantNote {
+				t.Errorf("%s: protected-branch note present=%v, want %v in:\n%s", provider, has, wantNote, out)
 			}
 		})
 	}
