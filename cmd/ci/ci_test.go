@@ -524,29 +524,167 @@ func TestCI_CLIVersionPin(t *testing.T) {
 	}
 }
 
-// The real ReadToken reads the first line of piped stdin, trimmed.
-func TestReadTokenFromStdin_Piped(t *testing.T) {
+// pipeStdin replaces os.Stdin with a pipe pre-filled with content.
+func pipeStdin(t *testing.T, content string) func() {
+	t.Helper()
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
 	old := os.Stdin
 	os.Stdin = r
-	defer func() { os.Stdin = old }()
-	if _, err := w.WriteString("  tok-from-pipe \nignored\n"); err != nil {
+	if _, err := w.WriteString(content); err != nil {
 		t.Fatal(err)
 	}
 	w.Close()
+	return func() { os.Stdin = old; r.Close() }
+}
+
+const pipedToken = "hatch_0123456789abcdef0123456789abcdef"
+
+// The real ReadToken reads the piped token (surrounding whitespace trimmed).
+func TestReadTokenFromStdin_Piped(t *testing.T) {
+	defer pipeStdin(t, "  "+pipedToken+" \n")()
 	prompt := new(bytes.Buffer)
 	got, err := readTokenFromStdin(prompt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "tok-from-pipe" {
+	if got != pipedToken {
 		t.Errorf("got %q", got)
 	}
 	if prompt.Len() != 0 {
 		t.Errorf("no prompt expected off a terminal, got %q", prompt.String())
+	}
+}
+
+// h-db2jl B1: piped input that is not a hatch_ token (e.g. the "Created deploy
+// token …" line of an older `keys create`) is refused — never stored as the
+// secret — and the refusal does not echo what was read.
+func TestReadTokenFromStdin_RefusesANonToken(t *testing.T) {
+	const other = "some-other-secret-value"
+	defer pipeStdin(t, "Created deploy token \"ci-acme\"\n"+other+"\n")()
+	got, err := readTokenFromStdin(new(bytes.Buffer))
+	if err == nil {
+		t.Fatalf("expected a refusal, got token %q", got)
+	}
+	if got != "" {
+		t.Errorf("a refused input must yield no token, got %q", got)
+	}
+	if strings.Contains(err.Error(), other) || strings.Contains(err.Error(), "ci-acme") {
+		t.Errorf("error echoes the input: %v", err)
+	}
+	if !strings.Contains(err.Error(), "hatch_") {
+		t.Errorf("error should say what is expected: %v", err)
+	}
+}
+
+// An empty stdin is not a read error: wireSecret reports the missing token.
+func TestReadTokenFromStdin_Empty(t *testing.T) {
+	defer pipeStdin(t, "")()
+	got, err := readTokenFromStdin(new(bytes.Buffer))
+	if err != nil || got != "" {
+		t.Fatalf("got %q, %v; want \"\", nil", got, err)
+	}
+}
+
+// h-db2jl B1, end to end with the REAL stdin reader: whether the producer is the
+// fixed `keys create | …` (token alone) or an older/terminal-format output
+// (message lines around the token), --set-secret hands the provider CLI exactly
+// the token on stdin — never the "Created deploy token" line — and reports
+// success only then.
+func TestCI_SetSecret_PipedKeysCreate_StoresTheToken(t *testing.T) {
+	human := "Created deploy token \"ci-acme\"\n\n  " + pipedToken + "\n  Save this now — store it as the HATCH_TOKEN secret in your CI; it cannot be retrieved later.\n"
+	for name, input := range map[string]string{
+		"token alone (non-terminal keys create)": pipedToken + "\n",
+		"human output (older keys create)":       human,
+	} {
+		for _, provider := range []string{"github", "gitlab"} {
+			t.Run(provider+"/"+name, func(t *testing.T) {
+				defer pipeStdin(t, input)()
+				rec := &recorder{}
+				restore := setMockDeps(&Deps{
+					GitRemote: func() (string, error) { return "git@example.com:acme/repo.git", nil },
+					Getwd:     func() (string, error) { return "", os.ErrNotExist },
+					Stat:      func(string) bool { return false },
+					WriteFile: func(string, []byte) error { return nil },
+					LookPath:  func(string) bool { return true },
+					Run:       rec.run,
+					ReadToken: readTokenFromStdin,
+				})
+				defer restore()
+				out, err := execCI(t, args("--provider", provider, "--runtime", "node", "--set-secret"))
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if !rec.ran || rec.stdin != pipedToken {
+					t.Fatalf("provider CLI stdin = %q (ran=%v), want exactly the token", rec.stdin, rec.ran)
+				}
+				if strings.Contains(strings.Join(rec.args, " "), pipedToken) || strings.Contains(out, pipedToken) {
+					t.Errorf("token disclosed in argv %v or output:\n%s", rec.args, out)
+				}
+				if !strings.Contains(out, "Set the HATCH_TOKEN secret") {
+					t.Errorf("missing success message:\n%s", out)
+				}
+			})
+		}
+	}
+}
+
+// h-db2jl B1: a piped non-token line makes --set-secret FAIL (no false success,
+// provider CLI never run) instead of storing the wrong secret.
+func TestCI_SetSecret_PipedMessageLine_IsRefused(t *testing.T) {
+	defer pipeStdin(t, "Created deploy token \"ci-acme\"\n")()
+	rec := &recorder{}
+	restore := setMockDeps(&Deps{
+		GitRemote: func() (string, error) { return "git@github.com:acme/repo.git", nil },
+		Getwd:     func() (string, error) { return "", os.ErrNotExist },
+		Stat:      func(string) bool { return false },
+		WriteFile: func(string, []byte) error { return nil },
+		LookPath:  func(string) bool { return true },
+		Run:       rec.run,
+		ReadToken: readTokenFromStdin,
+	})
+	defer restore()
+	out, err := execCI(t, args("--provider", "github", "--runtime", "node", "--set-secret"))
+	if err == nil {
+		t.Fatalf("expected an error, got success:\n%s", out)
+	}
+	if rec.ran {
+		t.Error("the provider CLI must not run with a non-token value")
+	}
+	if strings.Contains(out, "Set the HATCH_TOKEN secret") {
+		t.Errorf("must not report success:\n%s", out)
+	}
+}
+
+// h-db2jl N1: the printed instruction pipes the token into the provider CLI
+// (gh and glab both read the secret from a non-terminal stdin) — no "paste it
+// when prompted", which is unverified for glab.
+func TestCI_PrintedInstruction_PipesTheToken(t *testing.T) {
+	for provider, want := range map[string]string{
+		"github": "hatch auth keys create | gh secret set HATCH_TOKEN -R acme/repo",
+		"gitlab": "hatch auth keys create | glab variable set HATCH_TOKEN --masked -R acme/repo",
+	} {
+		t.Run(provider, func(t *testing.T) {
+			restore := setMockDeps(&Deps{
+				GitRemote: func() (string, error) { return "git@example.com:acme/repo.git", nil },
+				Getwd:     func() (string, error) { return "", os.ErrNotExist },
+				Stat:      func(string) bool { return false },
+				WriteFile: func(string, []byte) error { return nil },
+			})
+			defer restore()
+			out, err := execCI(t, args("--provider", provider, "--runtime", "node"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(out, want) {
+				t.Errorf("missing %q in:\n%s", want, out)
+			}
+			if strings.Contains(out, "when prompted") {
+				t.Errorf("must not promise a prompt:\n%s", out)
+			}
+		})
 	}
 }
 

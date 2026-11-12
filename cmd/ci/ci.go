@@ -6,7 +6,6 @@
 package ci
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -116,7 +115,7 @@ func NewCmd() *cobra.Command {
 	f.StringVar(&opts.cliVersion, "cli-version", "", "Hatch CLI release the workflow installs (default: this CLI's version)")
 	f.BoolVar(&opts.printOnly, "print", false, "Print the generated workflow to stdout only (no file writes)")
 	f.BoolVar(&opts.overwrite, "yes", false, "Allow overwriting an existing CI workflow file")
-	f.BoolVar(&opts.setSecret, "set-secret", false, "Run the provider CLI (gh/glab) to set the HATCH_TOKEN secret; the token is read from stdin (masked prompt on a terminal) and passed to gh/glab on stdin, never in arguments (default: print the command only)")
+	f.BoolVar(&opts.setSecret, "set-secret", false, "Run the provider CLI (gh/glab) to set the HATCH_TOKEN secret; a hatch_ deploy token is read from stdin (masked prompt on a terminal, e.g. `hatch auth keys create | hatch ci … --set-secret`) and passed to gh/glab on stdin, never in arguments (default: print the command only)")
 	return cmd
 }
 
@@ -227,15 +226,20 @@ func wireSecret(cmd *cobra.Command, opts ciOptions, provider string) error {
 	}
 	manual := detect.SecretCommandString(provider, ownerRepo)
 
+	// The provider CLI reads the token from a non-terminal stdin, and `hatch auth
+	// keys create` writes the token alone on stdout when piped, so the pipe is the
+	// one instruction that works for both providers without the token in argv.
+	piped := "hatch auth keys create | " + manual
+
 	if !opts.setSecret {
-		fmt.Fprintln(out, "\nWire the HATCH_TOKEN secret in your CI (the command reads the token from stdin):")
-		fmt.Fprintf(out, "  %s\n", manual)
-		fmt.Fprintln(out, "  (mint the token with `hatch auth keys create` — shown once — then paste it when prompted, or re-run with --set-secret.)")
+		fmt.Fprintln(out, "\nWire the HATCH_TOKEN secret in your CI — pipe a freshly minted token (shown once) into the provider CLI, which reads it from stdin:")
+		fmt.Fprintf(out, "  %s\n", piped)
+		fmt.Fprintln(out, "  (or re-run this command with --set-secret and the token piped into it: hatch auth keys create | hatch ci … --set-secret)")
 		return nil
 	}
 
 	if !deps.LookPath(bin) {
-		fmt.Fprintf(out, "\n%s is not installed — set the secret manually in your repo settings, or run:\n  %s\n", bin, manual)
+		fmt.Fprintf(out, "\n%s is not installed — set the secret manually in your repo settings, or install it and run:\n  %s\n", bin, piped)
 		return nil
 	}
 	token, err := deps.ReadToken(cmd.ErrOrStderr())
@@ -246,7 +250,7 @@ func wireSecret(cmd *cobra.Command, opts ciOptions, provider string) error {
 		return errors.New("--set-secret needs the token value on stdin (mint with: hatch auth keys create)")
 	}
 	if err := deps.Run(strings.NewReader(token), bin, args...); err != nil {
-		fmt.Fprintf(out, "\n%s failed (is it authenticated? try `%s auth login`). Set it manually:\n  %s\n", bin, bin, manual)
+		fmt.Fprintf(out, "\n%s failed (is it authenticated? try `%s auth login`). The token read from stdin was not stored; mint a new one and pipe it:\n  %s\n", bin, bin, piped)
 		return nil
 	}
 	fmt.Fprintf(out, "\nSet the HATCH_TOKEN secret via %s.\n", bin)
@@ -254,8 +258,12 @@ func wireSecret(cmd *cobra.Command, opts ciOptions, provider string) error {
 }
 
 // readTokenFromStdin reads the token from os.Stdin: a masked prompt on a
-// terminal (nothing echoed), otherwise the first line of the piped input.
-// Surrounding whitespace is trimmed.
+// terminal (nothing echoed), otherwise the piped stream. Either way the value
+// must be a hatch_ deploy token, extracted strictly: a piped stream may carry
+// messages around the token (the human output of `hatch auth keys create`) and
+// those are ignored, but a stream without exactly one token is refused rather
+// than stored as the CI secret. Empty input returns "" with no error so
+// wireSecret reports the missing value. Errors never echo the input.
 func readTokenFromStdin(prompt io.Writer) (string, error) {
 	fd := int(os.Stdin.Fd())
 	if term.IsTerminal(fd) {
@@ -265,11 +273,10 @@ func readTokenFromStdin(prompt io.Writer) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return strings.TrimSpace(string(b)), nil
+		if strings.TrimSpace(string(b)) == "" {
+			return "", nil
+		}
+		return detect.ExtractToken(string(b))
 	}
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", err
-	}
-	return strings.TrimSpace(line), nil
+	return detect.ReadTokenFrom(os.Stdin)
 }
