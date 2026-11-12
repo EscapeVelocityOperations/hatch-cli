@@ -38,6 +38,8 @@ type Deps struct {
 	FetchRelease func(version string) (detect.CLIRelease, error)
 	// CLIVersion is the version of this binary (default --cli-version).
 	CLIVersion func() string
+	// GoMainPackages lists the main packages of the Go module in dir.
+	GoMainPackages func(dir string) ([]string, error)
 }
 
 func defaultDeps() *Deps {
@@ -68,9 +70,10 @@ func defaultDeps() *Deps {
 			c.Stdin = stdin
 			return c.Run()
 		},
-		ReadToken:    readTokenFromStdin,
-		FetchRelease: detect.FetchCLIRelease,
-		CLIVersion:   version.Version,
+		ReadToken:      readTokenFromStdin,
+		FetchRelease:   detect.FetchCLIRelease,
+		CLIVersion:     version.Version,
+		GoMainPackages: detect.FindGoMainPackages,
 	}
 }
 
@@ -82,6 +85,7 @@ type ciOptions struct {
 	runtime      string
 	deployTarget string
 	startCommand string
+	goPackage    string
 	cliVersion   string
 	printOnly    bool
 	overwrite    bool
@@ -101,7 +105,11 @@ func NewCmd() *cobra.Command {
 			"and, except for static sites, --start-command. It installs a pinned Hatch CLI release " +
 			"(--cli-version, default: this CLI's version) whose sha256 is checked on the runner, and " +
 			"sets HATCH_ACCEPT_TERMS=yes: committing it records your acceptance of https://gethatch.eu/terms " +
-			"for that pipeline.",
+			"for that pipeline.\n\n" +
+			"For the go runtime the workflow builds one main package into --deploy-target as a static " +
+			"linux/amd64 binary, named by the start command (--start-command ./server builds " +
+			"<deploy-target>/server). The package is --go-package, or the only main package of the " +
+			"checkout, or the one whose directory is named like the binary; otherwise pass --go-package.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runCI(cmd, opts)
 		},
@@ -112,6 +120,7 @@ func NewCmd() *cobra.Command {
 	f.StringVar(&opts.runtime, "runtime", "", "Runtime override (node, go, python, rust, php, bun, static)")
 	f.StringVar(&opts.deployTarget, "deploy-target", "", "Build output directory to deploy (required)")
 	f.StringVar(&opts.startCommand, "start-command", "", "Start command for the app (required unless runtime is static)")
+	f.StringVar(&opts.goPackage, "go-package", "", "Go main package to build into --deploy-target, e.g. ./cmd/server (go runtime; default: the only main package, or the one named like the start command's binary)")
 	f.StringVar(&opts.cliVersion, "cli-version", "", "Hatch CLI release the workflow installs (default: this CLI's version)")
 	f.BoolVar(&opts.printOnly, "print", false, "Print the generated workflow to stdout only (no file writes)")
 	f.BoolVar(&opts.overwrite, "yes", false, "Allow overwriting an existing CI workflow file")
@@ -167,10 +176,20 @@ func runCI(cmd *cobra.Command, opts ciOptions) error {
 		Runtime:      runtime,
 		DeployTarget: opts.deployTarget,
 		StartCommand: opts.startCommand,
+		GoPackage:    opts.goPackage,
 	}
 	// Refuse an unusable or unsafe workflow before any network call or write.
 	if err := params.ValidateInputs(); err != nil {
 		return err
+	}
+	if runtime == "go" {
+		pkg, err := resolveGoPackage(wd, wdErr, params)
+		if err != nil {
+			return err
+		}
+		params.GoPackage = pkg
+		output, _ := detect.GoBuildOutput(params) // the start command is validated
+		fmt.Fprintf(out, "  Go build:  %s -> %s (static linux/amd64)\n", pkg, output)
 	}
 
 	cliVersion := opts.cliVersion
@@ -206,6 +225,31 @@ func runCI(cmd *cobra.Command, opts ciOptions) error {
 	}
 
 	return wireSecret(cmd, opts, provider)
+}
+
+// resolveGoPackage returns the main package the go workflow builds. `go build
+// ./...` compiles everything but writes no executable, so the workflow names
+// the one package to build: --go-package (checked against the checkout's main
+// packages, since building a library would deploy a non-executable), else the
+// unambiguous main package of the checkout (h-8tvak.4).
+func resolveGoPackage(wd string, wdErr error, params detect.WorkflowParams) (string, error) {
+	if wdErr != nil {
+		if params.GoPackage != "" {
+			return params.GoPackage, nil // nothing to check it against
+		}
+		return "", fmt.Errorf("cannot find the Go main package to build without a working directory (%v): pass --go-package (for example ./cmd/server)", wdErr)
+	}
+	candidates, err := deps.GoMainPackages(wd)
+	if err != nil {
+		return "", fmt.Errorf("looking for the Go main package to build in %s: %w", wd, err)
+	}
+	if params.GoPackage != "" {
+		if err := detect.VerifyGoMainPackage(candidates, params.GoPackage); err != nil {
+			return "", err
+		}
+		return params.GoPackage, nil
+	}
+	return detect.ChooseGoMainPackage(candidates, params.StartCommand)
 }
 
 // wireSecret prints (or, under --set-secret, runs) the provider command that sets

@@ -1,8 +1,14 @@
 package deploy
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"debug/elf"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ci"
@@ -117,5 +123,123 @@ func TestRunDeploy_AppFlagOverridesHatchToml(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(tmp, ".hatch.toml")); string(b) != "[app]\nslug = \"fixture-prod\"\n" {
 		t.Errorf(".hatch.toml rewritten: %q", b)
+	}
+}
+
+// h-8tvak.4: a classic Go checkout (cmd/server + internal/example, two packages)
+// deployed through a generated workflow. `go build ./...` exits 0 on it and
+// writes no binary, so the upload used to fail on a missing deploy-target. Here
+// the generated build step really runs, then the deploy step's argv is fed to
+// the real deploy command, and the artifact that reaches the upload must hold
+// a linux/amd64 executable at the path the start command runs.
+func TestGeneratedGoWorkflow_BuildsTheBinaryTheUploadCarries(t *testing.T) {
+	for _, provider := range []string{"github", "gitlab"} {
+		t.Run(provider, func(t *testing.T) {
+			sum := workflowtest.FakeHatchSHA256()
+			wf, err := ci.RenderWorkflow(provider, ci.WorkflowParams{
+				App: "fixture-stage", Runtime: "go", DeployTarget: "dist", StartCommand: "./server",
+				GoPackage: "./cmd/server",
+				CLI:       ci.CLIRelease{Version: "v0.21.0", SHA256AMD64: sum, SHA256ARM64: sum},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			d, err := workflowtest.Extract(provider, wf.Content)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			checkout := t.TempDir()
+			for name, content := range map[string]string{
+				"go.mod":                      "module example.com/fix\n\ngo 1.22\n",
+				"internal/example/example.go": "package example\n\nfunc Name() string { return \"x\" }\n",
+				"cmd/server/main.go":          "package main\n\nimport (\n\t\"fmt\"\n\n\t\"example.com/fix/internal/example\"\n)\n\nfunc main() { fmt.Println(example.Name()) }\n",
+			} {
+				p := filepath.Join(checkout, filepath.FromSlash(name))
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(checkout, "dist")); err == nil {
+				t.Fatal("fixture already has a dist directory")
+			}
+
+			if out, err := workflowtest.RunBuild(d, checkout, nil); err != nil {
+				t.Fatalf("build step: %v\n%s", err, out)
+			}
+			res, err := workflowtest.Run(d, checkout, workflowtest.FakeHatch, nil)
+			if err != nil || res.Err != nil {
+				t.Fatalf("%v %v\n%s", err, res.Err, res.Output)
+			}
+
+			var gotSlug, gotRuntime, gotStart string
+			var artifact []byte
+			deps = &Deps{
+				GetToken: func() (string, error) { return "fake-token", nil },
+				GetCwd:   func() (string, error) { return checkout, nil },
+				NewAPIClient: newMockAPIClient(&mockAPIClient{
+					uploadArtifactFn: func(slug string, a []byte, rt, sc string) error {
+						gotSlug, gotRuntime, gotStart, artifact = slug, rt, sc, a
+						return nil
+					},
+				}),
+				Confirm: func(string) bool { t.Error("a CI deploy must not prompt"); return false },
+			}
+			t.Cleanup(func() { deps = defaultDeps(); appSlug, deployTarget, runtime, startCommand = "", "", "", "" })
+			oldDir, _ := os.Getwd()
+			if err := os.Chdir(checkout); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Chdir(oldDir) })
+
+			cmd := NewCmd()
+			cmd.SetArgs(res.Argv[1:])
+			var runErr error
+			captureOutput(func() { runErr = cmd.Execute() })
+			if runErr != nil {
+				t.Fatalf("deploy %q: %v", res.Argv[1:], runErr)
+			}
+			if gotSlug != "fixture-stage" || gotRuntime != "go" || gotStart != "./server" {
+				t.Errorf("upload got slug=%q runtime=%q start=%q", gotSlug, gotRuntime, gotStart)
+			}
+
+			// The artifact holds the binary the start command runs, linux/amd64.
+			zr, err := gzip.NewReader(bytes.NewReader(artifact))
+			if err != nil {
+				t.Fatal(err)
+			}
+			tr := tar.NewReader(zr)
+			var found bool
+			for {
+				h, err := tr.Next()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.TrimPrefix(h.Name, "./") != "server" {
+					continue
+				}
+				found = true
+				data, _ := io.ReadAll(tr)
+				f, err := elf.NewFile(bytes.NewReader(data))
+				if err != nil {
+					t.Fatalf("artifact entry %q is not an ELF binary: %v", h.Name, err)
+				}
+				if f.Machine != elf.EM_X86_64 {
+					t.Errorf("artifact binary is %v, want linux amd64", f.Machine)
+				}
+				if h.Mode&0o111 == 0 {
+					t.Errorf("artifact binary mode %o is not executable", h.Mode)
+				}
+			}
+			if !found {
+				t.Error("the uploaded artifact has no ./server: the workflow built nothing to deploy")
+			}
+		})
 	}
 }

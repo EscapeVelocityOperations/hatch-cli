@@ -107,6 +107,12 @@ hatch ci --app my-egg --deploy-target dist --start-command 'node server.js'
 
 `--app` defaults to the slug in `.hatch.toml`; `--deploy-target` is required, and `--start-command` too unless the runtime is `static`. The workflow installs a pinned CLI release (`--cli-version`, default: the running CLI's version) and checks its sha256 on the runner; actions and images are pinned to commit SHAs and digests. Parameters are written as YAML data and passed to `hatch deploy` as quoted arguments, never as shell code.
 
+For the `go` runtime the workflow builds the binary before it deploys: `go build ./...` only checks that the code compiles and writes no executable, so the workflow instead compiles **one main package** into `--deploy-target` as a static `linux/amd64` binary. The binary is named by `--start-command`, whose first word must be an explicit `./path` (`--start-command ./server` builds `<deploy-target>/server`; a wrapper such as `sh -c …` is refused because the binary can't be told from it). The package is `--go-package` (checked against the main packages found in the checkout), else the only main package, else the one whose directory is named like the binary; if that is still ambiguous, `hatch ci` stops and asks for `--go-package`.
+
+```sh
+hatch ci --app my-egg --deploy-target dist --start-command ./server --go-package ./cmd/server
+```
+
 To wire the `HATCH_TOKEN` secret, pipe a freshly minted token into the provider CLI — it reads the secret from stdin, so the token never appears in a command line or on screen:
 
 ```sh
