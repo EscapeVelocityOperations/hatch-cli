@@ -99,7 +99,9 @@ func NewCmd() *cobra.Command {
 			"commits, pushes, or writes secret values. Use --print to preview without writing.\n\n" +
 			"The workflow deploys to --app (default: the slug in .hatch.toml) and needs --deploy-target " +
 			"and, except for static sites, --start-command. It installs a pinned Hatch CLI release " +
-			"(--cli-version, default: this CLI's version) whose sha256 is checked on the runner, and " +
+			"(--cli-version, default: this CLI's version) whose sha256 is checked on the runner. " +
+			"Python builds install from requirements.txt, else from pyproject.toml (pip install .); " +
+			"a python project with neither is refused. The workflow " +
 			"sets HATCH_ACCEPT_TERMS=yes: committing it records your acceptance of https://gethatch.eu/terms " +
 			"for that pipeline.",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -167,6 +169,11 @@ func runCI(cmd *cobra.Command, opts ciOptions) error {
 		Runtime:      runtime,
 		DeployTarget: opts.deployTarget,
 		StartCommand: opts.startCommand,
+	}
+	// A python build installs from whichever manifest the project has; with no
+	// readable project directory there is none, and validation refuses (h-8tvak.5).
+	if runtime == "python" && wdErr == nil {
+		params.PythonManifest = detect.DetectPythonManifest(wd)
 	}
 	// Refuse an unusable or unsafe workflow before any network call or write.
 	if err := params.ValidateInputs(); err != nil {

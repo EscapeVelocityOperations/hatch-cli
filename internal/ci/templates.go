@@ -44,7 +44,11 @@ type WorkflowParams struct {
 	Runtime      string // one of SupportedRuntimes (required)
 	DeployTarget string // build output dir (required)
 	StartCommand string // app start command (required unless runtime is static)
-	CLI          CLIRelease
+	// PythonManifest is the dependency manifest the python build installs from:
+	// PythonRequirements or PythonPyproject (required when Runtime is python,
+	// ignored otherwise). See DetectPythonManifest (h-8tvak.5).
+	PythonManifest string
+	CLI            CLIRelease
 }
 
 // WorkflowFile is a generated CI config file: its repo-relative path + content.
@@ -63,6 +67,9 @@ var (
 func (p WorkflowParams) ValidateInputs() error {
 	if !IsSupportedRuntime(p.Runtime) {
 		return fmt.Errorf("unsupported runtime %q (use one of: %s)", p.Runtime, strings.Join(SupportedRuntimes, ", "))
+	}
+	if p.Runtime == "python" && p.PythonManifest != PythonRequirements && p.PythonManifest != PythonPyproject {
+		return fmt.Errorf("no Python dependency manifest: the workflow installs from %s or %s at the project root, and neither was found (run `hatch ci` from the project root, or add one)", PythonRequirements, PythonPyproject)
 	}
 	if p.App == "" {
 		return fmt.Errorf("no target egg: pass --app <slug> (or run from a directory whose .hatch.toml names the egg)")
@@ -209,6 +216,17 @@ const (
 	actionRust        = "dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch"
 )
 
+// pythonInstall returns the dependency-install command for the detected manifest
+// (h-8tvak.5): requirements.txt is installed with -r; a pyproject.toml-only
+// project is installed as a package (PEP 517/621), which pulls its declared
+// dependencies. Callers have validated manifest via ValidateInputs.
+func pythonInstall(manifest string) string {
+	if manifest == PythonPyproject {
+		return "pip install ."
+	}
+	return "pip install -r " + PythonRequirements
+}
+
 func renderGitHub(p WorkflowParams) string {
 	var env strings.Builder
 	env.WriteString("          HATCH_TOKEN: ${{ secrets.HATCH_TOKEN }}\n")
@@ -237,13 +255,13 @@ jobs:
         shell: sh
         env:
 %s        run: |
-%s`, actionCheckout, githubBuildSteps(p.Runtime), p.CLI.Version, env.String(), indent(deployScript(p), 10))
+%s`, actionCheckout, githubBuildSteps(p), p.CLI.Version, env.String(), indent(deployScript(p), 10))
 }
 
 // githubBuildSteps returns the runtime toolchain-setup + build steps (YAML, at
 // 6-space indent to sit under `steps:`), or "" for a static site (nothing to build).
-func githubBuildSteps(runtime string) string {
-	switch runtime {
+func githubBuildSteps(p WorkflowParams) string {
+	switch p.Runtime {
 	case "node":
 		return "      - uses: " + actionSetupNode + "\n" +
 			"        with:\n          node-version: '20'\n" +
@@ -260,7 +278,7 @@ func githubBuildSteps(runtime string) string {
 	case "python":
 		return "      - uses: " + actionSetupPython + "\n" +
 			"        with:\n          python-version: '3.12'\n" +
-			"      - run: pip install -r requirements.txt\n"
+			"      - run: " + pythonInstall(p.PythonManifest) + "\n"
 	case "rust":
 		// Pinned to a SHA, the action can no longer infer the toolchain from its ref.
 		return "      - uses: " + actionRust + "\n" +
@@ -296,7 +314,7 @@ deploy:
   variables:
 %s  script:
 %s    - |
-%s`, gitlabImage(p.Runtime), vars.String(), gitlabBuildScript(p.Runtime), indent(deployScript(p), 6))
+%s`, gitlabImage(p.Runtime), vars.String(), gitlabBuildScript(p), indent(deployScript(p), 6))
 }
 
 // gitlabImage picks a base image for the runtime's build, pinned to the
@@ -323,8 +341,8 @@ func gitlabImage(runtime string) string {
 
 // gitlabBuildScript returns the build script lines (4-space indent under `script:`),
 // or "" for a static site.
-func gitlabBuildScript(runtime string) string {
-	switch runtime {
+func gitlabBuildScript(p WorkflowParams) string {
+	switch p.Runtime {
 	case "node":
 		return "    - npm ci\n    - npm run build --if-present\n"
 	case "bun":
@@ -332,7 +350,7 @@ func gitlabBuildScript(runtime string) string {
 	case "go":
 		return "    - go build ./...\n"
 	case "python":
-		return "    - pip install -r requirements.txt\n"
+		return "    - " + pythonInstall(p.PythonManifest) + "\n"
 	case "rust":
 		return "    - cargo build --release\n"
 	case "php":

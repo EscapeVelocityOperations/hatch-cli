@@ -144,4 +144,92 @@ func Run(d Deploy, workdir string, served string, extra map[string]string) (Resu
 	return res, nil
 }
 
+// FakePip is the `pip` the build-step runner puts on PATH. It records each
+// install request in $HATCH_FAKE_PIP_LOG and fails the way real pip does when
+// the file or project it is asked to install from is missing.
+const FakePip = `#!/bin/sh
+[ "$1" = install ] || { echo "fake pip: unexpected command: $*" >&2; exit 2; }
+shift
+printf '%s\n' "$*" >> "$HATCH_FAKE_PIP_LOG"
+case "$1" in
+  -r) [ -f "$2" ] || { echo "ERROR: Could not open requirements file: [Errno 2] No such file or directory: '$2'" >&2; exit 1; } ;;
+  .) [ -f pyproject.toml ] || [ -f setup.py ] || { echo "ERROR: Directory '.' is not installable. Neither 'setup.py' nor 'pyproject.toml' found." >&2; exit 1; } ;;
+  *) echo "fake pip: unexpected install target: $*" >&2; exit 2 ;;
+esac
+`
+
+// BuildCommands returns the shell commands of a generated workflow that run
+// before the deploy step: GitHub `run:` steps and GitLab script lines, in order.
+func BuildCommands(provider, content string) ([]string, error) {
+	switch provider {
+	case "github":
+		var wf struct {
+			Jobs map[string]struct {
+				Steps []struct {
+					Run string `yaml:"run"`
+				} `yaml:"steps"`
+			} `yaml:"jobs"`
+		}
+		if err := yaml.Unmarshal([]byte(content), &wf); err != nil {
+			return nil, fmt.Errorf("github workflow is not valid YAML: %w", err)
+		}
+		steps := wf.Jobs["deploy"].Steps
+		if len(steps) == 0 {
+			return nil, fmt.Errorf("github workflow has no deploy steps")
+		}
+		var cmds []string
+		for _, st := range steps[:len(steps)-1] { // the last step is the deploy
+			if st.Run != "" {
+				cmds = append(cmds, st.Run)
+			}
+		}
+		return cmds, nil
+	case "gitlab":
+		var wf struct {
+			Deploy struct {
+				Script []string `yaml:"script"`
+			} `yaml:"deploy"`
+		}
+		if err := yaml.Unmarshal([]byte(content), &wf); err != nil {
+			return nil, fmt.Errorf("gitlab workflow is not valid YAML: %w", err)
+		}
+		if len(wf.Deploy.Script) == 0 {
+			return nil, fmt.Errorf("gitlab job has no script")
+		}
+		return wf.Deploy.Script[:len(wf.Deploy.Script)-1], nil // the last line is the deploy
+	}
+	return nil, fmt.Errorf("unknown provider %q", provider)
+}
+
+// RunBuild runs build commands one by one with /bin/sh -e in workdir (the
+// checked-out project), with FakePip as `pip`, stopping at the first failure.
+// It returns the pip install requests seen (one "args" string each), the
+// combined output, and the first command error, if any.
+func RunBuild(cmds []string, workdir string) (installs []string, output string, err error) {
+	stubDir, mkErr := os.MkdirTemp("", "hatch-wf-pip")
+	if mkErr != nil {
+		return nil, "", mkErr
+	}
+	defer os.RemoveAll(stubDir)
+	logFile := filepath.Join(stubDir, "pip.log")
+	if wErr := os.WriteFile(filepath.Join(stubDir, "pip"), []byte(FakePip), 0o755); wErr != nil {
+		return nil, "", wErr
+	}
+	var out bytes.Buffer
+	for _, c := range cmds {
+		cmd := exec.Command("/bin/sh", "-e", "-c", c)
+		cmd.Dir = workdir
+		cmd.Env = []string{"PATH=" + stubDir + ":/usr/bin:/bin", "HOME=" + workdir, "HATCH_FAKE_PIP_LOG=" + logFile}
+		cmd.Stdout, cmd.Stderr = &out, &out
+		if runErr := cmd.Run(); runErr != nil {
+			err = fmt.Errorf("build command %q failed: %w", c, runErr)
+			break
+		}
+	}
+	if b, rErr := os.ReadFile(logFile); rErr == nil {
+		installs = strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+	}
+	return installs, out.String(), err
+}
+
 func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
