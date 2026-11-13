@@ -220,3 +220,92 @@ func TestShouldExclude_LastPatternWins(t *testing.T) {
 		t.Error("expected app.log to be excluded (last pattern wins)")
 	}
 }
+
+func TestDefaultMatcher_ExcludesNestedEnvFiles(t *testing.T) {
+	m := DefaultMatcher()
+	for _, rel := range []string{
+		"app/.env",
+		"app/.env.local",
+		"a/b/c/.env.production",
+		"backend/.env.staging",
+		".env.prod",
+	} {
+		if !m.ShouldExclude(rel, false) {
+			t.Errorf("expected %s to be excluded", rel)
+		}
+	}
+}
+
+func TestDefaultMatcher_AllowsEnvTemplates(t *testing.T) {
+	m := DefaultMatcher()
+	for _, rel := range []string{
+		".env.example",
+		".env.sample",
+		"app/.env.example",
+		"app/.env.sample",
+	} {
+		if m.ShouldExclude(rel, false) {
+			t.Errorf("expected %s to be kept: it is a template without secrets", rel)
+		}
+	}
+}
+
+func TestDefaultMatcher_EnvDirIsNotAnEnvFile(t *testing.T) {
+	// A directory called ".env" (Python virtualenv convention) is not a
+	// secrets file but must stay out of the artifact too: it holds a whole
+	// interpreter tree, and leaving it in leaks the same secrets via
+	// activate scripts. Exclusion applies to dirs as well as files.
+	m := DefaultMatcher()
+	if !m.ShouldExclude(".env", true) {
+		t.Error("expected .env directory to be excluded")
+	}
+}
+
+func TestEnvNegations_ReportsReincludedEnvPatterns(t *testing.T) {
+	tmp := t.TempDir()
+	content := "# comment\n!.env\n!app/.env.production\n!.env.*\n!.env*\n!dist/\n!.env.example\n!keep.js\n"
+	path := filepath.Join(tmp, ".hatchignore")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := m.EnvNegations()
+	want := []string{"!.env", "!app/.env.production", "!.env.*", "!.env*"}
+	if len(got) != len(want) {
+		t.Fatalf("EnvNegations() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("EnvNegations()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestEnvNegations_NoneForDefaultMatcher(t *testing.T) {
+	if got := DefaultMatcher().EnvNegations(); len(got) != 0 {
+		t.Errorf("EnvNegations() = %v, want none", got)
+	}
+}
+
+func TestIsSensitiveEnvName(t *testing.T) {
+	for name, want := range map[string]bool{
+		".env":            true,
+		".env.local":      true,
+		".env.production": true,
+		".env.example":    false,
+		".env.sample":     false,
+		".envrc":          false,
+		"env":             false,
+		"app.env":         false,
+		"server.js":       false,
+	} {
+		if got := IsSensitiveEnvName(name); got != want {
+			t.Errorf("IsSensitiveEnvName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}

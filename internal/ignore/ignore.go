@@ -3,6 +3,7 @@ package ignore
 import (
 	"bufio"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -10,6 +11,8 @@ import (
 // Matcher evaluates file paths against .hatchignore patterns.
 type Matcher struct {
 	patterns []pattern
+	// envNegations lists .hatchignore lines that try to re-include an env file.
+	envNegations []string
 }
 
 type pattern struct {
@@ -20,12 +23,33 @@ type pattern struct {
 }
 
 // defaultPatterns are always applied and cannot be overridden by negation.
+// Env files (.env, .env.*) are handled by IsSensitiveEnvName instead of a
+// glob, because .env.example and .env.sample are kept (h-vma4h).
 var defaultPatterns = []string{
 	".git/",
-	".env",
-	".env.*",
 	".DS_Store",
 	".hatch.toml",
+}
+
+// envTemplateNames are .env.* files that hold no secrets and ship normally.
+var envTemplateNames = map[string]bool{
+	".env.example": true,
+	".env.sample":  true,
+}
+
+// envProbeNames are representative sensitive names used to tell whether a
+// negation pattern would re-include an env file.
+var envProbeNames = []string{".env", ".env.local", ".env.production"}
+
+// IsSensitiveEnvName reports whether a base name is an env file that may hold
+// secrets: ".env" or ".env.<suffix>", except the .env.example / .env.sample
+// templates. It never ships in an artifact, at any depth (h-vma4h: a real
+// app/.env reached the registry).
+func IsSensitiveEnvName(name string) bool {
+	if envTemplateNames[name] {
+		return false
+	}
+	return name == ".env" || strings.HasPrefix(name, ".env.")
 }
 
 // LoadFile parses a .hatchignore file and returns a Matcher.
@@ -44,9 +68,33 @@ func LoadFile(path string) (*Matcher, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		m.patterns = append(m.patterns, parsePattern(line))
+		p := parsePattern(line)
+		if p.negate && negatesEnvFile(p) {
+			m.envNegations = append(m.envNegations, line)
+		}
+		m.patterns = append(m.patterns, p)
 	}
 	return m, scanner.Err()
+}
+
+// EnvNegations returns the .hatchignore lines that try to re-include an env
+// file (for example "!.env" or "!app/.env.*"). Safety defaults cannot be
+// negated, so callers refuse the deploy instead of ignoring the line silently.
+func (m *Matcher) EnvNegations() []string {
+	return m.envNegations
+}
+
+// negatesEnvFile reports whether a negated pattern would match a sensitive env
+// file name. Only the last path element is compared: the safety default
+// applies at every depth.
+func negatesEnvFile(p pattern) bool {
+	base := path.Base(p.glob)
+	for _, probe := range envProbeNames {
+		if matched, _ := filepath.Match(base, probe); matched {
+			return true
+		}
+	}
+	return false
 }
 
 // DefaultMatcher returns a Matcher with only built-in safety defaults.
@@ -80,10 +128,13 @@ func parsePattern(raw string) pattern {
 }
 
 // ShouldExclude returns true if the given relative path should be excluded.
-// Safety defaults (.git, .env, etc.) always apply and cannot be negated.
+// Safety defaults (.git, .env, .env.*, etc.) always apply and cannot be negated.
 func (m *Matcher) ShouldExclude(rel string, isDir bool) bool {
 	// Safety defaults are enforced unconditionally
 	name := filepath.Base(rel)
+	if IsSensitiveEnvName(name) {
+		return true
+	}
 	for _, raw := range defaultPatterns {
 		p := parsePattern(raw)
 		if p.dirOnly && !isDir {

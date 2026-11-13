@@ -167,7 +167,7 @@ Non-interactive use (CI):
 Artifact filtering:
   Create a .hatchignore file in your deploy target to control which files
   are excluded from the artifact (gitignore-style syntax). Safety defaults
-  (.git, .env, .DS_Store) are always applied.
+  (.git, .env, .env.*, .DS_Store) are always applied.
 
   Generate a starter file:  hatch init-ignore [--runtime <rt>]
 
