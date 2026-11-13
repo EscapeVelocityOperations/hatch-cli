@@ -309,3 +309,83 @@ func TestIsSensitiveEnvName(t *testing.T) {
 		}
 	}
 }
+
+// h-71gza F2: only a pattern that explicitly targets an env file counts as a
+// re-include. Globs that merely could match one (!*, !*.local, !dist/**) are
+// ordinary negations: the safety default keeps env files out silently.
+func TestEnvNegations_NoFalsePositivesOnGenericGlobs(t *testing.T) {
+	for _, line := range []string{
+		"!public/*",
+		"!dist/**",
+		"!*",
+		"!*.local",
+		"!static/assets/*",
+		"!**/*",
+		"!app/",
+		"!.envrc",
+		"!.env.example",
+		"!.env.sample",
+		"!config/.env.example",
+		"!environment.js",
+	} {
+		tmp := t.TempDir()
+		path := filepath.Join(tmp, ".hatchignore")
+		if err := os.WriteFile(path, []byte(line+"\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		m, err := LoadFile(path)
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", line, err)
+		}
+		if got := m.EnvNegations(); len(got) != 0 {
+			t.Errorf("EnvNegations() for %q = %v, want none", line, got)
+		}
+	}
+}
+
+func TestEnvNegations_ReportsExplicitEnvTargets(t *testing.T) {
+	for _, line := range []string{
+		"!.env",
+		"!.env.local",
+		"!.env.production",
+		"!.env.staging",
+		"!.env.*",
+		"!.env*",
+		"!app/.env",
+		"!app/.env.*",
+		"!**/.env",
+		"!**/.env.local",
+		"!a/b/.env.staging",
+	} {
+		tmp := t.TempDir()
+		path := filepath.Join(tmp, ".hatchignore")
+		if err := os.WriteFile(path, []byte(line+"\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		m, err := LoadFile(path)
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", line, err)
+		}
+		if got := m.EnvNegations(); len(got) != 1 || got[0] != line {
+			t.Errorf("EnvNegations() for %q = %v, want [%q]", line, got, line)
+		}
+	}
+}
+
+// A generic negation must not re-include env files: the default still wins.
+func TestShouldExclude_GenericNegationDoesNotReincludeEnv(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, ".hatchignore")
+	if err := os.WriteFile(path, []byte("!*\n!dist/**\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{".env", "app/.env", "dist/.env.local"} {
+		if !m.ShouldExclude(rel, false) {
+			t.Errorf("ShouldExclude(%q) = false, want true", rel)
+		}
+	}
+}

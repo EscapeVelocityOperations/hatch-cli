@@ -1916,6 +1916,149 @@ func TestCreateMCPTarGz_SkipsUnixSocketEntries(t *testing.T) {
 	}
 }
 
+// h-71gza F1: deploy_app artifacts never carry env files or .git, at any depth.
+func tarNames(t *testing.T, artifact []byte) []string {
+	t.Helper()
+	gzr, err := gzip.NewReader(bytes.NewReader(artifact))
+	if err != nil {
+		t.Fatalf("gzip reader: %v", err)
+	}
+	defer gzr.Close()
+	tr := tar.NewReader(gzr)
+	var names []string
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("reading tar: %v", err)
+		}
+		names = append(names, strings.TrimSuffix(hdr.Name, "/"))
+	}
+	return names
+}
+
+func writeTree(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	for rel, content := range files {
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestCreateMCPTarGz_ExcludesEnvFilesAtAnyDepth(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{
+		"index.js":            "ok",
+		".env":                "SECRET=1",
+		".env.local":          "SECRET=2",
+		"app/.env":            "SECRET=3",
+		"app/.env.production": "SECRET=4",
+		"a/b/.env.staging":    "SECRET=5",
+		".git/config":         "[core]",
+		".env.example":        "SECRET=",
+		"app/.env.sample":     "SECRET=",
+	})
+
+	artifact, err := createMCPTarGz(dir)
+	if err != nil {
+		t.Fatalf("createMCPTarGz: %v", err)
+	}
+	have := map[string]bool{}
+	for _, n := range tarNames(t, artifact) {
+		have[n] = true
+	}
+	for _, leaked := range []string{".env", ".env.local", "app/.env", "app/.env.production", "a/b/.env.staging", ".git", ".git/config"} {
+		if have[leaked] {
+			t.Errorf("artifact leaks %q", leaked)
+		}
+	}
+	for _, kept := range []string{"index.js", ".env.example", "app/.env.sample"} {
+		if !have[kept] {
+			t.Errorf("artifact is missing %q", kept)
+		}
+	}
+}
+
+func TestCreateMCPTarGz_HonorsHatchignore(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{
+		".hatchignore":            "node_modules/\n*.md\n",
+		"index.js":                "ok",
+		"README.md":               "docs",
+		"node_modules/x/index.js": "dep",
+	})
+
+	artifact, err := createMCPTarGz(dir)
+	if err != nil {
+		t.Fatalf("createMCPTarGz: %v", err)
+	}
+	for _, n := range tarNames(t, artifact) {
+		if n == "README.md" || strings.HasPrefix(n, "node_modules") {
+			t.Errorf("artifact ignores .hatchignore, contains %q", n)
+		}
+	}
+}
+
+func TestCreateMCPTarGz_RefusesEnvNegation(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{
+		".hatchignore": "!.env\n",
+		"index.js":     "ok",
+		".env":         "SECRET=1",
+	})
+
+	artifact, err := createMCPTarGz(dir)
+	if err == nil {
+		t.Fatalf("expected refusal, got artifact of %d bytes", len(artifact))
+	}
+	if !strings.Contains(err.Error(), "!.env") || !strings.Contains(err.Error(), "never sent") {
+		t.Errorf("error should name the negation and say env files are never sent: %v", err)
+	}
+}
+
+func TestCreateMCPTarGz_GenericNegationDoesNotRefuse(t *testing.T) {
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{
+		".hatchignore": "!public/*\n!dist/**\n",
+		"index.js":     "ok",
+		".env":         "SECRET=1",
+		"app/.env":     "SECRET=2",
+	})
+
+	artifact, err := createMCPTarGz(dir)
+	if err != nil {
+		t.Fatalf("generic negations must not refuse the deploy: %v", err)
+	}
+	for _, n := range tarNames(t, artifact) {
+		if n == ".env" || n == "app/.env" {
+			t.Errorf("artifact leaks %q", n)
+		}
+	}
+}
+
+func TestDeployAppHandler_RefusesEnvNegationBeforeAuth(t *testing.T) {
+	saveAndRestore(t)
+	setNoAuth()
+	dir := t.TempDir()
+	writeTree(t, dir, map[string]string{
+		".hatchignore": "!app/.env.*\n",
+		"index.js":     "ok",
+	})
+
+	result, err := deployAppHandler(context.Background(), makeReq(map[string]interface{}{
+		"deploy_target": dir,
+		"runtime":       "static",
+	}))
+	assertError(t, result, err, "never sent")
+}
+
 // --- skill resource ---
 
 func TestSkillResourceHandler(t *testing.T) {

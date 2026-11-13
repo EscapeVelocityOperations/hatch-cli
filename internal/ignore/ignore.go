@@ -38,8 +38,11 @@ var envTemplateNames = map[string]bool{
 }
 
 // envProbeNames are representative sensitive names used to tell whether a
-// negation pattern would re-include an env file.
-var envProbeNames = []string{".env", ".env.local", ".env.production"}
+// glob that starts with ".env" (for example ".env*" or ".env.stag*") would
+// re-include an env file.
+var envProbeNames = []string{
+	".env", ".env.local", ".env.production", ".env.staging", ".env.development", ".env.test",
+}
 
 // IsSensitiveEnvName reports whether a base name is an env file that may hold
 // secrets: ".env" or ".env.<suffix>", except the .env.example / .env.sample
@@ -84,11 +87,21 @@ func (m *Matcher) EnvNegations() []string {
 	return m.envNegations
 }
 
-// negatesEnvFile reports whether a negated pattern would match a sensitive env
-// file name. Only the last path element is compared: the safety default
-// applies at every depth.
+// negatesEnvFile reports whether a negated pattern explicitly targets a
+// sensitive env file. Only the last path element is looked at (the safety
+// default applies at every depth), and it must start with the literal ".env":
+// generic globs such as "!*", "!*.local", "!public/*" or "!dist/**" could match
+// an env file in theory, but they do not aim at one, so they are not reported
+// (the default still keeps env files out). h-71gza: reporting them refused
+// .hatchignore files that deployed fine before.
 func negatesEnvFile(p pattern) bool {
 	base := path.Base(p.glob)
+	if !strings.HasPrefix(base, ".env") {
+		return false
+	}
+	if !strings.ContainsAny(base, "*?[") {
+		return IsSensitiveEnvName(base)
+	}
 	for _, probe := range envProbeNames {
 		if matched, _ := filepath.Match(base, probe); matched {
 			return true
