@@ -220,3 +220,172 @@ func TestShouldExclude_LastPatternWins(t *testing.T) {
 		t.Error("expected app.log to be excluded (last pattern wins)")
 	}
 }
+
+func TestDefaultMatcher_ExcludesNestedEnvFiles(t *testing.T) {
+	m := DefaultMatcher()
+	for _, rel := range []string{
+		"app/.env",
+		"app/.env.local",
+		"a/b/c/.env.production",
+		"backend/.env.staging",
+		".env.prod",
+	} {
+		if !m.ShouldExclude(rel, false) {
+			t.Errorf("expected %s to be excluded", rel)
+		}
+	}
+}
+
+func TestDefaultMatcher_AllowsEnvTemplates(t *testing.T) {
+	m := DefaultMatcher()
+	for _, rel := range []string{
+		".env.example",
+		".env.sample",
+		"app/.env.example",
+		"app/.env.sample",
+	} {
+		if m.ShouldExclude(rel, false) {
+			t.Errorf("expected %s to be kept: it is a template without secrets", rel)
+		}
+	}
+}
+
+func TestDefaultMatcher_EnvDirIsNotAnEnvFile(t *testing.T) {
+	// A directory called ".env" (Python virtualenv convention) is not a
+	// secrets file but must stay out of the artifact too: it holds a whole
+	// interpreter tree, and leaving it in leaks the same secrets via
+	// activate scripts. Exclusion applies to dirs as well as files.
+	m := DefaultMatcher()
+	if !m.ShouldExclude(".env", true) {
+		t.Error("expected .env directory to be excluded")
+	}
+}
+
+func TestEnvNegations_ReportsReincludedEnvPatterns(t *testing.T) {
+	tmp := t.TempDir()
+	content := "# comment\n!.env\n!app/.env.production\n!.env.*\n!.env*\n!dist/\n!.env.example\n!keep.js\n"
+	path := filepath.Join(tmp, ".hatchignore")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := m.EnvNegations()
+	want := []string{"!.env", "!app/.env.production", "!.env.*", "!.env*"}
+	if len(got) != len(want) {
+		t.Fatalf("EnvNegations() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("EnvNegations()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestEnvNegations_NoneForDefaultMatcher(t *testing.T) {
+	if got := DefaultMatcher().EnvNegations(); len(got) != 0 {
+		t.Errorf("EnvNegations() = %v, want none", got)
+	}
+}
+
+func TestIsSensitiveEnvName(t *testing.T) {
+	for name, want := range map[string]bool{
+		".env":            true,
+		".env.local":      true,
+		".env.production": true,
+		".env.example":    false,
+		".env.sample":     false,
+		".envrc":          false,
+		"env":             false,
+		"app.env":         false,
+		"server.js":       false,
+	} {
+		if got := IsSensitiveEnvName(name); got != want {
+			t.Errorf("IsSensitiveEnvName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// h-71gza F2: only a pattern that explicitly targets an env file counts as a
+// re-include. Globs that merely could match one (!*, !*.local, !dist/**) are
+// ordinary negations: the safety default keeps env files out silently.
+func TestEnvNegations_NoFalsePositivesOnGenericGlobs(t *testing.T) {
+	for _, line := range []string{
+		"!public/*",
+		"!dist/**",
+		"!*",
+		"!*.local",
+		"!static/assets/*",
+		"!**/*",
+		"!app/",
+		"!.envrc",
+		"!.env.example",
+		"!.env.sample",
+		"!config/.env.example",
+		"!environment.js",
+	} {
+		tmp := t.TempDir()
+		path := filepath.Join(tmp, ".hatchignore")
+		if err := os.WriteFile(path, []byte(line+"\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		m, err := LoadFile(path)
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", line, err)
+		}
+		if got := m.EnvNegations(); len(got) != 0 {
+			t.Errorf("EnvNegations() for %q = %v, want none", line, got)
+		}
+	}
+}
+
+func TestEnvNegations_ReportsExplicitEnvTargets(t *testing.T) {
+	for _, line := range []string{
+		"!.env",
+		"!.env.local",
+		"!.env.production",
+		"!.env.staging",
+		"!.env.*",
+		"!.env*",
+		"!app/.env",
+		"!app/.env.*",
+		"!**/.env",
+		"!**/.env.local",
+		"!a/b/.env.staging",
+	} {
+		tmp := t.TempDir()
+		path := filepath.Join(tmp, ".hatchignore")
+		if err := os.WriteFile(path, []byte(line+"\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		m, err := LoadFile(path)
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", line, err)
+		}
+		if got := m.EnvNegations(); len(got) != 1 || got[0] != line {
+			t.Errorf("EnvNegations() for %q = %v, want [%q]", line, got, line)
+		}
+	}
+}
+
+// A generic negation must not re-include env files: the default still wins.
+func TestShouldExclude_GenericNegationDoesNotReincludeEnv(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, ".hatchignore")
+	if err := os.WriteFile(path, []byte("!*\n!dist/**\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	m, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{".env", "app/.env", "dist/.env.local"} {
+		if !m.ShouldExclude(rel, false) {
+			t.Errorf("ShouldExclude(%q) = false, want true", rel)
+		}
+	}
+}

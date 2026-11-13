@@ -18,6 +18,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/deploywait"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/ignore"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/telemetry"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/version"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -559,10 +560,11 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	}
 
 	// Read and tar the directory
-	artifact, err := createMCPTarGz(deployTarget)
+	artifact, excluded, err := createMCPTarGzFiltered(deployTarget)
 	if err != nil {
 		return toolError("failed to deploy app: creating artifact: %v", err)
 	}
+	envNote := envExcludedNote(excluded)
 
 	// Auth
 	client, err := newClient()
@@ -602,7 +604,7 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 
 	appURL := fmt.Sprintf("https://%s.nest.gethatch.eu", slug)
 	if !req.GetBool("wait", true) {
-		return mcp.NewToolResultText(fmt.Sprintf("Deploy started (not waiting).\nApp: %s\nURL: %s\nRuntime: %s\nApp resolved from: %s\nCheck progress with get_app_details.", slug, appURL, rt, res.Provenance)), nil
+		return mcp.NewToolResultText(fmt.Sprintf("Deploy started (not waiting).\nApp: %s\nURL: %s\nRuntime: %s\nApp resolved from: %s\nCheck progress with get_app_details.%s", slug, appURL, rt, res.Provenance, envNote)), nil
 	}
 
 	// The upload only starts the rollout: wait for a terminal app status.
@@ -610,16 +612,61 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	if err != nil {
 		return toolError("failed to deploy app: %v. Use get_logs or get_build_logs for %s", err, slug)
 	}
-	return mcp.NewToolResultText(fmt.Sprintf("Deployed successfully!\nApp: %s\nURL: %s\nRuntime: %s\nStatus: %s\nApp resolved from: %s", slug, appURL, rt, app.Status, res.Provenance)), nil
+	return mcp.NewToolResultText(fmt.Sprintf("Deployed successfully!\nApp: %s\nURL: %s\nRuntime: %s\nStatus: %s\nApp resolved from: %s%s", slug, appURL, rt, app.Status, res.Provenance, envNote)), nil
+}
+
+// envExcludedNote tells the agent which env files were left out of the artifact
+// (h-71gza: the MCP path used to ship them). Empty when there were none.
+func envExcludedNote(excluded []string) string {
+	var envFiles []string
+	for _, e := range excluded {
+		if strings.HasSuffix(e, "/") {
+			continue
+		}
+		if ignore.IsSensitiveEnvName(filepath.Base(e)) {
+			envFiles = append(envFiles, e)
+		}
+	}
+	if len(envFiles) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\nWarning: env files are never sent in an artifact and were left out: %s. Set the variables on the app with set_env.", strings.Join(envFiles, ", "))
 }
 
 // createMCPTarGz creates a tar.gz from a directory for MCP deploy_app tool.
 func createMCPTarGz(dir string) ([]byte, error) {
+	artifact, _, err := createMCPTarGzFiltered(dir)
+	return artifact, err
+}
+
+// createMCPTarGzFiltered is createMCPTarGz plus the list of excluded entries.
+// It applies the same filter as `hatch deploy` (.hatchignore, and the safety
+// defaults that .hatchignore cannot negate: .git, .DS_Store, .hatch.toml and
+// env files .env / .env.* at any depth except .env.example / .env.sample).
+// A .hatchignore line that explicitly re-includes an env file is refused
+// (h-71gza F1: deploy_app shipped .env, app/.env and .git/config).
+func createMCPTarGzFiltered(dir string) ([]byte, []string, error) {
+	matcher, err := ignore.LoadFile(filepath.Join(dir, ".hatchignore"))
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return nil, nil, fmt.Errorf("reading .hatchignore: %w", err)
+		}
+		matcher = ignore.DefaultMatcher()
+	}
+	if negations := matcher.EnvNegations(); len(negations) > 0 {
+		return nil, nil, fmt.Errorf(".hatchignore re-includes env files (%s), but env files are never sent in an artifact: "+
+			"they hold secrets and artifacts end up in the image registry. "+
+			"Remove those lines from .hatchignore and set the variables on the app with set_env. "+
+			"Keep a template as .env.example or .env.sample, which are sent",
+			strings.Join(negations, ", "))
+	}
+
+	var excluded []string
 	var buf bytes.Buffer
 	gzw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gzw)
 
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -629,6 +676,15 @@ func createMCPTarGz(dir string) ([]byte, error) {
 			return err
 		}
 		if rel == "." {
+			return nil
+		}
+
+		if matcher.ShouldExclude(rel, info.IsDir()) {
+			if info.IsDir() {
+				excluded = append(excluded, rel+"/")
+				return filepath.SkipDir
+			}
+			excluded = append(excluded, rel)
 			return nil
 		}
 
@@ -674,20 +730,20 @@ func createMCPTarGz(dir string) ([]byte, error) {
 	})
 
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := tw.Close(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := gzw.Close(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if err := api.CheckArtifactSize(int64(buf.Len())); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return buf.Bytes(), nil
+	return buf.Bytes(), excluded, nil
 }
 
 // --- add_database ---

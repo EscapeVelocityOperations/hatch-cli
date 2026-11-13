@@ -97,7 +97,7 @@ func NewCmd() *cobra.Command {
 		Long: `Generate a starter .hatchignore file based on your project's runtime.
 
 The .hatchignore file controls which files are excluded from deploy artifacts,
-similar to .gitignore. Safety defaults (.git, .env, .DS_Store) are always
+similar to .gitignore. Safety defaults (.git, .env, .env.*, .DS_Store) are always
 applied regardless of the file contents.
 
 Examples:

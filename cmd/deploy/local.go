@@ -176,6 +176,10 @@ func deployArtifact(cfg ArtifactDeployConfig) (map[string]any, error) {
 	if len(excluded) > 0 {
 		ui.Println(ui.Dim("  Excluded: " + strings.Join(excluded, ", ")))
 	}
+	if envFiles := envFilesExcluded(excluded); len(envFiles) > 0 {
+		ui.Warn("Env files are never sent in an artifact and were left out: " + strings.Join(envFiles, ", "))
+		ui.Info("Set the variables on the egg instead: hatch env set KEY=VALUE")
+	}
 	ui.Info(fmt.Sprintf("Artifact size: %.2f MB", float64(len(artifact))/1024/1024))
 
 	client := deps.NewAPIClient(cfg.Token)
@@ -475,6 +479,21 @@ func checkSourceDirectory(dir, rt string) error {
 	return nil
 }
 
+// envFilesExcluded picks the sensitive env files (.env, .env.*, at any depth)
+// out of the excluded list returned by createTarGz.
+func envFilesExcluded(excluded []string) []string {
+	var out []string
+	for _, e := range excluded {
+		if strings.HasSuffix(e, "/") {
+			continue
+		}
+		if ignore.IsSensitiveEnvName(filepath.Base(e)) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // createTarGz creates a tar.gz archive of the given directory.
 // Uses .hatchignore patterns if present, otherwise applies built-in defaults.
 // Returns the archive bytes and a list of excluded file/folder names.
@@ -496,6 +515,16 @@ func createTarGz(dir string) ([]byte, []string, error) {
 		} else {
 			return nil, nil, fmt.Errorf("reading .hatchignore: %w", err)
 		}
+	}
+
+	// Env files never ship (h-vma4h). A negation would be silently overridden,
+	// so say so and stop instead of letting the user believe the file is sent.
+	if negations := matcher.EnvNegations(); len(negations) > 0 {
+		return nil, nil, fmt.Errorf(".hatchignore re-includes env files (%s), but env files are never sent in an artifact: "+
+			"they hold secrets and artifacts end up in the image registry.\n\n"+
+			"Remove those lines from .hatchignore. Set the variables on the egg instead: hatch env set KEY=VALUE\n"+
+			"Keep a template as .env.example or .env.sample, which are sent.",
+			strings.Join(negations, ", "))
 	}
 
 	var excluded []string
