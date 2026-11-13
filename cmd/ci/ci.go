@@ -223,15 +223,15 @@ func runCI(cmd *cobra.Command, opts ciOptions) error {
 // failure falls back to manual instructions.
 func wireSecret(cmd *cobra.Command, opts ciOptions, provider string) error {
 	out := cmd.OutOrStdout()
-	ownerRepo := ""
+	repo := ""
 	if remote, err := deps.GitRemote(); err == nil {
-		ownerRepo = detect.OwnerRepoFromRemote(remote)
+		repo = detect.RepoRefFromRemote(provider, remote)
 	}
-	bin, args, ok := detect.SecretCommand(provider, ownerRepo)
+	bin, args, ok := detect.SecretCommand(provider, repo)
 	if !ok {
 		return nil
 	}
-	manual := detect.SecretCommandString(provider, ownerRepo)
+	manual := detect.SecretCommandString(provider, repo)
 
 	// The provider CLI reads the token from a non-terminal stdin, and `hatch auth
 	// keys create` writes the token alone on stdout when piped, so the pipe is the
