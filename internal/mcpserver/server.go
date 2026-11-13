@@ -683,7 +683,7 @@ func createMCPTarGz(dir string) ([]byte, error) {
 		return nil, err
 	}
 
-	if err := api.CheckArtifactSize(buf.Len()); err != nil {
+	if err := api.CheckArtifactSize(int64(buf.Len())); err != nil {
 		return nil, err
 	}
 

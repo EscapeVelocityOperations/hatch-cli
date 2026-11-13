@@ -594,7 +594,7 @@ func createTarGz(dir string) ([]byte, []string, error) {
 		return nil, nil, err
 	}
 
-	if err := api.CheckArtifactSize(buf.Len()); err != nil {
+	if err := api.CheckArtifactSize(int64(buf.Len())); err != nil {
 		return nil, nil, err
 	}
 

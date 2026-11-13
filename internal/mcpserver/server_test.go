@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -354,9 +355,11 @@ func TestGetPlatformInfoHandler(t *testing.T) {
 		t.Error("expected deploy info in output")
 	}
 	// h-yqo6k: the platform contract must announce the limit the server
-	// enforces (100 MB), not the 500 MB it used to claim.
-	if !strings.Contains(text, `"max_artifact_size_mb": 100`) && !strings.Contains(text, `"max_artifact_size_mb":100`) {
-		t.Errorf("expected max_artifact_size_mb 100 in output, got: %s", text)
+	// enforces, not a stale one (it claimed 500 MB when the server cut at
+	// 100 MB; h-5ghe9 raised both to 1 GiB). The value must be exactly 1024:
+	// a prefix match would let 100 or 10240 through.
+	if !regexp.MustCompile(`"max_artifact_size_mb":\s*1024\b`).MatchString(text) {
+		t.Errorf("expected max_artifact_size_mb 1024 in output, got: %s", text)
 	}
 }
 
