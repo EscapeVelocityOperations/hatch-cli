@@ -44,7 +44,6 @@ func TestGoBinaryPath(t *testing.T) {
 		"./server":               "server",
 		"./bin/server --port 80": "bin/server",
 		"  ./server  ":           "server",
-		"./a/../server":          "server",
 		"./my-app_v1.2":          "my-app_v1.2",
 	}
 	for in, want := range good {
@@ -54,6 +53,9 @@ func TestGoBinaryPath(t *testing.T) {
 	}
 	for _, in := range []string{
 		"", "   ", "/usr/bin/app", "../server", "./..", ".", "./", "./../server", "./a/../../server",
+		// h-7olu2.1: a path that path.Clean would change builds a binary the
+		// unchanged start command cannot run (missing dir, or a dir expected).
+		"./a/../server", "./missing/../server", "./server/", "./bin//server", "././server", "./bin/./server",
 		"server", "bin/server", // a binary is named with an explicit ./
 		"sh -c ./server", "env FOO=1 ./server", "exec ./server", // wrappers: their own name would be built
 		`"./my server"`, "$HOME/server", "$(printf x)", "./$X", "./server;", "./a|b", "~/server", "./server\\x",

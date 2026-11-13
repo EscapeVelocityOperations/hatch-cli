@@ -32,8 +32,9 @@ var (
 // go start command runs: its first word, which must be an explicit relative
 // path, e.g. "./server" or "./bin/server --port 80" → "server" / "bin/server".
 // A start command that does not begin that way (a shell wrapper, an env
-// assignment, a bare name, a quoted or absolute path) is refused: the binary to
-// build cannot be told from it.
+// assignment, a bare name, a quoted or absolute path, a non-canonical path such
+// as "./a/../server" or "./server/") is refused: the binary to build cannot be
+// told from it, or would not be where the start command looks.
 func GoBinaryPath(startCommand string) (string, error) {
 	fields := strings.Fields(startCommand)
 	if len(fields) == 0 {
@@ -41,7 +42,11 @@ func GoBinaryPath(startCommand string) (string, error) {
 	}
 	rel := path.Clean(fields[0])
 	if !goBinaryWordRe.MatchString(fields[0]) || rel == "." || rel == ".." ||
-		strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, "../") {
+		strings.HasPrefix(rel, "/") || strings.HasPrefix(rel, "../") ||
+		// h-7olu2.1: the workflow builds to the cleaned path but the deploy runs
+		// the start command as written, so the two must be the same path: a
+		// "..", "." or empty segment, or a trailing slash, is refused.
+		fields[0] != "./"+rel {
 		return "", fmt.Errorf("cannot tell which binary --start-command %q runs: for runtime go its first word "+
 			"must be ./ and the path of the binary inside --deploy-target (for example ./server)", startCommand)
 	}
