@@ -235,6 +235,7 @@ func wireSecret(cmd *cobra.Command, opts ciOptions, provider string) error {
 		fmt.Fprintln(out, "\nWire the HATCH_TOKEN secret in your CI — pipe a freshly minted token (shown once) into the provider CLI, which reads it from stdin:")
 		fmt.Fprintf(out, "  %s\n", piped)
 		fmt.Fprintln(out, "  (or re-run this command with --set-secret and the token piped into it: hatch auth keys create | hatch ci … --set-secret)")
+		printProtectedBranchNote(out, provider)
 		return nil
 	}
 
@@ -254,7 +255,22 @@ func wireSecret(cmd *cobra.Command, opts ciOptions, provider string) error {
 		return nil
 	}
 	fmt.Fprintf(out, "\nSet the HATCH_TOKEN secret via %s.\n", bin)
+	printProtectedBranchNote(out, provider)
 	return nil
+}
+
+// printProtectedBranchNote explains the GitLab variable's protection. The
+// variable is created protected, so GitLab only exposes it to pipelines on
+// protected branches and tags: the deploy branch (main, per the generated
+// `only: main`) must be a protected branch or the deploy job gets no token.
+// GitHub secrets have no such flag, so nothing is printed for it.
+func printProtectedBranchNote(out io.Writer, provider string) {
+	if provider != "gitlab" {
+		return
+	}
+	fmt.Fprintln(out, "\nThe variable is masked and protected: GitLab only gives it to pipelines on protected branches and tags,")
+	fmt.Fprintln(out, "so a branch pushed by another contributor cannot read the deploy token. Make sure `main` (the deploy")
+	fmt.Fprintln(out, "branch) is a protected branch: Settings > Repository > Protected branches.")
 }
 
 // readTokenFromStdin reads the token from os.Stdin: a masked prompt on a

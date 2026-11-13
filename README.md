@@ -111,9 +111,11 @@ To wire the `HATCH_TOKEN` secret, pipe a freshly minted token into the provider 
 
 ```sh
 hatch auth keys create | gh secret set HATCH_TOKEN                      # GitHub
-hatch auth keys create | glab variable set HATCH_TOKEN --masked         # GitLab
+hatch auth keys create | glab variable set HATCH_TOKEN --masked --protected # GitLab
 hatch auth keys create | hatch ci … --set-secret                        # let hatch run gh/glab for you
 ```
+
+On GitLab the variable must be **protected** as well as masked: masking only hides the value in job logs, while protection limits it to pipelines on protected branches and tags, so a contributor's job on an unprotected branch never receives the deploy token. Keep `main` (the generated job's `only: main` branch) protected under Settings > Repository > Protected branches, or the deploy job will have no token. `hatch ci … --set-secret` creates the variable with both flags.
 
 When stdout is not a terminal, `hatch auth keys create` writes the token alone to stdout and its messages to stderr (on a terminal it prints both, as before). `--set-secret` accepts only a `hatch_…` deploy token on stdin and refuses anything else.
 
