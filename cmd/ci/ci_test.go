@@ -662,13 +662,14 @@ func TestCI_SetSecret_PipedMessageLine_IsRefused(t *testing.T) {
 // (gh and glab both read the secret from a non-terminal stdin) — no "paste it
 // when prompted", which is unverified for glab.
 func TestCI_PrintedInstruction_PipesTheToken(t *testing.T) {
-	for provider, want := range map[string]string{
-		"github": "hatch auth keys create | gh secret set HATCH_TOKEN -R acme/repo",
-		"gitlab": "hatch auth keys create | glab variable set HATCH_TOKEN --masked -R acme/repo",
+	for provider, tc := range map[string]struct{ remote, want string }{
+		"github": {"git@github.com:acme/repo.git", "hatch auth keys create | gh secret set HATCH_TOKEN -R acme/repo"},
+		"gitlab": {"git@gitlab.com:acme/repo.git", "hatch auth keys create | glab variable set HATCH_TOKEN --masked -R acme/repo"},
 	} {
+		want := tc.want
 		t.Run(provider, func(t *testing.T) {
 			restore := setMockDeps(&Deps{
-				GitRemote: func() (string, error) { return "git@example.com:acme/repo.git", nil },
+				GitRemote: func() (string, error) { return tc.remote, nil },
 				Getwd:     func() (string, error) { return "", os.ErrNotExist },
 				Stat:      func(string) bool { return false },
 				WriteFile: func(string, []byte) error { return nil },
@@ -700,5 +701,90 @@ func TestDefaultRun_FeedsStdin(t *testing.T) {
 	}
 	if string(b) != "via-stdin" {
 		t.Errorf("child stdin = %q", b)
+	}
+}
+
+// h-8tvak.2 (Vigie): the -R target handed to the provider CLI is the repository
+// origin points at — full GitLab namespace and host kept — never a truncated or
+// host-less lookalike (org/team/project must not become team/project, which is a
+// DIFFERENT project that may exist and be writable). Runs the real command with
+// a fake runner and intercepts the exact target, in the --set-secret path and in
+// the printed instruction.
+func TestCI_RepoTarget_KeepsNamespaceAndHost(t *testing.T) {
+	cases := []struct {
+		name, provider, remote, target string
+	}{
+		{"gitlab subgroup, https", "gitlab", "https://gitlab.com/org/team/project.git", "https://gitlab.com/org/team/project"},
+		{"gitlab subgroup, ssh scp", "gitlab", "git@gitlab.com:org/team/project.git", "https://gitlab.com/org/team/project"},
+		{"gitlab several subgroups, ssh url", "gitlab", "ssh://git@gitlab.com/org/a/b/project.git", "https://gitlab.com/org/a/b/project"},
+		{"self-hosted gitlab, https", "gitlab", "https://git.example.org/grp/sub/project.git", "https://git.example.org/grp/sub/project"},
+		{"self-hosted gitlab, ssh", "gitlab", "git@git.example.org:grp/sub/project.git", "https://git.example.org/grp/sub/project"},
+		{"self-hosted gitlab, two segments", "gitlab", "git@git.example.org:grp/project.git", "https://git.example.org/grp/project"},
+		{"gitlab.com project, https", "gitlab", "https://gitlab.com/acme/repo.git", "acme/repo"},
+		{"github, ssh", "github", "git@github.com:acme/repo.git", "acme/repo"},
+		{"github enterprise, ssh", "github", "git@ghe.example.org:acme/repo.git", "https://ghe.example.org/acme/repo"},
+		{"remote with credentials", "gitlab", "https://oauth2:SENTINEL-credential@git.example.org/grp/sub/project.git", "https://git.example.org/grp/sub/project"},
+		{"not derivable: provider CLI resolves the current repo", "gitlab", "git@gitlab.com:project.git", ""},
+	}
+	for _, c := range cases {
+		wantArgs := func(bin string) string {
+			base := "secret set HATCH_TOKEN"
+			if bin == "glab" {
+				base = "variable set HATCH_TOKEN --masked"
+			}
+			if c.target == "" {
+				return base
+			}
+			return base + " -R " + c.target
+		}
+		bin := map[string]string{"github": "gh", "gitlab": "glab"}[c.provider]
+
+		t.Run(c.name+"/set-secret", func(t *testing.T) {
+			rec := &recorder{}
+			restore := setMockDeps(&Deps{
+				GitRemote: func() (string, error) { return c.remote, nil },
+				Getwd:     func() (string, error) { return "", os.ErrNotExist },
+				Stat:      func(string) bool { return false },
+				WriteFile: func(string, []byte) error { return nil },
+				LookPath:  func(string) bool { return true },
+				Run:       rec.run,
+				ReadToken: func(io.Writer) (string, error) { return pipedToken, nil },
+			})
+			defer restore()
+			out, err := execCI(t, args("--provider", c.provider, "--runtime", "node", "--set-secret"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rec.bin != bin || strings.Join(rec.args, " ") != wantArgs(bin) {
+				t.Errorf("ran %s %v, want %s %s", rec.bin, rec.args, bin, wantArgs(bin))
+			}
+			if rec.stdin != pipedToken {
+				t.Errorf("token must reach the provider CLI on stdin; got %q", rec.stdin)
+			}
+			if strings.Contains(out, "SENTINEL-credential") || strings.Contains(strings.Join(rec.args, " "), "SENTINEL-credential") {
+				t.Errorf("remote credentials leaked into argv/output:\n%s", out)
+			}
+		})
+
+		t.Run(c.name+"/print", func(t *testing.T) {
+			restore := setMockDeps(&Deps{
+				GitRemote: func() (string, error) { return c.remote, nil },
+				Getwd:     func() (string, error) { return "", os.ErrNotExist },
+				Stat:      func(string) bool { return false },
+				WriteFile: func(string, []byte) error { return nil },
+			})
+			defer restore()
+			out, err := execCI(t, args("--provider", c.provider, "--runtime", "node"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "hatch auth keys create | " + bin + " " + wantArgs(bin) + "\n"
+			if !strings.Contains(out, want) {
+				t.Errorf("missing %q in:\n%s", want, out)
+			}
+			if strings.Contains(out, "SENTINEL-credential") {
+				t.Errorf("remote credentials leaked into output:\n%s", out)
+			}
+		})
 	}
 }
