@@ -6,18 +6,19 @@ import (
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/resolve"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
 	"github.com/spf13/cobra"
 )
 
 // Deps holds injectable dependencies for testing.
 type Deps struct {
-	GetToken       func() (string, error)
-	ListApps       func(token string) ([]api.App, error)
-	ListDomains    func(token, slug string) ([]api.Domain, error)
-	AddDomain      func(token, slug, domain string) (*api.Domain, error)
-	RemoveDomain   func(token, slug, domain string) error
-	VerifyDomain   func(token, slug, domain string) (*api.Domain, error)
+	GetToken     func() (string, error)
+	ListApps     func(token string) ([]api.App, error)
+	ListDomains  func(token, slug string) ([]api.Domain, error)
+	AddDomain    func(token, slug, domain string) (*api.Domain, error)
+	RemoveDomain func(token, slug, domain string) error
+	VerifyDomain func(token, slug, domain string) (*api.Domain, error)
 }
 
 func defaultDeps() *Deps {
@@ -113,7 +114,7 @@ DNS points to hatch.
 Example:
   hatch domain add example.com --app my-app
   hatch domain add www.example.com --app my-app`,
-		Args:  cobra.ExactArgs(1),
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAdd(appSlug, args[0])
 		},
@@ -135,7 +136,7 @@ func newRemoveCmd() *cobra.Command {
 
 Example:
   hatch domain remove example.com --app my-app`,
-		Args:  cobra.ExactArgs(1),
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runRemove(appSlug, args[0])
 		},
@@ -163,12 +164,7 @@ func resolveSlug(appSlug string) (string, error) {
 	}
 	apps, err := deps.ListApps(token)
 	if err == nil {
-		// Check if appSlug matches any app name or slug
-		for _, app := range apps {
-			if app.Name == appSlug || app.Slug == appSlug {
-				return app.Slug, nil
-			}
-		}
+		return resolve.AppSlug(appSlug, apps)
 	}
 	// Fall back to using it directly as slug
 	return appSlug, nil
@@ -310,7 +306,7 @@ switching DNS.
 
 Example:
   hatch domain verify example.com --app my-app`,
-		Args:  cobra.ExactArgs(1),
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runVerify(appSlug, args[0])
 		},

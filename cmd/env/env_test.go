@@ -309,3 +309,33 @@ func contains(s, substr string) bool {
 	}
 	return false
 }
+
+func TestRunSet_AppResolution(t *testing.T) {
+	for _, ambiguous := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ambiguous=%v", ambiguous), func(t *testing.T) {
+			oldDeps, oldSlug := deps, appSlug
+			defer func() { deps, appSlug = oldDeps, oldSlug }()
+			appSlug = "target"
+			apps := []api.App{{Name: "target", Slug: "duplicate"}, {Name: "original", Slug: "target"}}
+			if ambiguous {
+				apps[1] = api.App{Name: "target", Slug: "another"}
+			}
+			called := false
+			deps = &Deps{
+				GetToken: func() (string, error) { return "test-token", nil },
+				ListApps: func(string) ([]api.App, error) { return apps, nil },
+				SetEnvVar: func(token, slug, key, value string) error {
+					called = true
+					if slug != "target" || key != "KEY" || value != "value" {
+						t.Fatalf("wrong mutation: %s %s=%s", slug, key, value)
+					}
+					return nil
+				},
+			}
+			err := runSet(nil, []string{"KEY=value"})
+			if (err != nil) != ambiguous || called == ambiguous {
+				t.Fatalf("err=%v mutation=%v ambiguous=%v", err, called, ambiguous)
+			}
+		})
+	}
+}
