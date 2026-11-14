@@ -26,10 +26,10 @@ func TestListDomains(t *testing.T) {
 			errContains: "not logged in",
 		},
 		{
-			name:     "success with domains",
-			token:    "test-token",
-			domains:  []api.Domain{{Domain: "example.com", Status: "active"}},
-			wantErr:  false,
+			name:    "success with domains",
+			token:   "test-token",
+			domains: []api.Domain{{Domain: "example.com", Status: "active"}},
+			wantErr: false,
 		},
 		{
 			name:    "success with no domains",
@@ -199,5 +199,37 @@ func TestNewCmd(t *testing.T) {
 		if !names[want] {
 			t.Errorf("missing subcommand %q", want)
 		}
+	}
+}
+
+func TestRunAdd_AppResolution(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		ambiguous bool
+	}{{"slug collision", false}, {"ambiguous name", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldDeps := deps
+			defer func() { deps = oldDeps }()
+			apps := []api.App{{Name: "target", Slug: "duplicate"}, {Name: "original", Slug: "target"}}
+			if tc.ambiguous {
+				apps[1] = api.App{Name: "target", Slug: "another"}
+			}
+			called := false
+			deps = &Deps{
+				GetToken: func() (string, error) { return "test-token", nil },
+				ListApps: func(string) ([]api.App, error) { return apps, nil },
+				AddDomain: func(token, slug, domain string) (*api.Domain, error) {
+					called = true
+					if slug != "target" {
+						t.Fatalf("wrong mutation target: %s", slug)
+					}
+					return &api.Domain{Domain: domain, Verified: true}, nil
+				},
+			}
+			err := runAdd("target", "example.com")
+			if (err != nil) != tc.ambiguous || called == tc.ambiguous {
+				t.Fatalf("err=%v mutation=%v ambiguous=%v", err, called, tc.ambiguous)
+			}
+		})
 	}
 }
