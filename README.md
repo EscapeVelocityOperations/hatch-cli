@@ -97,6 +97,12 @@ hatch deploy --name my-app
 | `--name` | `-n` | Custom app name (defaults to directory name) |
 | `--app` | | Slug of an existing egg to deploy to (overrides `.hatch.toml`) |
 
+**Static sites.** With `--runtime static`, an egg that already serves a Hatch site (a site publication in its deployment
+history) is not rebuilt: `hatch deploy` sends the list of files (after `.hatchignore`), uploads only the files the platform
+does not hold yet, and publishes the list as the next version, live at once. Changing 5% of the files uploads about 5% of
+the bytes. Other eggs, and platforms where sites are off, get the artifact deploy. Details:
+[docs/plans/h-bgdsq-6-static-site-deploy.md](docs/plans/h-bgdsq-6-static-site-deploy.md).
+
 #### `hatch ci`
 
 Generate a GitHub Actions or GitLab CI deploy workflow for review and commit (it never commits or pushes).

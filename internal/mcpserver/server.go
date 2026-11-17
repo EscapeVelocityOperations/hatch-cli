@@ -460,6 +460,11 @@ WHAT THIS TOOL DOES:
    error if the deploy fails or times out. Pass wait=false to return as
    soon as the upload is accepted.
 
+STATIC SITES: with runtime "static", an existing app that already serves a
+Hatch site is not rebuilt: the tool sends the file list (after .hatchignore),
+uploads only the files the platform does not hold yet and publishes the list
+as the next version, live at once. Any other app gets the artifact deploy.
+
 CONTAINER BEHAVIOR:
 - The ENTIRE contents of deploy_target are extracted to /app/ inside the container
 - The start_command runs from /app/ as working directory
@@ -557,6 +562,14 @@ func deployAppHandler(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	info, err := os.Stat(deployTarget)
 	if err != nil || !info.IsDir() {
 		return toolError("failed to deploy app: deploy_target directory not found: %s", deployTarget)
+	}
+
+	// An app that serves a Hatch site gets the changed files only (T-506),
+	// decided before any artifact is built.
+	if rt == "static" {
+		if result, handled := deploySiteApp(appSlug, name, deployTarget); handled {
+			return result, nil
+		}
 	}
 
 	// Read and tar the directory
