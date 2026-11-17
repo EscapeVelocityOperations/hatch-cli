@@ -241,3 +241,55 @@ func TestDeploySite_PreviewKind(t *testing.T) {
 		}
 	})
 }
+
+// N2 (h-bgdsq.6 review): a static preview whose deploy target cannot be built
+// (.hatchignore re-including an env file) fails before the preview egg is
+// created, as it did when the artifact was built first, whatever the kind of
+// the preview.
+func TestDeploySite_PreviewTargetCheckedBeforeCreatingPreview(t *testing.T) {
+	for _, kind := range []string{"site", "image"} {
+		t.Run(kind, func(t *testing.T) {
+			srv, dir := siteFixture(t)
+			srv.PreviewKind = kind
+			writeParentHatchToml(t, "parent")
+			if err := os.WriteFile(filepath.Join(dir, ".hatchignore"), []byte("drafts/\n!.env\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var err error
+			captureOutput(func() {
+				err = RunArtifactDeploy(ArtifactDeployConfig{
+					Token: "tok", DeployTarget: dir, Runtime: "static", PreviewRef: "pr-7", JSONOutput: true,
+				})
+			})
+			if err == nil || !strings.Contains(err.Error(), "env files") {
+				t.Fatalf("err = %v, want the refusal of the re-included env file", err)
+			}
+			if srv.PreviewPosts != 0 || srv.ManifestPosts != 0 || srv.ArtifactUploads != 0 {
+				t.Fatalf("previews %d, manifests %d, artifacts %d; want 0: nothing may reach the API", srv.PreviewPosts, srv.ManifestPosts, srv.ArtifactUploads)
+			}
+		})
+	}
+}
+
+// The file list built before the preview is the one published: the preview
+// of a site egg lists the deploy target once.
+func TestDeploySite_PreviewSitePublishesTheListBuiltFirst(t *testing.T) {
+	srv, dir := siteFixture(t)
+	srv.PreviewKind = "site"
+	writeParentHatchToml(t, "parent")
+	if err := os.Symlink(".env", filepath.Join(dir, "env.txt")); err != nil {
+		t.Fatal(err)
+	}
+	fields, err := runSiteDeploy(t, dir, "", "static", "pr-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fields["kind"] != "site" || srv.PreviewPosts != 1 || srv.PublishPosts != 1 {
+		t.Fatalf("json %v, previews %d, publications %d", fields, srv.PreviewPosts, srv.PublishPosts)
+	}
+	for _, f := range srv.Versions[0] {
+		if f.Path == ".env" || f.Path == "env.txt" {
+			t.Fatalf("%s was published", f.Path)
+		}
+	}
+}

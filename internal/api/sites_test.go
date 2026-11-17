@@ -2,7 +2,11 @@ package api
 
 import (
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -162,5 +166,69 @@ func TestPublishSite_RetriesOnlyUnopenedConnections(t *testing.T) {
 	_, err := NewTestClient("tok", url).PublishSite("egg-1", files)
 	if err == nil || !isDialError(err) {
 		t.Fatalf("err = %v, want a dial error after retries", err)
+	}
+}
+
+// B2 (h-bgdsq.6 review): the manifest answer lists the missing sha256, 67
+// bytes each. The platform default (20000 files per version) is over the
+// former 1 MiB read bound from about 15 650 missing blobs: the answer was cut
+// into "unexpected end of JSON input". It must be read whole, and an answer
+// over the bound must say so.
+func TestIngestSiteManifest_LargeMissingList(t *testing.T) {
+	answer := func(n int) []byte {
+		missing := make([]string, n)
+		for i := range missing {
+			h := sha256.Sum256([]byte(fmt.Sprint(i)))
+			missing[i] = hex.EncodeToString(h[:])
+		}
+		body, _ := json.Marshal(map[string]any{"missing": missing, "files": n, "unique": n, "bytes": 1, "missing_bytes": 1})
+		return body
+	}
+	serve := func(body []byte) *Client {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(body)
+		}))
+		t.Cleanup(srv.Close)
+		return NewTestClient("tok", srv.URL)
+	}
+	files := []SiteFile{{Path: "a", Sha256: strings.Repeat("a", 64), Size: 1}}
+
+	for _, n := range []int{15_000, 16_000, 20_000, 100_000, 150_000} {
+		body := answer(n)
+		res, err := serve(body).IngestSiteManifest("egg-1", files)
+		if err != nil || len(res.Missing) != n {
+			t.Fatalf("n=%d (%d bytes): %v, %d missing", n, len(body), err, func() int {
+				if res == nil {
+					return -1
+				}
+				return len(res.Missing)
+			}())
+		}
+	}
+
+	// Past the bound: a clear error, not a cut JSON document.
+	big := answer(260_000) // about 17.4 MiB
+	if len(big) <= maxSiteAnswer {
+		t.Fatalf("fixture is %d bytes, want over %d", len(big), maxSiteAnswer)
+	}
+	_, err := serve(big).IngestSiteManifest("egg-1", files)
+	if err == nil || strings.Contains(err.Error(), "unexpected end of JSON") || !strings.Contains(err.Error(), "over 16 MiB") {
+		t.Fatalf("err = %v, want a clear error about an answer over 16 MiB", err)
+	}
+}
+
+// A refusal keeps its code even when the body is long: only the first MiB is read.
+func TestSiteCall_LongRefusalBodyStillCarriesItsStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(strings.Repeat("x", 3<<20)))
+	}))
+	defer srv.Close()
+	c := NewTestClient("tok", srv.URL)
+	_, err := c.IngestSiteManifest("egg-1", []SiteFile{{Path: "a", Sha256: strings.Repeat("a", 64), Size: 1}})
+	var se *SiteError
+	if !errors.As(err, &se) || se.Status != http.StatusBadGateway || len(se.Code) > 304 {
+		t.Fatalf("err = %v, want a *SiteError 502 with a bounded code", err)
 	}
 }

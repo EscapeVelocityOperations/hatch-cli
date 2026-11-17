@@ -3,13 +3,21 @@ package sitedeploy
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	mrand "math/rand/v2"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
@@ -358,5 +366,256 @@ func TestPublish_FivePercentChangeSendsAboutFivePercent(t *testing.T) {
 	}
 	if total > 0.065 {
 		t.Fatalf("total bytes = %.2f %% of the site, want ≤ 6.5 %%", 100*total)
+	}
+}
+
+// B1 (h-bgdsq.6 review): a symlink inside the target must not publish a file
+// that .hatchignore, the env rule or the .git default leave out. The artifact
+// keeps such a link dead; the site skips it.
+func TestBuild_SkipsSymlinkToExcludedFile(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "index.html", "<h1>hi</h1>")
+	write(t, dir, "assets/app.js", "console.log(1)")
+	write(t, dir, ".env", "SECRET=topsecret")
+	write(t, dir, "config/.env.production", "SECRET=prod")
+	write(t, dir, ".git/config", "[remote] url=https://tok@github.com/x")
+	write(t, dir, "drafts/wip.html", "wip")
+	write(t, dir, "drafts/deep/more.html", "more")
+	write(t, dir, "notes.md", "notes")
+	write(t, dir, ".hatchignore", "drafts/\n*.md\n")
+	links := map[string]string{
+		"robots.txt":        ".env",                   // env file
+		"prod.txt":          "config/.env.production", // env file at depth
+		"gitcfg.txt":        ".git/config",            // .git default
+		"wip.html":          "drafts/wip.html",        // .hatchignore directory
+		"more.html":         "drafts/deep/more.html",  // below an excluded directory
+		"notes.txt":         "notes.md",               // .hatchignore pattern
+		"assets/up-env.txt": "../.env",                // relative, from a subdirectory
+		"chain1":            "chain2",                 // chain of links ending at an env file
+		"chain2":            ".env",                   //
+		"viadir.html":       "drafts-link/wip.html",   // through a link to an excluded directory
+		"drafts-link":       "drafts",                 // (a link to a directory is skipped itself)
+		"ok-link.html":      "index.html",             // control: a plain internal link stays published
+		"assets/ok.js":      "../assets/app.js",       // control: relative internal link
+		"assets/up-ok.html": "../index.html",          // control
+	}
+	for name, target := range links {
+		if err := os.Symlink(target, filepath.Join(dir, filepath.FromSlash(name))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	m, err := Build(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets := map[string]string{
+		sum("SECRET=topsecret"):                      ".env",
+		sum("SECRET=prod"):                           "config/.env.production",
+		sum("[remote] url=https://tok@github.com/x"): ".git/config",
+		sum("wip"):   "drafts/wip.html",
+		sum("more"):  "drafts/deep/more.html",
+		sum("notes"): "notes.md",
+	}
+	for _, f := range m.Files {
+		if from, leaked := secrets[f.Sha256]; leaked {
+			t.Errorf("LEAK: %s is published with the content of %s", f.Path, from)
+		}
+	}
+	got := strings.Join(paths(m), ",")
+	want := ".hatchignore,assets/app.js,assets/ok.js,assets/up-ok.html,index.html,ok-link.html"
+	if got != want {
+		t.Fatalf("published = %s\nwant       %s", got, want)
+	}
+	// Every refused link is reported, and none ends in the blobs to upload.
+	skipped := map[string]bool{}
+	for _, s := range m.Skipped {
+		skipped[filepath.ToSlash(s)] = true
+	}
+	for _, name := range []string{"robots.txt", "prod.txt", "gitcfg.txt", "wip.html", "more.html", "notes.txt", "assets/up-env.txt", "chain1", "chain2", "viadir.html", "drafts-link"} {
+		if !skipped[name] {
+			t.Errorf("%s not reported in Skipped (%v)", name, m.Skipped)
+		}
+	}
+	for sha := range secrets {
+		if _, held := m.source[sha]; held {
+			t.Errorf("blob %s... of an excluded file is in the upload set", sha[:12])
+		}
+	}
+}
+
+// The same rule when the link itself is the excluded name (an env file that
+// is a symlink): the link path is matched first.
+func TestBuild_SkipsExcludedSymlinkName(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "index.html", "<h1>hi</h1>")
+	write(t, dir, "real.txt", "real")
+	if err := os.Symlink("real.txt", filepath.Join(dir, ".env")); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Build(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(paths(m), ","); got != "index.html,real.txt" {
+		t.Fatalf("published = %s", got)
+	}
+}
+
+// N1: with a relative --deploy-target (dist), a link to a file inside the
+// target is published, as with an absolute one.
+func TestBuild_InternalSymlinkWithRelativeTarget(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "dist/index.html", "<h1>hi</h1>")
+	write(t, root, "dist/.env", "SECRET=1")
+	if err := os.Symlink("index.html", filepath.Join(root, "dist", "home.html")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(".env", filepath.Join(root, "dist", "env.txt")); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+	for _, target := range []string{"dist", "./dist", filepath.Join(root, "dist")} {
+		m, err := Build(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Join(paths(m), ","); got != "home.html,index.html" {
+			t.Errorf("Build(%q) published %s, want home.html,index.html", target, got)
+		}
+		if len(m.Skipped) != 1 || m.Skipped[0] != "env.txt" {
+			t.Errorf("Build(%q) skipped %v, want [env.txt]", target, m.Skipped)
+		}
+	}
+}
+
+// A target reached through a linked parent directory (macOS /tmp, a linked
+// workspace) behaves the same: the target's real path is the reference.
+func TestBuild_TargetBehindSymlink(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "real/site/index.html", "<h1>hi</h1>")
+	write(t, root, "real/site/.env", "SECRET=1")
+	if err := os.Symlink("index.html", filepath.Join(root, "real", "site", "home.html")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(".env", filepath.Join(root, "real", "site", "env.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real", filepath.Join(root, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	m, err := Build(filepath.Join(root, "linked", "site"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(paths(m), ","); got != "home.html,index.html" {
+		t.Fatalf("published = %s", got)
+	}
+}
+
+// countingClient counts the manifest posts and fails them all with err.
+type countingClient struct {
+	err   error
+	posts int
+}
+
+func (c *countingClient) IngestSiteManifest(string, []api.SiteFile) (*api.SiteIngestResult, error) {
+	c.posts++
+	return nil, c.err
+}
+func (c *countingClient) UploadSiteBlobs(string, io.Reader) (*api.SiteBlobsResult, error) {
+	return nil, errors.New("unexpected upload")
+}
+func (c *countingClient) PublishSite(string, []api.SiteFile) (*api.SitePublishResult, error) {
+	return nil, errors.New("unexpected publish")
+}
+
+func urlErr(err error) error { return &url.Error{Op: "Post", URL: "https://api.example/x", Err: err} }
+
+// N4: a failure that a new try cannot fix is not retried (no ~14 s lost on a
+// bad certificate or an unknown host); a broken connection still is.
+func TestTransient_PermanentTransportErrorsAreNotRetried(t *testing.T) {
+	// Real failures: a closed port, a certificate the client does not trust.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedAddr := ln.Addr().String()
+	_ = ln.Close()
+	_, refused := http.Get("http://" + closedAddr)
+	tlsSrv := httptest.NewTLSServer(http.NotFoundHandler())
+	defer tlsSrv.Close()
+	_, badCert := (&http.Client{}).Get(tlsSrv.URL)
+	if refused == nil || badCert == nil {
+		t.Fatalf("setup: refused=%v badCert=%v", refused, badCert)
+	}
+
+	permanent := map[string]error{
+		"connection refused (real)":  refused,
+		"unknown certificate (real)": badCert,
+		"dns no such host":           urlErr(&net.DNSError{Err: "no such host", Name: "api.example", IsNotFound: true}),
+		"x509 hostname":              urlErr(x509.HostnameError{Host: "api.example"}),
+		"x509 unknown authority":     urlErr(x509.UnknownAuthorityError{}),
+		"tls record header":          urlErr(tls.RecordHeaderError{Msg: "first record does not look like a TLS handshake"}),
+		"bad address":                urlErr(&net.AddrError{Err: "invalid port", Addr: "x:y"}),
+	}
+	for name, err := range permanent {
+		if transient(err) {
+			t.Errorf("%s: transient = true, want false", name)
+		}
+		c := &countingClient{err: err}
+		_, got := Publish(c, "site-a1b2", &Manifest{Files: []api.SiteFile{{Path: "a", Sha256: sum("a"), Size: 1}}}, nil)
+		if got == nil || c.posts != 1 {
+			t.Errorf("%s: %d manifest posts (err %v), want 1 and an error", name, c.posts, got)
+		}
+	}
+
+	transientErrs := map[string]error{
+		"eof":              urlErr(io.EOF),
+		"unexpected eof":   urlErr(io.ErrUnexpectedEOF),
+		"connection reset": urlErr(&net.OpError{Op: "read", Err: os.NewSyscallError("read", syscall.ECONNRESET)}),
+		"broken pipe":      urlErr(&net.OpError{Op: "write", Err: os.NewSyscallError("write", syscall.EPIPE)}),
+		"dns temporary":    urlErr(&net.DNSError{Err: "server misbehaving", Name: "api.example", IsTemporary: true}),
+	}
+	for name, err := range transientErrs {
+		if !transient(err) {
+			t.Errorf("%s: transient = false, want true", name)
+		}
+		c := &countingClient{err: err}
+		_, got := Publish(c, "site-a1b2", &Manifest{Files: []api.SiteFile{{Path: "a", Sha256: sum("a"), Size: 1}}}, nil)
+		if got == nil || c.posts != maxUploads+1 {
+			t.Errorf("%s: %d manifest posts (err %v), want %d", name, c.posts, got, maxUploads+1)
+		}
+	}
+}
+
+// Only the refusals an artifact deploy does not make are "site only": the
+// preview pre-check of hatch deploy lets those through.
+func TestIsSiteOnly(t *testing.T) {
+	empty := t.TempDir()
+	if _, err := Build(empty); err == nil || !IsSiteOnly(err) {
+		t.Errorf("empty target: err = %v, want a site-only refusal", err)
+	}
+
+	env := t.TempDir()
+	write(t, env, "index.html", "x")
+	write(t, env, ".hatchignore", "!.env\n")
+	if _, err := Build(env); err == nil || IsSiteOnly(err) {
+		t.Errorf("env negation: err = %v, want a refusal the artifact makes too", err)
+	}
+
+	unreadable := t.TempDir()
+	write(t, unreadable, ".hatchignore", "x\n")
+	if err := os.Chmod(filepath.Join(unreadable, ".hatchignore"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := os.Open(filepath.Join(unreadable, ".hatchignore")); err == nil { // running as root
+		_ = f.Close()
+	} else if _, err := Build(unreadable); err == nil || IsSiteOnly(err) {
+		t.Errorf("unreadable .hatchignore: err = %v, want a refusal the artifact makes too", err)
+	}
+
+	if IsSiteOnly(errors.New("boom")) || IsSiteOnly(nil) {
+		t.Error("IsSiteOnly is true for a foreign error")
 	}
 }

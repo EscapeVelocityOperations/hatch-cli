@@ -183,8 +183,24 @@ func deployArtifact(cfg ArtifactDeployConfig) (map[string]any, error) {
 	}
 
 	// A static preview may be a site too: its artifact is built once the
-	// preview's kind is known (runPreviewDeploy).
+	// preview's kind is known (runPreviewDeploy). The deploy target is
+	// listed first, though: a target that cannot be deployed (.hatchignore
+	// unreadable or re-including env files, unreadable file) fails here, before
+	// the preview egg exists, as it did when the artifact was built first.
+	// What only a site refuses (empty list, names equal once normalized) is
+	// left to deploySite, for a preview that turns out to be a site: an
+	// artifact deploys such a target.
 	var artifact []byte
+	var manifest *sitedeploy.Manifest
+	if static && previewPR > 0 {
+		manifest, err = sitedeploy.Build(cfg.DeployTarget)
+		if err != nil {
+			if !sitedeploy.IsSiteOnly(err) {
+				return nil, fmt.Errorf("checking the deploy target: %w", err)
+			}
+			manifest = nil
+		}
+	}
 	if !static || previewPR == 0 {
 		artifact, err = buildArtifact(cfg.DeployTarget)
 		if err != nil {
@@ -195,7 +211,7 @@ func deployArtifact(cfg ArtifactDeployConfig) (map[string]any, error) {
 	// Preview deploy (h-qtie8): resolve the PARENT egg, create/refresh the
 	// preview for the PR, and upload the artifact to the PREVIEW slug.
 	if previewPR > 0 {
-		return runPreviewDeploy(client, cfg, artifact, previewPR)
+		return runPreviewDeploy(client, cfg, artifact, manifest, previewPR)
 	}
 
 	// Resolve app
@@ -297,20 +313,24 @@ func deploySiteIfMigrated(client APIClient, cfg ArtifactDeployConfig, slug strin
 		return nil, false, nil
 	}
 	ui.Info(fmt.Sprintf("Deploying to existing egg: %s (Hatch site: changed files only)", slug))
-	fields, done, err := deploySite(client, cfg, slug, "")
+	fields, done, err := deploySite(client, cfg, slug, "", nil)
 	if done && err == nil && cfg.Domain != "" {
 		configureDomain(api.NewClient(cfg.Token), slug, cfg.Domain)
 	}
 	return fields, done, err
 }
 
-// deploySite runs the site contract on slug (sitedeploy.Publish). done is
-// false only when the platform has sites switched off.
-func deploySite(client APIClient, cfg ArtifactDeployConfig, slug, url string) (map[string]any, bool, error) {
-	m, err := sitedeploy.Build(cfg.DeployTarget)
-	if err != nil {
-		err = fmt.Errorf("listing site files: %w", err)
-		return jsonError(slug, err), true, err
+// deploySite runs the site contract on slug (sitedeploy.Publish). m is the
+// file list of the deploy target when the caller already built it (nil: built
+// here). done is false only when the platform has sites switched off.
+func deploySite(client APIClient, cfg ArtifactDeployConfig, slug, url string, m *sitedeploy.Manifest) (map[string]any, bool, error) {
+	if m == nil {
+		var err error
+		m, err = sitedeploy.Build(cfg.DeployTarget)
+		if err != nil {
+			err = fmt.Errorf("listing site files: %w", err)
+			return jsonError(slug, err), true, err
+		}
 	}
 	if len(m.Excluded) > 0 {
 		ui.Println(ui.Dim("  Excluded: " + strings.Join(m.Excluded, ", ")))
@@ -320,7 +340,7 @@ func deploySite(client APIClient, cfg ArtifactDeployConfig, slug, url string) (m
 		ui.Info("Set the variables on the egg instead: hatch env set KEY=VALUE")
 	}
 	if len(m.Skipped) > 0 {
-		ui.Warn("Not published (symlinks leaving the deploy target or pointing at a directory, special files): " + strings.Join(m.Skipped, ", "))
+		ui.Warn("Not published (symlinks leaving the deploy target, pointing at a directory or at a file left out, special files): " + strings.Join(m.Skipped, ", "))
 	}
 
 	sp := ui.NewSpinner("Publishing site...")
@@ -451,8 +471,10 @@ func parsePreviewRef(ref string) (int, error) {
 
 // runPreviewDeploy creates/refreshes the preview egg for (parent, PR) and
 // uploads the artifact to the preview slug. The parent comes from
-// --app/.hatch.toml — a preview never creates its parent.
-func runPreviewDeploy(client APIClient, cfg ArtifactDeployConfig, artifact []byte, pr int) (map[string]any, error) {
+// --app/.hatch.toml — a preview never creates its parent. A static preview
+// comes with manifest, the file list of the deploy target (already checked):
+// it is published as is when the preview is a site, else the artifact is built.
+func runPreviewDeploy(client APIClient, cfg ArtifactDeployConfig, artifact []byte, manifest *sitedeploy.Manifest, pr int) (map[string]any, error) {
 	parentSlug := cfg.AppSlug
 	if parentSlug == "" {
 		hatchConfig, err := readHatchConfig(".")
@@ -475,7 +497,7 @@ func runPreviewDeploy(client APIClient, cfg ArtifactDeployConfig, artifact []byt
 		// The preview of an egg that serves a Hatch site publishes a site
 		// (hatch-api T-505: the preview answer carries kind).
 		if preview.Kind == "site" {
-			if fields, done, err := deploySite(client, cfg, preview.Slug, preview.URL); done {
+			if fields, done, err := deploySite(client, cfg, preview.Slug, preview.URL, manifest); done {
 				if fields != nil {
 					fields["pr_number"] = preview.PRNumber
 				}

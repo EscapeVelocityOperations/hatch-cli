@@ -79,6 +79,19 @@ func (e *SiteError) Error() string {
 	return msg
 }
 
+// maxSiteAnswer bounds what is read of a 2xx answer of a site route. The
+// largest one is the manifest answer: the sha256 the platform misses, 67
+// bytes each, never more than the manifest entries, and the platform refuses
+// a manifest over 10 MiB (413 site_manifest_too_large). 16 MiB covers it
+// with room for the envelope; a platform default of 20000 files makes
+// about 1.3 MiB. An answer over the bound is an error, never a silently cut
+// body.
+const maxSiteAnswer = 16 << 20
+
+// maxSiteRefusal bounds what is read of a 4xx/5xx answer: a code and a
+// message, nothing more.
+const maxSiteRefusal = 1 << 20
+
 // siteErrorHints say what each refusal of the contract means for the user
 // (hatch-api h-bgdsq-9 "Refusals"; the 413 limits are the platform's
 // HATCH_SITES_* settings).
@@ -230,8 +243,15 @@ func (c *Client) siteCall(slug, path, contentType string, body io.Reader, size i
 		return redactURLError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	limit := int64(maxSiteAnswer)
 	if resp.StatusCode >= 400 {
+		limit = maxSiteRefusal
+	}
+	data, readErr := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if resp.StatusCode >= 400 {
+		if int64(len(data)) > limit {
+			data = data[:limit]
+		}
 		var e struct {
 			Error string `json:"error"`
 		}
@@ -242,6 +262,12 @@ func (c *Client) siteCall(slug, path, contentType string, body io.Reader, size i
 			}
 		}
 		return &SiteError{Status: resp.StatusCode, Code: e.Error}
+	}
+	if int64(len(data)) > limit {
+		return fmt.Errorf("the answer of the platform is over %d MiB: the site is too large to deploy in one go", limit>>20)
+	}
+	if readErr != nil {
+		return fmt.Errorf("reading response: %w", readErr)
 	}
 	if err := json.Unmarshal(data, out); err != nil {
 		return fmt.Errorf("decoding response: %w", err)

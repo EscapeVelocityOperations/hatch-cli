@@ -55,7 +55,7 @@ func deploySiteApp(appSlug, name, deployTarget string) (result *mcp.CallToolResu
 	}
 	note := envExcludedNote(m.Excluded)
 	if len(m.Skipped) > 0 {
-		note += "\nNot published (symlinks leaving deploy_target or pointing at a directory, special files): " + strings.Join(m.Skipped, ", ")
+		note += "\nNot published (symlinks leaving deploy_target, pointing at a directory or at a file left out, special files): " + strings.Join(m.Skipped, ", ")
 	}
 	return mcp.NewToolResultText(fmt.Sprintf(
 		"Deployed successfully!\nApp: %s\nURL: %s\nRuntime: static (Hatch site: version %d is live, no image built)\n"+

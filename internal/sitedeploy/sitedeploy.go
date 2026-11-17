@@ -12,14 +12,18 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/text/unicode/norm"
@@ -45,7 +49,7 @@ type Manifest struct {
 	Files    []api.SiteFile
 	Bytes    int64    // sum of the file sizes
 	Excluded []string // left out by .hatchignore and the safety defaults ("dir/" for a directory)
-	Skipped  []string // symlinks that leave the directory or point at a directory, and other non-regular entries
+	Skipped  []string // symlinks that leave the directory, point at a directory or at a file left out, and other non-regular entries
 
 	// source maps a sha256 to a file that holds it, for the upload.
 	source map[string]string
@@ -58,7 +62,9 @@ func (m *Manifest) Unique() int { return len(m.source) }
 // built-in defaults) decides what is left out, and env files never go. Each
 // file is read once to hash it; nothing is kept in memory but the list. A
 // symlink to a file inside dir is published with that file's content (the
-// artifact's web server followed it); any other symlink is skipped.
+// artifact's web server followed it) unless that file is itself left out
+// (.hatchignore, env file, .git): then the link is skipped, as the artifact
+// leaves it dead. Any other symlink is skipped too.
 func Build(dir string) (*Manifest, error) {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
@@ -85,14 +91,17 @@ func Build(dir string) (*Manifest, error) {
 
 	m := &Manifest{source: map[string]string{}}
 	byPath := map[string]string{} // normalized path -> original relative path
-	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	// Walk the absolute directory: with a relative --deploy-target
+	// (dist), EvalSymlinks would hand back relative paths that never match
+	// realDir.
+	err = filepath.Walk(absDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		if path == dir {
+		if path == absDir {
 			return nil
 		}
-		rel, err := filepath.Rel(dir, path)
+		rel, err := filepath.Rel(absDir, path)
 		if err != nil {
 			return err
 		}
@@ -110,7 +119,7 @@ func Build(dir string) (*Manifest, error) {
 
 		src := path
 		if info.Mode()&os.ModeSymlink != 0 {
-			target, ok := symlinkTarget(path, realDir)
+			target, ok := symlinkTarget(path, realDir, matcher)
 			if !ok {
 				m.Skipped = append(m.Skipped, rel)
 				return nil
@@ -125,7 +134,7 @@ func Build(dir string) (*Manifest, error) {
 		// out NFD), with forward slashes.
 		name := norm.NFC.String(filepath.ToSlash(rel))
 		if prev, dup := byPath[name]; dup {
-			return fmt.Errorf("%q and %q are the same file name once normalized: rename one of them", prev, rel)
+			return &siteOnlyError{fmt.Sprintf("%q and %q are the same file name once normalized: rename one of them", prev, rel)}
 		}
 		byPath[name] = rel
 
@@ -144,25 +153,61 @@ func Build(dir string) (*Manifest, error) {
 		return nil, err
 	}
 	if len(m.Files) == 0 {
-		return nil, fmt.Errorf("nothing to publish: %s holds no file (after .hatchignore)", dir)
+		return nil, &siteOnlyError{fmt.Sprintf("nothing to publish: %s holds no file (after .hatchignore)", dir)}
 	}
 	return m, nil
 }
 
-// symlinkTarget resolves a symlink to a regular file inside realDir.
-func symlinkTarget(path, realDir string) (string, bool) {
+// siteOnlyError is a refusal of Build that an artifact deploy of the same
+// directory does not make: an empty list, two names equal once normalized.
+type siteOnlyError struct{ msg string }
+
+func (e *siteOnlyError) Error() string { return e.msg }
+
+// IsSiteOnly reports whether err is a refusal of Build that only a site deploy
+// makes (nothing to publish, names equal once normalized). Any other error of
+// Build (.hatchignore, env files, unreadable file) stops an artifact deploy
+// as well.
+func IsSiteOnly(err error) bool {
+	var e *siteOnlyError
+	return errors.As(err, &e)
+}
+
+// symlinkTarget resolves a symlink to a regular file inside realDir that the
+// matcher keeps: the link's own path was checked by the caller, the file it
+// ends at is checked here (the file and each directory above it), so a link
+// cannot publish what .hatchignore, the env rule or the .git default leave
+// out.
+func symlinkTarget(path, realDir string, matcher *ignore.Matcher) (string, bool) {
 	target, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return "", false
 	}
-	if !strings.HasPrefix(target, realDir+string(filepath.Separator)) {
+	rel, err := filepath.Rel(realDir, target)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", false
 	}
 	st, err := os.Stat(target)
 	if err != nil || !st.Mode().IsRegular() {
 		return "", false
 	}
+	if leftOut(matcher, rel) {
+		return "", false
+	}
 	return target, true
+}
+
+// leftOut reports whether the matcher excludes the file rel (relative to the
+// deploy target, resolved) or one of the directories above it: the walk
+// never enters an excluded directory.
+func leftOut(matcher *ignore.Matcher, rel string) bool {
+	parts := strings.Split(rel, string(filepath.Separator))
+	for i := range parts {
+		if matcher.ShouldExclude(filepath.Join(parts[:i+1]...), i < len(parts)-1) {
+			return true
+		}
+	}
+	return false
 }
 
 func hashFile(path string) (string, int64, error) {
@@ -273,8 +318,9 @@ func Publish(c Client, slug string, m *Manifest, progress func(string)) (*Result
 }
 
 // transient tells the failures worth another round: the connection broke
-// (never a client timeout: the upload budget is 30 minutes), the platform
-// could not reach its storage (502), or the upload was cut.
+// (never a client timeout: the upload budget is 30 minutes, and never a
+// failure that repeats: unknown host, TLS certificate, refused connection),
+// the platform could not reach its storage (502), or the upload was cut.
 func transient(err error) bool {
 	var se *api.SiteError
 	if errors.As(err, &se) {
@@ -282,9 +328,37 @@ func transient(err error) bool {
 	}
 	var ue *url.Error
 	if errors.As(err, &ue) {
-		return !ue.Timeout()
+		return !ue.Timeout() && !permanentTransport(ue.Err)
 	}
 	return false
+}
+
+// permanentTransport tells the transport failures that a new try will not
+// fix: the name does not resolve, the TLS certificate or the address is
+// wrong, the connection is refused. A reset, an EOF or a broken pipe on an
+// open connection stay transient.
+func permanentTransport(err error) bool {
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		// A DNS lookup that timed out or failed on the resolver's side may
+		// work next time; "no such host" does not.
+		return dns.IsNotFound
+	}
+	var (
+		unknownAuthority x509.UnknownAuthorityError
+		hostname         x509.HostnameError
+		certInvalid      x509.CertificateInvalidError
+		recordHeader     tls.RecordHeaderError
+		certVerify       *tls.CertificateVerificationError
+		addr             *net.AddrError
+		parse            *net.ParseError
+	)
+	switch {
+	case errors.As(err, &unknownAuthority), errors.As(err, &hostname), errors.As(err, &certInvalid),
+		errors.As(err, &recordHeader), errors.As(err, &certVerify), errors.As(err, &addr), errors.As(err, &parse):
+		return true
+	}
+	return errors.Is(err, syscall.ECONNREFUSED)
 }
 
 // upload streams the gzipped tar of the missing blobs: one entry per blob,
