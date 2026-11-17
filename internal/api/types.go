@@ -156,4 +156,7 @@ type Preview struct {
 	Status    string    `json:"status"`
 	ExpiresAt time.Time `json:"expires_at"`
 	Created   bool      `json:"created"`
+	// Kind is "site" when the parent egg serves a Hatch site, so the
+	// preview publishes a site; "image" or absent otherwise (T-505).
+	Kind string `json:"kind,omitempty"`
 }

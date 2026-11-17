@@ -20,6 +20,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/deploywait"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/exitcode"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ignore"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/sitedeploy"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
 	"golang.org/x/term"
 )
@@ -167,22 +168,29 @@ func deployArtifact(cfg ArtifactDeployConfig) (map[string]any, error) {
 		}
 	}
 
-	// Create tar.gz from directory
-	ui.Info("Creating artifact from " + cfg.DeployTarget)
-	artifact, excluded, err := createTarGz(cfg.DeployTarget)
-	if err != nil {
-		return nil, fmt.Errorf("creating artifact: %w", err)
-	}
-	if len(excluded) > 0 {
-		ui.Println(ui.Dim("  Excluded: " + strings.Join(excluded, ", ")))
-	}
-	if envFiles := envFilesExcluded(excluded); len(envFiles) > 0 {
-		ui.Warn("Env files are never sent in an artifact and were left out: " + strings.Join(envFiles, ", "))
-		ui.Info("Set the variables on the egg instead: hatch env set KEY=VALUE")
-	}
-	ui.Info(fmt.Sprintf("Artifact size: %.2f MB", float64(len(artifact))/1024/1024))
-
 	client := deps.NewAPIClient(cfg.Token)
+	static := cfg.Runtime == "static"
+
+	// A static deploy to an egg that serves a Hatch site sends the changed
+	// files only (T-506). This is decided before any artifact is built: a
+	// site may be larger than an artifact can be.
+	if static && previewPR == 0 {
+		if slug := knownSlug(cfg.AppSlug); slug != "" {
+			if fields, done, err := deploySiteIfMigrated(client, cfg, slug); done {
+				return fields, err
+			}
+		}
+	}
+
+	// A static preview may be a site too: its artifact is built once the
+	// preview's kind is known (runPreviewDeploy).
+	var artifact []byte
+	if !static || previewPR == 0 {
+		artifact, err = buildArtifact(cfg.DeployTarget)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// Preview deploy (h-qtie8): resolve the PARENT egg, create/refresh the
 	// preview for the PR, and upload the artifact to the PREVIEW slug.
@@ -238,6 +246,120 @@ func deployArtifact(cfg ArtifactDeployConfig) (map[string]any, error) {
 	}
 
 	return fields, nil
+}
+
+// buildArtifact packs the deploy target into the tar.gz an artifact deploy
+// uploads, reporting what was left out.
+func buildArtifact(dir string) ([]byte, error) {
+	ui.Info("Creating artifact from " + dir)
+	artifact, excluded, err := createTarGz(dir)
+	if err != nil {
+		return nil, fmt.Errorf("creating artifact: %w", err)
+	}
+	if len(excluded) > 0 {
+		ui.Println(ui.Dim("  Excluded: " + strings.Join(excluded, ", ")))
+	}
+	if envFiles := envFilesExcluded(excluded); len(envFiles) > 0 {
+		ui.Warn("Env files are never sent in an artifact and were left out: " + strings.Join(envFiles, ", "))
+		ui.Info("Set the variables on the egg instead: hatch env set KEY=VALUE")
+	}
+	ui.Info(fmt.Sprintf("Artifact size: %.2f MB", float64(len(artifact))/1024/1024))
+	return artifact, nil
+}
+
+// knownSlug is the egg a deploy targets without creating one: --app, else
+// ./.hatch.toml. "" means a new egg (never a site yet) or an unreadable
+// .hatch.toml, which resolveApp reports.
+func knownSlug(appSlug string) string {
+	if appSlug != "" {
+		return appSlug
+	}
+	hc, err := readHatchConfig(".")
+	if err != nil || hc == nil {
+		return ""
+	}
+	return hc.Slug
+}
+
+// deploySiteIfMigrated publishes the deploy target as a site when the egg
+// already serves one. The signal is the egg's deployment history: hatch-api
+// records every site publication there as a "kind":"site" row (T-505), and an
+// API without sites has none. done is false when the egg is not a site, or
+// when the platform has sites switched off (404 sites_disabled): the caller
+// then deploys an artifact, unchanged.
+func deploySiteIfMigrated(client APIClient, cfg ArtifactDeployConfig, slug string) (map[string]any, bool, error) {
+	isSite, err := client.HasSite(slug)
+	if err != nil {
+		err = fmt.Errorf("checking whether egg %s serves a Hatch site: %w", slug, err)
+		return jsonError(slug, err), true, err
+	}
+	if !isSite {
+		return nil, false, nil
+	}
+	ui.Info(fmt.Sprintf("Deploying to existing egg: %s (Hatch site: changed files only)", slug))
+	fields, done, err := deploySite(client, cfg, slug, "")
+	if done && err == nil && cfg.Domain != "" {
+		configureDomain(api.NewClient(cfg.Token), slug, cfg.Domain)
+	}
+	return fields, done, err
+}
+
+// deploySite runs the site contract on slug (sitedeploy.Publish). done is
+// false only when the platform has sites switched off.
+func deploySite(client APIClient, cfg ArtifactDeployConfig, slug, url string) (map[string]any, bool, error) {
+	m, err := sitedeploy.Build(cfg.DeployTarget)
+	if err != nil {
+		err = fmt.Errorf("listing site files: %w", err)
+		return jsonError(slug, err), true, err
+	}
+	if len(m.Excluded) > 0 {
+		ui.Println(ui.Dim("  Excluded: " + strings.Join(m.Excluded, ", ")))
+	}
+	if envFiles := envFilesExcluded(m.Excluded); len(envFiles) > 0 {
+		ui.Warn("Env files are never deployed and were left out: " + strings.Join(envFiles, ", "))
+		ui.Info("Set the variables on the egg instead: hatch env set KEY=VALUE")
+	}
+	if len(m.Skipped) > 0 {
+		ui.Warn("Not published (symlinks leaving the deploy target or pointing at a directory, special files): " + strings.Join(m.Skipped, ", "))
+	}
+
+	sp := ui.NewSpinner("Publishing site...")
+	sp.Start()
+	res, err := sitedeploy.Publish(client, slug, m, func(line string) {
+		sp.Update("Publishing site: " + line + "...")
+	})
+	sp.Stop()
+	if errors.Is(err, sitedeploy.ErrSitesDisabled) {
+		ui.Info("Hatch sites are not enabled on this platform: deploying an artifact")
+		return nil, false, nil
+	}
+	if err != nil {
+		return jsonError(slug, err), true, err
+	}
+
+	if res.Publish.URL != "" {
+		url = res.Publish.URL
+	}
+	if url == "" {
+		url = fmt.Sprintf("https://%s.nest.gethatch.eu", slug)
+	}
+	url = strings.TrimSuffix(url, "/")
+	ui.Success(fmt.Sprintf("Site version %d is live: %d of %d files uploaded (%s sent)",
+		res.Publish.Version, res.UploadedFiles, len(m.Files), sitedeploy.FormatBytes(res.SentBytes)))
+	ui.Info(fmt.Sprintf("Egg URL: %s", url))
+	return map[string]any{
+		"slug":           slug,
+		"url":            url,
+		"status":         "live",
+		"waited":         false,
+		"kind":           "site",
+		"site_version":   res.Publish.Version,
+		"deployment_id":  res.Publish.DeploymentID,
+		"files":          len(m.Files),
+		"uploaded_files": res.UploadedFiles,
+		"uploaded_bytes": res.UploadedBytes,
+		"sent_bytes":     res.SentBytes,
+	}, true, nil
 }
 
 // deployResult is the outcome of the post-upload wait.
@@ -347,6 +469,25 @@ func runPreviewDeploy(client APIClient, cfg ArtifactDeployConfig, artifact []byt
 	preview, err := client.CreatePreview(parentSlug, pr)
 	if err != nil {
 		return nil, fmt.Errorf("creating preview: %w", err)
+	}
+
+	if cfg.Runtime == "static" {
+		// The preview of an egg that serves a Hatch site publishes a site
+		// (hatch-api T-505: the preview answer carries kind).
+		if preview.Kind == "site" {
+			if fields, done, err := deploySite(client, cfg, preview.Slug, preview.URL); done {
+				if fields != nil {
+					fields["pr_number"] = preview.PRNumber
+				}
+				return fields, err
+			}
+		}
+		artifact, err = buildArtifact(cfg.DeployTarget)
+		if err != nil {
+			fields := jsonError(preview.Slug, err)
+			fields["pr_number"] = preview.PRNumber
+			return fields, err
+		}
 	}
 
 	sp := ui.NewSpinner("Uploading artifact to preview...")
