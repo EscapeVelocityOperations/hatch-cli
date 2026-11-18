@@ -20,8 +20,11 @@ var testCLI = CLIRelease{
 
 func validParams(runtime string) WorkflowParams {
 	p := WorkflowParams{App: "fixture-stage", Runtime: runtime, DeployTarget: "dist", StartCommand: "node server.js", CLI: testCLI}
-	if runtime == "static" {
+	switch runtime {
+	case "static":
 		p.StartCommand = ""
+	case "go":
+		p.StartCommand, p.GoPackage = "./server", "./cmd/server"
 	}
 	if runtime == "python" {
 		p.PythonManifest = PythonRequirements
@@ -341,7 +344,7 @@ func TestWorkflow_PythonInstallFollowsManifest(t *testing.T) {
 				if strings.Contains(wf.Content, tc.wantNoText) {
 					t.Errorf("workflow must not contain %q:\n%s", tc.wantNoText, wf.Content)
 				}
-				cmds, err := workflowtest.BuildCommands(provider, wf.Content)
+				d, err := workflowtest.Extract(provider, wf.Content)
 				if err != nil {
 					t.Fatalf("%v\n%s", err, wf.Content)
 				}
@@ -351,12 +354,12 @@ func TestWorkflow_PythonInstallFollowsManifest(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				installs, out, err := workflowtest.RunBuild(cmds, project)
+				res, err := workflowtest.RunBuild(d, project, nil)
 				if err != nil {
-					t.Fatalf("build step failed in a project holding %v: %v\n%s\n%s", tc.files, err, out, wf.Content)
+					t.Fatalf("build step failed in a project holding %v: %v\n%s\n%s", tc.files, err, res.Output, wf.Content)
 				}
-				if !reflect.DeepEqual(installs, tc.wantInstalls) {
-					t.Errorf("pip install requests = %q, want %q", installs, tc.wantInstalls)
+				if !reflect.DeepEqual(res.PipInstalls, tc.wantInstalls) {
+					t.Errorf("pip install requests = %q, want %q", res.PipInstalls, tc.wantInstalls)
 				}
 			})
 		}
@@ -370,7 +373,7 @@ func TestWorkflow_PythonRequirementsStepFailsWithoutRequirementsFile(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmds, err := workflowtest.BuildCommands("github", wf.Content)
+	d, err := workflowtest.Extract("github", wf.Content)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,8 +381,8 @@ func TestWorkflow_PythonRequirementsStepFailsWithoutRequirementsFile(t *testing.
 	if err := os.WriteFile(filepath.Join(project, "pyproject.toml"), []byte("[project]\nname = \"x\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, out, err := workflowtest.RunBuild(cmds, project); err == nil || !strings.Contains(out, "Could not open requirements file") {
-		t.Fatalf("expected the requirements.txt install to fail in a pyproject-only project; err=%v out=%q", err, out)
+	if res, err := workflowtest.RunBuild(d, project, nil); err == nil || !strings.Contains(res.Output, "Could not open requirements file") {
+		t.Fatalf("expected the requirements.txt install to fail in a pyproject-only project; err=%v out=%q", err, res.Output)
 	}
 }
 

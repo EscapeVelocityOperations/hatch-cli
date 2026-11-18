@@ -33,6 +33,17 @@ type Deploy struct {
 	Shell  string            // GitHub step shell ("" for GitLab)
 	// NoExpand lists GitLab variables declared with expand: false.
 	NoExpand map[string]bool
+	// Build holds the shell steps that run before the deploy step, in order
+	// (GitHub `run:` steps; GitLab script entries). Actions without a `run:` are
+	// not included: the runner's toolchain setup is not reproduced.
+	Build []BuildStep
+}
+
+// BuildStep is one shell step that runs before the deploy step.
+type BuildStep struct {
+	Env    map[string]string // the step's environment (GitLab: the job variables)
+	Script string
+	Shell  string // GitHub step shell ("" = the runner default)
 }
 
 // Extract parses a generated workflow and returns its deploy step.
@@ -57,7 +68,13 @@ func Extract(provider, content string) (Deploy, error) {
 			return Deploy{}, fmt.Errorf("github workflow has no deploy steps")
 		}
 		last := steps[len(steps)-1]
-		return Deploy{Env: last.Env, Script: last.Run, Shell: last.Shell}, nil
+		d := Deploy{Env: last.Env, Script: last.Run, Shell: last.Shell}
+		for _, s := range steps[:len(steps)-1] {
+			if s.Run != "" {
+				d.Build = append(d.Build, BuildStep{Env: s.Env, Script: s.Run, Shell: s.Shell})
+			}
+		}
+		return d, nil
 	case "gitlab":
 		var wf struct {
 			Deploy struct {
@@ -80,6 +97,9 @@ func Extract(provider, content string) (Deploy, error) {
 			if v.Expand != nil && !*v.Expand {
 				d.NoExpand[k] = true
 			}
+		}
+		for _, line := range wf.Deploy.Script[:len(wf.Deploy.Script)-1] {
+			d.Build = append(d.Build, BuildStep{Env: d.Env, Script: line})
 		}
 		return d, nil
 	}
@@ -158,78 +178,74 @@ case "$1" in
 esac
 `
 
-// BuildCommands returns the shell commands of a generated workflow that run
-// before the deploy step: GitHub `run:` steps and GitLab script lines, in order.
-func BuildCommands(provider, content string) ([]string, error) {
-	switch provider {
-	case "github":
-		var wf struct {
-			Jobs map[string]struct {
-				Steps []struct {
-					Run string `yaml:"run"`
-				} `yaml:"steps"`
-			} `yaml:"jobs"`
-		}
-		if err := yaml.Unmarshal([]byte(content), &wf); err != nil {
-			return nil, fmt.Errorf("github workflow is not valid YAML: %w", err)
-		}
-		steps := wf.Jobs["deploy"].Steps
-		if len(steps) == 0 {
-			return nil, fmt.Errorf("github workflow has no deploy steps")
-		}
-		var cmds []string
-		for _, st := range steps[:len(steps)-1] { // the last step is the deploy
-			if st.Run != "" {
-				cmds = append(cmds, st.Run)
-			}
-		}
-		return cmds, nil
-	case "gitlab":
-		var wf struct {
-			Deploy struct {
-				Script []string `yaml:"script"`
-			} `yaml:"deploy"`
-		}
-		if err := yaml.Unmarshal([]byte(content), &wf); err != nil {
-			return nil, fmt.Errorf("gitlab workflow is not valid YAML: %w", err)
-		}
-		if len(wf.Deploy.Script) == 0 {
-			return nil, fmt.Errorf("gitlab job has no script")
-		}
-		return wf.Deploy.Script[:len(wf.Deploy.Script)-1], nil // the last line is the deploy
-	}
-	return nil, fmt.Errorf("unknown provider %q", provider)
+func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// BuildResult is what RunBuild observed while running the build steps.
+type BuildResult struct {
+	Output      string   // combined output of every step run
+	PipInstalls []string // each `pip install` request FakePip saw, args space-joined
 }
 
-// RunBuild runs build commands one by one with /bin/sh -e in workdir (the
-// checked-out project), with FakePip as `pip`, stopping at the first failure.
-// It returns the pip install requests seen (one "args" string each), the
-// combined output, and the first command error, if any.
-func RunBuild(cmds []string, workdir string) (installs []string, output string, err error) {
-	stubDir, mkErr := os.MkdirTemp("", "hatch-wf-pip")
-	if mkErr != nil {
-		return nil, "", mkErr
+// RunBuild executes the shell steps that precede the deploy step (d.Build), in
+// order, with /bin/sh -e in workdir (the checked-out project) — a minimal
+// environment (PATH, HOME, the step env, extra) in which:
+//   - the host's Go toolchain and caches are available, so a Go build step really
+//     compiles offline (h-8tvak.4);
+//   - `pip` is FakePip, which records each install request and fails the way real
+//     pip does on a missing requirements file or project (h-8tvak.5).
+//
+// It stops at the first failing step and returns what was observed up to there
+// (output and pip requests are filled even on error).
+func RunBuild(d Deploy, workdir string, extra map[string]string) (BuildResult, error) {
+	var res BuildResult
+	stubDir, err := os.MkdirTemp("", "hatch-wf-build")
+	if err != nil {
+		return res, err
 	}
 	defer os.RemoveAll(stubDir)
-	logFile := filepath.Join(stubDir, "pip.log")
-	if wErr := os.WriteFile(filepath.Join(stubDir, "pip"), []byte(FakePip), 0o755); wErr != nil {
-		return nil, "", wErr
+	pipLog := filepath.Join(stubDir, "pip.log")
+	if err := os.WriteFile(filepath.Join(stubDir, "pip"), []byte(FakePip), 0o755); err != nil {
+		return res, err
+	}
+	path := stubDir + ":/usr/bin:/bin"
+	var goEnv []string
+	goBin, goErr := exec.LookPath("go")
+	if goErr == nil {
+		path = stubDir + ":" + filepath.Dir(goBin) + ":/usr/bin:/bin"
+		goEnv = []string{"GOTOOLCHAIN=local", "GOFLAGS=-buildvcs=false", "GOPROXY=off"}
+		if b, err := exec.Command(goBin, "env", "GOCACHE", "GOMODCACHE").Output(); err == nil {
+			if lines := strings.Split(strings.TrimSpace(string(b)), "\n"); len(lines) == 2 {
+				goEnv = append(goEnv, "GOCACHE="+lines[0], "GOMODCACHE="+lines[1])
+			}
+		}
 	}
 	var out bytes.Buffer
-	for _, c := range cmds {
-		cmd := exec.Command("/bin/sh", "-e", "-c", c)
+	var runErr error
+	for i, step := range d.Build {
+		env := append([]string{"PATH=" + path, "HOME=" + workdir, "HATCH_FAKE_PIP_LOG=" + pipLog}, goEnv...)
+		for k, v := range step.Env {
+			env = append(env, k+"="+v)
+		}
+		for k, v := range extra {
+			env = append(env, k+"="+v)
+		}
+		// -e: GitHub's default shells (bash/sh -e {0}) and GitLab's script runner
+		// all stop at the first failing command.
+		cmd := exec.Command("/bin/sh", "-e", "-c", step.Script)
 		cmd.Dir = workdir
-		cmd.Env = []string{"PATH=" + stubDir + ":/usr/bin:/bin", "HOME=" + workdir, "HATCH_FAKE_PIP_LOG=" + logFile}
+		cmd.Env = env
 		cmd.Stdout, cmd.Stderr = &out, &out
-		if runErr := cmd.Run(); runErr != nil {
-			err = fmt.Errorf("build command %q failed: %w", c, runErr)
+		if err := cmd.Run(); err != nil {
+			runErr = fmt.Errorf("build step %d failed: %w", i+1, err)
+			if goErr != nil {
+				runErr = fmt.Errorf("%w (no go toolchain on PATH: %v)", runErr, goErr)
+			}
 			break
 		}
 	}
-	if b, rErr := os.ReadFile(logFile); rErr == nil {
-		installs = strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+	res.Output = out.String()
+	if b, err := os.ReadFile(pipLog); err == nil {
+		res.PipInstalls = strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
 	}
-	return installs, out.String(), err
+	return res, runErr
 }
-
-func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
