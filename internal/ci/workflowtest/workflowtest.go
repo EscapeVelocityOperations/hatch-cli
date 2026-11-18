@@ -164,46 +164,88 @@ func Run(d Deploy, workdir string, served string, extra map[string]string) (Resu
 	return res, nil
 }
 
+// FakePip is the `pip` the build-step runner puts on PATH. It records each
+// install request in $HATCH_FAKE_PIP_LOG and fails the way real pip does when
+// the file or project it is asked to install from is missing.
+const FakePip = `#!/bin/sh
+[ "$1" = install ] || { echo "fake pip: unexpected command: $*" >&2; exit 2; }
+shift
+printf '%s\n' "$*" >> "$HATCH_FAKE_PIP_LOG"
+case "$1" in
+  -r) [ -f "$2" ] || { echo "ERROR: Could not open requirements file: [Errno 2] No such file or directory: '$2'" >&2; exit 1; } ;;
+  .) [ -f pyproject.toml ] || [ -f setup.py ] || { echo "ERROR: Directory '.' is not installable. Neither 'setup.py' nor 'pyproject.toml' found." >&2; exit 1; } ;;
+  *) echo "fake pip: unexpected install target: $*" >&2; exit 2 ;;
+esac
+`
+
 func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// RunBuild executes the shell steps that precede the deploy step, in order,
-// with /bin/sh in workdir — a minimal environment (PATH, HOME, the step env,
-// extra) plus the host's Go toolchain and caches, so a Go build step really
-// compiles offline. It stops at the first failing step and returns the combined
-// output of all steps run.
-func RunBuild(d Deploy, workdir string, extra map[string]string) (string, error) {
-	goBin, err := exec.LookPath("go")
+// BuildResult is what RunBuild observed while running the build steps.
+type BuildResult struct {
+	Output      string   // combined output of every step run
+	PipInstalls []string // each `pip install` request FakePip saw, args space-joined
+}
+
+// RunBuild executes the shell steps that precede the deploy step (d.Build), in
+// order, with /bin/sh -e in workdir (the checked-out project) — a minimal
+// environment (PATH, HOME, the step env, extra) in which:
+//   - the host's Go toolchain and caches are available, so a Go build step really
+//     compiles offline (h-8tvak.4);
+//   - `pip` is FakePip, which records each install request and fails the way real
+//     pip does on a missing requirements file or project (h-8tvak.5).
+//
+// It stops at the first failing step and returns what was observed up to there
+// (output and pip requests are filled even on error).
+func RunBuild(d Deploy, workdir string, extra map[string]string) (BuildResult, error) {
+	var res BuildResult
+	stubDir, err := os.MkdirTemp("", "hatch-wf-build")
 	if err != nil {
-		return "", fmt.Errorf("the go toolchain is needed to run a Go build step: %w", err)
+		return res, err
 	}
-	var out bytes.Buffer
-	for i, step := range d.Build {
-		env := []string{
-			"PATH=" + filepath.Dir(goBin) + ":/usr/bin:/bin", "HOME=" + workdir, "GOTOOLCHAIN=local",
-			"GOFLAGS=-buildvcs=false", "GOPROXY=off",
-		}
+	defer os.RemoveAll(stubDir)
+	pipLog := filepath.Join(stubDir, "pip.log")
+	if err := os.WriteFile(filepath.Join(stubDir, "pip"), []byte(FakePip), 0o755); err != nil {
+		return res, err
+	}
+	path := stubDir + ":/usr/bin:/bin"
+	var goEnv []string
+	goBin, goErr := exec.LookPath("go")
+	if goErr == nil {
+		path = stubDir + ":" + filepath.Dir(goBin) + ":/usr/bin:/bin"
+		goEnv = []string{"GOTOOLCHAIN=local", "GOFLAGS=-buildvcs=false", "GOPROXY=off"}
 		if b, err := exec.Command(goBin, "env", "GOCACHE", "GOMODCACHE").Output(); err == nil {
 			if lines := strings.Split(strings.TrimSpace(string(b)), "\n"); len(lines) == 2 {
-				env = append(env, "GOCACHE="+lines[0], "GOMODCACHE="+lines[1])
+				goEnv = append(goEnv, "GOCACHE="+lines[0], "GOMODCACHE="+lines[1])
 			}
 		}
+	}
+	var out bytes.Buffer
+	var runErr error
+	for i, step := range d.Build {
+		env := append([]string{"PATH=" + path, "HOME=" + workdir, "HATCH_FAKE_PIP_LOG=" + pipLog}, goEnv...)
 		for k, v := range step.Env {
 			env = append(env, k+"="+v)
 		}
 		for k, v := range extra {
 			env = append(env, k+"="+v)
 		}
-		args := []string{"-c", step.Script}
-		if step.Shell == "sh" { // GitHub `shell: sh` runs `sh -e {0}`
-			args = []string{"-e", "-c", step.Script}
-		}
-		cmd := exec.Command("/bin/sh", args...)
+		// -e: GitHub's default shells (bash/sh -e {0}) and GitLab's script runner
+		// all stop at the first failing command.
+		cmd := exec.Command("/bin/sh", "-e", "-c", step.Script)
 		cmd.Dir = workdir
 		cmd.Env = env
 		cmd.Stdout, cmd.Stderr = &out, &out
 		if err := cmd.Run(); err != nil {
-			return out.String(), fmt.Errorf("build step %d failed: %w", i+1, err)
+			runErr = fmt.Errorf("build step %d failed: %w", i+1, err)
+			if goErr != nil {
+				runErr = fmt.Errorf("%w (no go toolchain on PATH: %v)", runErr, goErr)
+			}
+			break
 		}
 	}
-	return out.String(), nil
+	res.Output = out.String()
+	if b, err := os.ReadFile(pipLog); err == nil {
+		res.PipInstalls = strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+	}
+	return res, runErr
 }

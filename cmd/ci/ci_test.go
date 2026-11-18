@@ -665,13 +665,14 @@ func TestCI_SetSecret_PipedMessageLine_IsRefused(t *testing.T) {
 // (gh and glab both read the secret from a non-terminal stdin) — no "paste it
 // when prompted", which is unverified for glab.
 func TestCI_PrintedInstruction_PipesTheToken(t *testing.T) {
-	for provider, want := range map[string]string{
-		"github": "hatch auth keys create | gh secret set HATCH_TOKEN -R acme/repo",
-		"gitlab": "hatch auth keys create | glab variable set HATCH_TOKEN --masked -R acme/repo",
+	for provider, tc := range map[string]struct{ remote, want string }{
+		"github": {"git@github.com:acme/repo.git", "hatch auth keys create | gh secret set HATCH_TOKEN -R acme/repo"},
+		"gitlab": {"git@gitlab.com:acme/repo.git", "hatch auth keys create | glab variable set HATCH_TOKEN --masked --protected -R acme/repo"},
 	} {
+		want := tc.want
 		t.Run(provider, func(t *testing.T) {
 			restore := setMockDeps(&Deps{
-				GitRemote: func() (string, error) { return "git@example.com:acme/repo.git", nil },
+				GitRemote: func() (string, error) { return tc.remote, nil },
 				Getwd:     func() (string, error) { return "", os.ErrNotExist },
 				Stat:      func(string) bool { return false },
 				WriteFile: func(string, []byte) error { return nil },
@@ -686,6 +687,33 @@ func TestCI_PrintedInstruction_PipesTheToken(t *testing.T) {
 			}
 			if strings.Contains(out, "when prompted") {
 				t.Errorf("must not promise a prompt:\n%s", out)
+			}
+		})
+	}
+}
+
+// h-8tvak.3: a protected GitLab variable is only exposed to protected branches
+// and tags, and the generated job runs `only: main`. The GitLab instructions
+// must therefore say that the deploy branch has to be protected (otherwise the
+// job gets no token), and GitHub — whose secrets have no such flag — must not
+// be told anything about it.
+func TestCI_GitLabInstruction_NamesBranchProtection(t *testing.T) {
+	for provider, wantNote := range map[string]bool{"gitlab": true, "github": false} {
+		t.Run(provider, func(t *testing.T) {
+			restore := setMockDeps(&Deps{
+				GitRemote: func() (string, error) { return "git@example.com:acme/repo.git", nil },
+				Getwd:     func() (string, error) { return "", os.ErrNotExist },
+				Stat:      func(string) bool { return false },
+				WriteFile: func(string, []byte) error { return nil },
+			})
+			defer restore()
+			out, err := execCI(t, args("--provider", provider, "--runtime", "node"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			has := strings.Contains(out, "protected branch")
+			if has != wantNote {
+				t.Errorf("%s: protected-branch note present=%v, want %v in:\n%s", provider, has, wantNote, out)
 			}
 		})
 	}
@@ -882,5 +910,186 @@ func TestCI_GoWithoutWorkingDirectoryNeedsAnExplicitPackage(t *testing.T) {
 	_, err := execCI(t, []string{"--provider", "github", "--runtime", "go", "--app", "a", "--deploy-target", "dist", "--start-command", goStart, "--print"})
 	if err == nil || !strings.Contains(err.Error(), "pass --go-package") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// h-8tvak.2 (Vigie): the -R target handed to the provider CLI is the repository
+// origin points at — full GitLab namespace and host kept — never a truncated or
+// host-less lookalike (org/team/project must not become team/project, which is a
+// DIFFERENT project that may exist and be writable). Runs the real command with
+// a fake runner and intercepts the exact target, in the --set-secret path and in
+// the printed instruction.
+func TestCI_RepoTarget_KeepsNamespaceAndHost(t *testing.T) {
+	cases := []struct {
+		name, provider, remote, target string
+	}{
+		{"gitlab subgroup, https", "gitlab", "https://gitlab.com/org/team/project.git", "https://gitlab.com/org/team/project"},
+		{"gitlab subgroup, ssh scp", "gitlab", "git@gitlab.com:org/team/project.git", "https://gitlab.com/org/team/project"},
+		{"gitlab several subgroups, ssh url", "gitlab", "ssh://git@gitlab.com/org/a/b/project.git", "https://gitlab.com/org/a/b/project"},
+		{"self-hosted gitlab, https", "gitlab", "https://git.example.org/grp/sub/project.git", "https://git.example.org/grp/sub/project"},
+		{"self-hosted gitlab, ssh", "gitlab", "git@git.example.org:grp/sub/project.git", "https://git.example.org/grp/sub/project"},
+		{"self-hosted gitlab, two segments", "gitlab", "git@git.example.org:grp/project.git", "https://git.example.org/grp/project"},
+		{"gitlab.com project, https", "gitlab", "https://gitlab.com/acme/repo.git", "acme/repo"},
+		{"github, ssh", "github", "git@github.com:acme/repo.git", "acme/repo"},
+		{"github enterprise, ssh", "github", "git@ghe.example.org:acme/repo.git", "https://ghe.example.org/acme/repo"},
+		{"remote with credentials", "gitlab", "https://oauth2:SENTINEL-credential@git.example.org/grp/sub/project.git", "https://git.example.org/grp/sub/project"},
+		{"not derivable: provider CLI resolves the current repo", "gitlab", "git@gitlab.com:project.git", ""},
+	}
+	for _, c := range cases {
+		wantArgs := func(bin string) string {
+			base := "secret set HATCH_TOKEN"
+			if bin == "glab" {
+				base = "variable set HATCH_TOKEN --masked --protected"
+			}
+			if c.target == "" {
+				return base
+			}
+			return base + " -R " + c.target
+		}
+		bin := map[string]string{"github": "gh", "gitlab": "glab"}[c.provider]
+
+		t.Run(c.name+"/set-secret", func(t *testing.T) {
+			rec := &recorder{}
+			restore := setMockDeps(&Deps{
+				GitRemote: func() (string, error) { return c.remote, nil },
+				Getwd:     func() (string, error) { return "", os.ErrNotExist },
+				Stat:      func(string) bool { return false },
+				WriteFile: func(string, []byte) error { return nil },
+				LookPath:  func(string) bool { return true },
+				Run:       rec.run,
+				ReadToken: func(io.Writer) (string, error) { return pipedToken, nil },
+			})
+			defer restore()
+			out, err := execCI(t, args("--provider", c.provider, "--runtime", "node", "--set-secret"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rec.bin != bin || strings.Join(rec.args, " ") != wantArgs(bin) {
+				t.Errorf("ran %s %v, want %s %s", rec.bin, rec.args, bin, wantArgs(bin))
+			}
+			if rec.stdin != pipedToken {
+				t.Errorf("token must reach the provider CLI on stdin; got %q", rec.stdin)
+			}
+			if strings.Contains(out, "SENTINEL-credential") || strings.Contains(strings.Join(rec.args, " "), "SENTINEL-credential") {
+				t.Errorf("remote credentials leaked into argv/output:\n%s", out)
+			}
+		})
+
+		t.Run(c.name+"/print", func(t *testing.T) {
+			restore := setMockDeps(&Deps{
+				GitRemote: func() (string, error) { return c.remote, nil },
+				Getwd:     func() (string, error) { return "", os.ErrNotExist },
+				Stat:      func(string) bool { return false },
+				WriteFile: func(string, []byte) error { return nil },
+			})
+			defer restore()
+			out, err := execCI(t, args("--provider", c.provider, "--runtime", "node"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "hatch auth keys create | " + bin + " " + wantArgs(bin) + "\n"
+			if !strings.Contains(out, want) {
+				t.Errorf("missing %q in:\n%s", want, out)
+			}
+			if strings.Contains(out, "SENTINEL-credential") {
+				t.Errorf("remote credentials leaked into output:\n%s", out)
+			}
+		})
+	}
+}
+
+// h-8tvak.5: `hatch ci` accepts a python project with only pyproject.toml, so
+// the generated build step must install from it, not from a requirements.txt
+// the project does not have. Each case runs the generated build steps in a
+// project holding exactly those files.
+func TestCI_PythonInstallFollowsTheProjectManifest(t *testing.T) {
+	cases := []struct {
+		name    string
+		files   map[string]string
+		install string
+	}{
+		{"requirements.txt only", map[string]string{"requirements.txt": "flask\n"}, "-r requirements.txt"},
+		{"pyproject.toml only", map[string]string{"pyproject.toml": "[project]\nname = \"x\"\n"}, "."},
+		{"both", map[string]string{"requirements.txt": "flask\n", "pyproject.toml": "[project]\nname = \"x\"\n"}, "-r requirements.txt"},
+	}
+	for _, provider := range []string{"github", "gitlab"} {
+		for _, tc := range cases {
+			t.Run(provider+"/"+tc.name, func(t *testing.T) {
+				dir := t.TempDir()
+				for name, content := range tc.files {
+					if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var cap capture
+				restore := setMockDeps(&Deps{
+					GitRemote: func() (string, error) { return "", errors.New("no remote") },
+					Getwd:     func() (string, error) { return dir, nil },
+					Stat:      func(string) bool { return false },
+					WriteFile: cap.write,
+				})
+				defer restore()
+				if out, err := execCI(t, args("--provider", provider)); err != nil {
+					t.Fatalf("%v\n%s", err, out)
+				}
+				d, err := workflowtest.Extract(provider, string(cap.content))
+				if err != nil {
+					t.Fatal(err)
+				}
+				res, err := workflowtest.RunBuild(d, dir, nil)
+				if err != nil {
+					t.Fatalf("generated build step fails in a project with %v: %v\n%s\n%s", tc.files, err, res.Output, cap.content)
+				}
+				if len(res.PipInstalls) != 1 || res.PipInstalls[0] != tc.install {
+					t.Errorf("pip install requests = %q, want [%q]", res.PipInstalls, tc.install)
+				}
+			})
+		}
+	}
+}
+
+// h-8tvak.5: a python runtime with no manifest to install from (declared in
+// .hatch.toml, or forced with --runtime from an unreadable directory) is refused
+// before any release lookup or write, with a message naming the manifests.
+func TestCI_RefusesPythonWithoutManifest(t *testing.T) {
+	emptyDir := t.TempDir()
+	tomlDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tomlDir, ".hatch.toml"), []byte("slug = \"a\"\nruntime = \"python\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]struct {
+		getwd func() (string, error)
+		argv  []string
+	}{
+		"--runtime python, empty project":  {func() (string, error) { return emptyDir, nil }, args("--provider", "github", "--runtime", "python")},
+		"runtime python from .hatch.toml":  {func() (string, error) { return tomlDir, nil }, args("--provider", "gitlab")},
+		"--runtime python, no project dir": {func() (string, error) { return "", os.ErrNotExist }, args("--provider", "gitlab", "--runtime", "python")},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var cap capture
+			fetched := false
+			restore := setMockDeps(&Deps{
+				GitRemote: func() (string, error) { return "", errors.New("no remote") },
+				Getwd:     tc.getwd,
+				Stat:      func(string) bool { return false },
+				WriteFile: cap.write,
+				FetchRelease: func(v string) (detect.CLIRelease, error) {
+					fetched = true
+					return fakeRelease(v)
+				},
+			})
+			defer restore()
+			out, err := execCI(t, tc.argv)
+			if err == nil || !strings.Contains(err.Error(), "requirements.txt") || !strings.Contains(err.Error(), "pyproject.toml") {
+				t.Fatalf("err = %v, want a refusal naming requirements.txt and pyproject.toml\n%s", err, out)
+			}
+			if cap.called {
+				t.Errorf("nothing may be written on refusal; wrote %s", cap.path)
+			}
+			if fetched {
+				t.Error("refusal must happen before the release lookup")
+			}
+		})
 	}
 }

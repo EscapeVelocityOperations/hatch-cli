@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
@@ -716,5 +717,21 @@ func TestCheckBinaryArch(t *testing.T) {
 	err = checkBinaryArch(machoLEPath, "rust")
 	if err == nil || !bytes.Contains([]byte(err.Error()), []byte("cross build")) {
 		t.Error("rust runtime error should contain cross build instructions")
+	}
+}
+
+// TestDeployHelpStatesTheArtifactLimit: the help must name the limit the
+// platform enforces (1 GiB since h-5ghe9; it used to promise 500 MB while the
+// server cut uploads at 100 MB, h-yqo6k).
+func TestDeployHelpStatesTheArtifactLimit(t *testing.T) {
+	long := NewCmd().Long
+	const want = "Max artifact size: 1 GB (compressed); larger uploads are refused"
+	if !strings.Contains(long, want) {
+		t.Errorf("deploy help does not contain %q", want)
+	}
+	for _, stale := range []string{"100 MB", "500 MB"} {
+		if strings.Contains(long, stale) {
+			t.Errorf("deploy help still mentions %q", stale)
+		}
 	}
 }

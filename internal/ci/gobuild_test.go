@@ -210,9 +210,9 @@ func TestGoWorkflow_BuildStepProducesTheDeployedBinary(t *testing.T) {
 					t.Errorf("workflow still builds with `go build ./...`:\n%s", wf.Content)
 				}
 
-				out, err := workflowtest.RunBuild(d, checkout, nil)
+				built, err := workflowtest.RunBuild(d, checkout, nil)
 				if err != nil {
-					t.Fatalf("build failed: %v\n%s", err, out)
+					t.Fatalf("build failed: %v\n%s", err, built.Output)
 				}
 				bin := filepath.Join(checkout, filepath.FromSlash(tc.wantFile))
 				f, err := elf.Open(bin)
@@ -285,12 +285,12 @@ func TestGoWorkflow_BuildStepTreatsParametersAsData(t *testing.T) {
 					}
 				}
 			}
-			out, err := workflowtest.RunBuild(d, checkout, nil)
+			res, err := workflowtest.RunBuild(d, checkout, nil)
 			if err != nil {
-				t.Fatalf("%v\n%s", err, out)
+				t.Fatalf("%v\n%s", err, res.Output)
 			}
-			if strings.Contains(out, "vigie-") || strings.Contains(out, "injected") {
-				t.Errorf("a parameter was executed by the shell:\n%s", out)
+			if strings.Contains(res.Output, "vigie-") || strings.Contains(res.Output, "injected") {
+				t.Errorf("a parameter was executed by the shell:\n%s", res.Output)
 			}
 			if _, err := os.Stat(filepath.Join(checkout, p.DeployTarget, "server")); err != nil {
 				t.Errorf("binary not built into the deploy-target: %v", err)

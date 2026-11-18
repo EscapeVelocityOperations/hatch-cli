@@ -1,8 +1,13 @@
 package deploy
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
+	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
@@ -245,5 +250,108 @@ func TestUI_Dim(t *testing.T) {
 	}
 	if !contains(result, "dim text") {
 		t.Errorf("expected dim text in result, got: %s", result)
+	}
+}
+
+// tarEntries lists the entry names of a tar.gz artifact.
+func tarEntries(t *testing.T, artifact []byte) map[string]bool {
+	t.Helper()
+	gz, err := gzip.NewReader(bytes.NewReader(artifact))
+	if err != nil {
+		t.Fatalf("gzip: %v", err)
+	}
+	tr := tar.NewReader(gz)
+	names := map[string]bool{}
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar: %v", err)
+		}
+		names[strings.TrimSuffix(h.Name, "/")] = true
+	}
+	return names
+}
+
+// h-vma4h: real .env files shipped in artifacts leaked through the registry.
+// A root .env and a sub-folder app/.env must both stay out.
+func TestCreateTarGz_ExcludesRootAndNestedEnvFiles(t *testing.T) {
+	tmp := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(tmp, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("server.js", "// server")
+	write(".env", "SECRET=root")
+	write(".env.production", "SECRET=prod")
+	write("app/.env", "SECRET=nested")
+	write("app/.env.local", "SECRET=nested-local")
+	write("app/deep/er/.env.staging", "SECRET=deeper")
+	write(".env.example", "SECRET=")
+	write("app/.env.sample", "SECRET=")
+	write("app/main.py", "print('hi')")
+
+	artifact, excluded, err := createTarGz(tmp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := tarEntries(t, artifact)
+	for _, secret := range []string{".env", ".env.production", "app/.env", "app/.env.local", "app/deep/er/.env.staging"} {
+		if got[secret] {
+			t.Errorf("%s must not be in the artifact", secret)
+		}
+	}
+	for _, kept := range []string{"server.js", "app/main.py", ".env.example", "app/.env.sample"} {
+		if !got[kept] {
+			t.Errorf("%s must be in the artifact", kept)
+		}
+	}
+	for _, secret := range []string{".env", ".env.production", "app/.env", "app/.env.local", "app/deep/er/.env.staging"} {
+		found := false
+		for _, e := range excluded {
+			if e == secret {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("excluded list %v must name %s", excluded, secret)
+		}
+	}
+}
+
+// A .hatchignore that re-includes an env file is refused outright: the
+// safety default cannot be negated, and silently ignoring the negation hides
+// the user's intent.
+func TestCreateTarGz_RefusesEnvNegationInHatchignore(t *testing.T) {
+	tmp := t.TempDir()
+	os.WriteFile(filepath.Join(tmp, "server.js"), []byte("// server"), 0o644)
+	os.WriteFile(filepath.Join(tmp, ".env"), []byte("SECRET=1"), 0o644)
+	os.WriteFile(filepath.Join(tmp, ".hatchignore"), []byte("node_modules/\n!.env\n"), 0o644)
+
+	artifact, _, err := createTarGz(tmp)
+	if err == nil {
+		t.Fatalf("expected error for .hatchignore negating .env, got artifact of %d bytes", len(artifact))
+	}
+	for _, want := range []string{"!.env", ".hatchignore", "hatch env set"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q must mention %q", err.Error(), want)
+		}
+	}
+}
+
+func TestEnvFilesExcluded_PicksOnlySensitiveEnvFiles(t *testing.T) {
+	got := envFilesExcluded([]string{"node_modules/", ".env", "app/.env.local", ".DS_Store", ".env.example"})
+	want := []string{".env", "app/.env.local"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("envFilesExcluded = %v, want %v", got, want)
 	}
 }

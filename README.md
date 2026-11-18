@@ -97,6 +97,12 @@ hatch deploy --name my-app
 | `--name` | `-n` | Custom app name (defaults to directory name) |
 | `--app` | | Slug of an existing egg to deploy to (overrides `.hatch.toml`) |
 
+**Static sites.** With `--runtime static`, an egg that already serves a Hatch site (a site publication in its deployment
+history) is not rebuilt: `hatch deploy` sends the list of files (after `.hatchignore`), uploads only the files the platform
+does not hold yet, and publishes the list as the next version, live at once. Changing 5% of the files uploads about 5% of
+the bytes. Other eggs, and platforms where sites are off, get the artifact deploy. Details:
+[docs/plans/h-bgdsq-6-static-site-deploy.md](docs/plans/h-bgdsq-6-static-site-deploy.md).
+
 #### `hatch ci`
 
 Generate a GitHub Actions or GitLab CI deploy workflow for review and commit (it never commits or pushes).
@@ -105,7 +111,7 @@ Generate a GitHub Actions or GitLab CI deploy workflow for review and commit (it
 hatch ci --app my-egg --deploy-target dist --start-command 'node server.js'
 ```
 
-`--app` defaults to the slug in `.hatch.toml`; `--deploy-target` is required, and `--start-command` too unless the runtime is `static`. The workflow installs a pinned CLI release (`--cli-version`, default: the running CLI's version) and checks its sha256 on the runner; actions and images are pinned to commit SHAs and digests. Parameters are written as YAML data and passed to `hatch deploy` as quoted arguments, never as shell code.
+`--app` defaults to the slug in `.hatch.toml`; `--deploy-target` is required, and `--start-command` too unless the runtime is `static`. The workflow installs a pinned CLI release (`--cli-version`, default: the running CLI's version) and checks its sha256 on the runner; actions and images are pinned to commit SHAs and digests. Parameters are written as YAML data and passed to `hatch deploy` as quoted arguments, never as shell code. For `python`, the build installs from `requirements.txt` (`pip install -r`), else from `pyproject.toml` (`pip install .`); a Python project with neither is refused before anything is written.
 
 For the `go` runtime the workflow builds the binary before it deploys: `go build ./...` only checks that the code compiles and writes no executable, so the workflow instead compiles **one main package** into `--deploy-target` as a static `linux/amd64` binary. The binary is named by `--start-command`, whose first word must be an explicit `./path` (`--start-command ./server` builds `<deploy-target>/server`; a wrapper such as `sh -c …` is refused because the binary can't be told from it). The package is `--go-package` (checked against the main packages found in the checkout), else the only main package, else the one whose directory is named like the binary; if that is still ambiguous, `hatch ci` stops and asks for `--go-package`.
 
@@ -117,9 +123,11 @@ To wire the `HATCH_TOKEN` secret, pipe a freshly minted token into the provider 
 
 ```sh
 hatch auth keys create | gh secret set HATCH_TOKEN                      # GitHub
-hatch auth keys create | glab variable set HATCH_TOKEN --masked         # GitLab
+hatch auth keys create | glab variable set HATCH_TOKEN --masked --protected # GitLab
 hatch auth keys create | hatch ci … --set-secret                        # let hatch run gh/glab for you
 ```
+
+On GitLab the variable must be **protected** as well as masked: masking only hides the value in job logs, while protection limits it to pipelines on protected branches and tags, so a contributor's job on an unprotected branch never receives the deploy token. Keep `main` (the generated job's `only: main` branch) protected under Settings > Repository > Protected branches, or the deploy job will have no token. `hatch ci … --set-secret` creates the variable with both flags.
 
 When stdout is not a terminal, `hatch auth keys create` writes the token alone to stdout and its messages to stderr (on a terminal it prints both, as before). `--set-secret` accepts only a `hatch_…` deploy token on stdin and refuses anything else.
 

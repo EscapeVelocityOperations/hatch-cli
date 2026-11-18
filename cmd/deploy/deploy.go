@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/api"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/auth"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/deploywait"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/sitedeploy"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -67,6 +69,10 @@ type APIClient interface {
 	CreatePreview(parentSlug string, prNumber int) (*api.Preview, error)
 	UploadArtifact(slug string, artifact []byte, runtime, startCommand string) error
 	GetApp(slug string) (*api.App, error)
+	// HasSite and the sitedeploy.Client methods serve eggs that publish a
+	// Hatch site (T-506): --runtime static sends changed files only.
+	HasSite(slug string) (bool, error)
+	sitedeploy.Client
 }
 
 // Deps holds injectable dependencies for testing.
@@ -99,6 +105,22 @@ func (r *realAPIClient) UploadArtifact(slug string, artifact []byte, runtime, st
 
 func (r *realAPIClient) GetApp(slug string) (*api.App, error) {
 	return r.client.GetApp(slug)
+}
+
+func (r *realAPIClient) HasSite(slug string) (bool, error) {
+	return r.client.HasSite(slug)
+}
+
+func (r *realAPIClient) IngestSiteManifest(slug string, files []api.SiteFile) (*api.SiteIngestResult, error) {
+	return r.client.IngestSiteManifest(slug, files)
+}
+
+func (r *realAPIClient) UploadSiteBlobs(slug string, gzippedTar io.Reader) (*api.SiteBlobsResult, error) {
+	return r.client.UploadSiteBlobs(slug, gzippedTar)
+}
+
+func (r *realAPIClient) PublishSite(slug string, files []api.SiteFile) (*api.SitePublishResult, error) {
+	return r.client.PublishSite(slug, files)
 }
 
 func defaultDeps() *Deps {
@@ -167,18 +189,28 @@ Non-interactive use (CI):
 Artifact filtering:
   Create a .hatchignore file in your deploy target to control which files
   are excluded from the artifact (gitignore-style syntax). Safety defaults
-  (.git, .env, .DS_Store) are always applied.
+  (.git, .env, .env.*, .DS_Store) are always applied.
 
   Generate a starter file:  hatch init-ignore [--runtime <rt>]
 
   For static/php runtimes deploying from a project root, a .hatchignore
   is required. Other runtimes will warn but proceed.
 
+Static sites (--runtime static):
+  An egg that already serves a Hatch site (its deployment history has a
+  site publication) is not rebuilt: hatch deploy sends the list of files
+  (path, sha256, size, after .hatchignore), uploads only the files the
+  platform does not hold yet, then publishes the list as the next version,
+  live at once. Changing 5% of the files uploads about 5% of the bytes.
+  Any other egg, or a platform where sites are off, gets the artifact
+  deploy described here. Refusals (413 for a site, a file or a quota over
+  the limit) are printed with their code and exit 1.
+
 Platform constraints:
   - Container runs linux/amd64
   - App must listen on PORT env var (always 8080)
   - App must bind to 0.0.0.0 (not 127.0.0.1 or localhost)
-  - Max artifact size: 100 MB (compressed); larger uploads are refused
+  - Max artifact size: 1 GB (compressed); larger uploads are refused
 
 Waiting and exit status:
   After the upload, hatch deploy waits until the egg is running (or
@@ -202,6 +234,9 @@ JSON output (--json):
     {"slug":"...","url":"...","status":"running","waited":true}
   Optional keys: "status_reason" and "error" (on failure); previews add
   "pr_number". With --no-wait, status is "deploying" and waited is false.
+  A site publication prints status "live", waited false, "kind":"site",
+  "site_version", "deployment_id", "files", "uploaded_files",
+  "uploaded_bytes" and "sent_bytes".
   A failure before the rollout wait (exit 1) prints
     {"status":"error","waited":false,"error":"...","slug":"..."}
   where "slug" is present once the egg is known.

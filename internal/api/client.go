@@ -31,8 +31,18 @@ const (
 	DefaultHost           = "https://api.gethatch.eu"
 	apiPath               = "/v1"
 	defaultTimeout        = 30 * time.Second
-	artifactUploadTimeout = 10 * time.Minute
+	artifactUploadTimeout = 10 * time.Minute // page publications (pages.go)
 )
+
+// artifactDeployTimeout is the whole budget of one `hatch deploy` artifact
+// request. hatch hands the artifact over and only answers once the image is
+// built and pushed, which for a gigabyte takes far longer than the 10 minutes
+// a page upload gets (h-5ghe9). A variable so tests can shorten it.
+var artifactDeployTimeout = 30 * time.Minute
+
+// artifactRetryDelay is the first backoff between artifact upload attempts;
+// it doubles per attempt. A variable so tests do not wait seconds.
+var artifactRetryDelay = 2 * time.Second
 
 var slugRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
@@ -710,42 +720,64 @@ func (c *Client) GetCronRunLogs(slug, cronID, runID string) (string, error) {
 	return string(data), nil
 }
 
-// MaxArtifactBytes is the largest artifact hatch accepts (100 MB, 2^20-byte
+// MaxArtifactBytes is the largest artifact hatch accepts (1 GiB, 2^20-byte
 // MB). hatch-api and hatch-control refuse anything bigger with 413; the CLI
 // checks it before uploading so a too-big artifact never leaves the machine
 // (h-yqo6k: the help used to promise 500 MB while the server cut uploads at
-// 100 MB and the build then failed on a truncated tarball).
-const MaxArtifactBytes = 100 * 1024 * 1024
+// 100 MB and the build then failed on a truncated tarball; h-5ghe9 raised
+// it to 1 GiB in all three components at once).
+const MaxArtifactBytes = 1 << 30
 
 // CheckArtifactSize refuses an artifact of n bytes over MaxArtifactBytes,
 // with the same wording as the server's 413.
-func CheckArtifactSize(n int) error {
+func CheckArtifactSize(n int64) error {
 	if n <= MaxArtifactBytes {
 		return nil
 	}
 	return fmt.Errorf("artifact is %s, maximum is %s: exclude build caches, sources or media with a .hatchignore file",
-		FormatArtifactMB(int64(n)), FormatArtifactMB(MaxArtifactBytes))
+		FormatArtifactSize(n), FormatArtifactSize(MaxArtifactBytes))
 }
 
-// FormatArtifactMB renders n bytes in MB with at most one decimal, rounded up
-// so that a size just over the limit never prints as the limit.
-func FormatArtifactMB(n int64) string {
-	const mb = 1024 * 1024
-	tenths := (n*10 + mb - 1) / mb
-	if tenths%10 == 0 {
-		return fmt.Sprintf("%d MB", tenths/10)
+// FormatArtifactSize renders n bytes in MB (2^20 bytes) below 1024 MB and in
+// GB (2^30 bytes) from there, with at most one decimal, rounded up so that a
+// size just over a limit never prints as the limit.
+func FormatArtifactSize(n int64) string {
+	const mb, gb = int64(1) << 20, int64(1) << 30
+	if n < gb {
+		return formatArtifactUnit(n, mb, "MB")
 	}
-	return fmt.Sprintf("%d.%d MB", tenths/10, tenths%10)
+	return formatArtifactUnit(n, gb, "GB")
+}
+
+func formatArtifactUnit(n, unit int64, name string) string {
+	// n/unit*10 + the rounded-up fraction, without overflowing n*10 for
+	// sizes near MaxInt64.
+	tenths := n/unit*10 + ((n%unit)*10+unit-1)/unit
+	if tenths%10 == 0 {
+		return fmt.Sprintf("%d %s", tenths/10, name)
+	}
+	return fmt.Sprintf("%d.%d %s", tenths/10, tenths%10, name)
 }
 
 // UploadArtifact uploads a pre-built tar.gz artifact for deployment.
+//
+// An artifact that is an io.ReadSeeker (the callers pass a *bytes.Reader) is
+// sent as it is, from its current position to its end, and rewound for every
+// retry: it is never copied, which at the 1 GiB limit would double the memory
+// the caller's own tarball already takes. Any other reader is read into memory
+// first. The request carries its Content-Length either way.
+//
+// A transient failure (connection refused, 5xx) is retried; a 4xx and a 507
+// (the build host is out of disk) are not. A client-side timeout is not
+// retried either: hatch builds the image before it answers, so by then the
+// server may well still be at it, and a second upload would start a second
+// build of a gigabyte.
 func (c *Client) UploadArtifact(slug string, artifact io.Reader, runtime, startCommand string) error {
 	if err := validateSlug(slug); err != nil {
 		return err
 	}
 
-	// Buffer the artifact bytes so we can retry on transient failures.
-	data, err := io.ReadAll(artifact)
+	body, start, size, err := artifactBody(artifact)
 	if err != nil {
 		return fmt.Errorf("reading artifact: %w", err)
 	}
@@ -759,20 +791,31 @@ func (c *Client) UploadArtifact(slug string, artifact io.Reader, runtime, startC
 	}
 
 	uploadClient := *c.httpClient
-	uploadClient.Timeout = artifactUploadTimeout
+	uploadClient.Timeout = artifactDeployTimeout
 
 	uploadURL := c.host + apiPath + "/apps/" + slug + "/artifact"
 	const maxRetries = 3
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
-			backoff := time.Duration(1<<uint(attempt-1)) * 2 * time.Second // 2s, 4s
+			backoff := time.Duration(1<<uint(attempt-1)) * artifactRetryDelay // 2s, 4s
 			time.Sleep(backoff)
 		}
 
-		req, err := http.NewRequest("POST", uploadURL, bytes.NewReader(data))
+		// Every attempt re-sends the whole artifact from its start.
+		if _, err := body.Seek(start, io.SeekStart); err != nil {
+			return fmt.Errorf("rewinding artifact for upload: %w", err)
+		}
+		req, err := http.NewRequest("POST", uploadURL, io.LimitReader(body, size))
 		if err != nil {
 			return err
+		}
+		req.ContentLength = size
+		req.GetBody = func() (io.ReadCloser, error) {
+			if _, err := body.Seek(start, io.SeekStart); err != nil {
+				return nil, err
+			}
+			return io.NopCloser(io.LimitReader(body, size)), nil
 		}
 		req.Header.Set("Authorization", "Bearer "+c.token)
 		req.Header.Set("Content-Type", "application/gzip")
@@ -780,31 +823,64 @@ func (c *Client) UploadArtifact(slug string, artifact io.Reader, runtime, startC
 
 		resp, err := uploadClient.Do(req)
 		if err != nil {
-			lastErr = err
-			if isTimeoutError(err) {
-				lastErr = fmt.Errorf("upload timed out after %s (attempt %d/%d): %w", artifactUploadTimeout, attempt+1, maxRetries, err)
+			if isTimeoutError(err) && !isDialError(err) {
+				return fmt.Errorf("upload timed out after %s: %w (the server may still be building your artifact: check 'hatch info %s' before uploading again)",
+					artifactDeployTimeout, err, slug)
 			}
+			lastErr = err
 			continue
 		}
 
-		if resp.StatusCode >= 500 {
-			body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusInsufficientStorage {
+			msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 			resp.Body.Close()
-			lastErr = fmt.Errorf("upload failed (%d): %s", resp.StatusCode, RedactToken(strings.TrimSpace(string(body))))
+			// The build host is out of disk: another attempt, 1 GiB later, cannot help.
+			return fmt.Errorf("upload failed (%d): %s", resp.StatusCode, RedactToken(strings.TrimSpace(string(msg))))
+		}
+
+		if resp.StatusCode >= 500 {
+			msg, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			lastErr = fmt.Errorf("upload failed (%d): %s", resp.StatusCode, RedactToken(strings.TrimSpace(string(msg))))
 			continue
 		}
 
 		if resp.StatusCode >= 400 {
-			body, _ := io.ReadAll(resp.Body)
+			msg, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			// 4xx errors are not retryable (bad request, auth failure, etc.)
-			return fmt.Errorf("upload failed (%d): %s", resp.StatusCode, RedactToken(strings.TrimSpace(string(body))))
+			return fmt.Errorf("upload failed (%d): %s", resp.StatusCode, RedactToken(strings.TrimSpace(string(msg))))
 		}
 
 		resp.Body.Close()
 		return nil
 	}
 	return lastErr
+}
+
+// artifactBody returns the artifact as something that can be rewound: the
+// reader itself when it is an io.ReadSeeker, otherwise its bytes in memory.
+// start is where its data begins and size how many bytes it holds from there.
+func artifactBody(artifact io.Reader) (body io.ReadSeeker, start, size int64, err error) {
+	if rs, ok := artifact.(io.ReadSeeker); ok {
+		start, err = rs.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		end, err := rs.Seek(0, io.SeekEnd)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		if _, err := rs.Seek(start, io.SeekStart); err != nil {
+			return nil, 0, 0, err
+		}
+		return rs, start, end - start, nil
+	}
+	data, err := io.ReadAll(artifact)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	return bytes.NewReader(data), 0, int64(len(data)), nil
 }
 
 func isTimeoutError(err error) bool {

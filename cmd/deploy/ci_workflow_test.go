@@ -167,8 +167,8 @@ func TestGeneratedGoWorkflow_BuildsTheBinaryTheUploadCarries(t *testing.T) {
 				t.Fatal("fixture already has a dist directory")
 			}
 
-			if out, err := workflowtest.RunBuild(d, checkout, nil); err != nil {
-				t.Fatalf("build step: %v\n%s", err, out)
+			if res, err := workflowtest.RunBuild(d, checkout, nil); err != nil {
+				t.Fatalf("build step: %v\n%s", err, res.Output)
 			}
 			res, err := workflowtest.Run(d, checkout, workflowtest.FakeHatch, nil)
 			if err != nil || res.Err != nil {

@@ -60,6 +60,25 @@ func DetectRuntime(dir string) string {
 	return "static"
 }
 
+// Python dependency manifests the generated workflow knows how to install from.
+const (
+	PythonRequirements = "requirements.txt"
+	PythonPyproject    = "pyproject.toml"
+)
+
+// DetectPythonManifest returns the Python dependency manifest the CI build must
+// install from: requirements.txt when present (it wins when both exist, as in
+// runtime detection), else pyproject.toml, else "" (h-8tvak.5). DetectRuntime
+// accepts either file alone, so the workflow cannot assume requirements.txt.
+func DetectPythonManifest(dir string) string {
+	for _, m := range []string{PythonRequirements, PythonPyproject} {
+		if fileExists(filepath.Join(dir, m)) {
+			return m
+		}
+	}
+	return ""
+}
+
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()

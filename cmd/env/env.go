@@ -16,6 +16,7 @@ import (
 // Deps holds injectable dependencies for testing.
 type Deps struct {
 	GetToken    func() (string, error)
+	ListApps    func(token string) ([]api.App, error)
 	GetEnvVars  func(token, slug string) ([]api.EnvVar, error)
 	SetEnvVar   func(token, slug, key, value string) error
 	UnsetEnvVar func(token, slug, key string) error
@@ -24,6 +25,9 @@ type Deps struct {
 func defaultDeps() *Deps {
 	return &Deps{
 		GetToken: auth.GetToken,
+		ListApps: func(token string) ([]api.App, error) {
+			return api.NewClient(token).ListApps()
+		},
 		GetEnvVars: func(token, slug string) ([]api.EnvVar, error) {
 			return api.NewClient(token).GetEnvVars(slug)
 		},
@@ -241,17 +245,11 @@ func runUnset(cmd *cobra.Command, args []string) error {
 
 func resolveSlug() (string, error) {
 	if appSlug != "" {
-		// Try to resolve as app name by listing apps
 		token, err := deps.GetToken()
-		if err == nil && token != "" {
-			client := api.NewClient(token)
-			apps, err := client.ListApps()
+		if err == nil && token != "" && deps.ListApps != nil {
+			apps, err := deps.ListApps(token)
 			if err == nil {
-				for _, app := range apps {
-					if app.Name == appSlug || app.Slug == appSlug {
-						return app.Slug, nil
-					}
-				}
+				return resolve.AppSlug(appSlug, apps)
 			}
 		}
 		return appSlug, nil

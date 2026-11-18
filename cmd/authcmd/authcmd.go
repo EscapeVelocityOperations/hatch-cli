@@ -138,7 +138,7 @@ func newKeysCreateCmd() *cobra.Command {
 			"When stdout is not a terminal (a pipe or a redirect) only the token is written to stdout " +
 			"and the messages go to stderr, so it can be piped straight into the provider CLI:\n" +
 			"  hatch auth keys create | gh secret set HATCH_TOKEN\n" +
-			"  hatch auth keys create | glab variable set HATCH_TOKEN --masked",
+			"  hatch auth keys create | glab variable set HATCH_TOKEN --masked --protected",
 		RunE: runKeysCreate,
 	}
 	c.Flags().String("name", "", "Name for the key (default: ci-<owner>-<repo> from the git remote)")

@@ -103,7 +103,9 @@ func NewCmd() *cobra.Command {
 			"commits, pushes, or writes secret values. Use --print to preview without writing.\n\n" +
 			"The workflow deploys to --app (default: the slug in .hatch.toml) and needs --deploy-target " +
 			"and, except for static sites, --start-command. It installs a pinned Hatch CLI release " +
-			"(--cli-version, default: this CLI's version) whose sha256 is checked on the runner, and " +
+			"(--cli-version, default: this CLI's version) whose sha256 is checked on the runner. " +
+			"Python builds install from requirements.txt, else from pyproject.toml (pip install .); " +
+			"a python project with neither is refused. The workflow " +
 			"sets HATCH_ACCEPT_TERMS=yes: committing it records your acceptance of https://gethatch.eu/terms " +
 			"for that pipeline.\n\n" +
 			"For the go runtime the workflow builds one main package into --deploy-target as a static " +
@@ -177,6 +179,11 @@ func runCI(cmd *cobra.Command, opts ciOptions) error {
 		DeployTarget: opts.deployTarget,
 		StartCommand: opts.startCommand,
 		GoPackage:    opts.goPackage,
+	}
+	// A python build installs from whichever manifest the project has; with no
+	// readable project directory there is none, and validation refuses (h-8tvak.5).
+	if runtime == "python" && wdErr == nil {
+		params.PythonManifest = detect.DetectPythonManifest(wd)
 	}
 	// Refuse an unusable or unsafe workflow before any network call or write.
 	if err := params.ValidateInputs(); err != nil {
@@ -260,15 +267,15 @@ func resolveGoPackage(wd string, wdErr error, params detect.WorkflowParams) (str
 // failure falls back to manual instructions.
 func wireSecret(cmd *cobra.Command, opts ciOptions, provider string) error {
 	out := cmd.OutOrStdout()
-	ownerRepo := ""
+	repo := ""
 	if remote, err := deps.GitRemote(); err == nil {
-		ownerRepo = detect.OwnerRepoFromRemote(remote)
+		repo = detect.RepoRefFromRemote(provider, remote)
 	}
-	bin, args, ok := detect.SecretCommand(provider, ownerRepo)
+	bin, args, ok := detect.SecretCommand(provider, repo)
 	if !ok {
 		return nil
 	}
-	manual := detect.SecretCommandString(provider, ownerRepo)
+	manual := detect.SecretCommandString(provider, repo)
 
 	// The provider CLI reads the token from a non-terminal stdin, and `hatch auth
 	// keys create` writes the token alone on stdout when piped, so the pipe is the
@@ -279,6 +286,7 @@ func wireSecret(cmd *cobra.Command, opts ciOptions, provider string) error {
 		fmt.Fprintln(out, "\nWire the HATCH_TOKEN secret in your CI — pipe a freshly minted token (shown once) into the provider CLI, which reads it from stdin:")
 		fmt.Fprintf(out, "  %s\n", piped)
 		fmt.Fprintln(out, "  (or re-run this command with --set-secret and the token piped into it: hatch auth keys create | hatch ci … --set-secret)")
+		printProtectedBranchNote(out, provider)
 		return nil
 	}
 
@@ -298,7 +306,22 @@ func wireSecret(cmd *cobra.Command, opts ciOptions, provider string) error {
 		return nil
 	}
 	fmt.Fprintf(out, "\nSet the HATCH_TOKEN secret via %s.\n", bin)
+	printProtectedBranchNote(out, provider)
 	return nil
+}
+
+// printProtectedBranchNote explains the GitLab variable's protection. The
+// variable is created protected, so GitLab only exposes it to pipelines on
+// protected branches and tags: the deploy branch (main, per the generated
+// `only: main`) must be a protected branch or the deploy job gets no token.
+// GitHub secrets have no such flag, so nothing is printed for it.
+func printProtectedBranchNote(out io.Writer, provider string) {
+	if provider != "gitlab" {
+		return
+	}
+	fmt.Fprintln(out, "\nThe variable is masked and protected: GitLab only gives it to pipelines on protected branches and tags,")
+	fmt.Fprintln(out, "so a branch pushed by another contributor cannot read the deploy token. Make sure `main` (the deploy")
+	fmt.Fprintln(out, "branch) is a protected branch: Settings > Repository > Protected branches.")
 }
 
 // readTokenFromStdin reads the token from os.Stdin: a masked prompt on a

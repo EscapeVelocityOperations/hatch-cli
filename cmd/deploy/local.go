@@ -20,6 +20,7 @@ import (
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/deploywait"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/exitcode"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ignore"
+	"github.com/EscapeVelocityOperations/hatch-cli/internal/sitedeploy"
 	"github.com/EscapeVelocityOperations/hatch-cli/internal/ui"
 	"golang.org/x/term"
 )
@@ -167,23 +168,50 @@ func deployArtifact(cfg ArtifactDeployConfig) (map[string]any, error) {
 		}
 	}
 
-	// Create tar.gz from directory
-	ui.Info("Creating artifact from " + cfg.DeployTarget)
-	artifact, excluded, err := createTarGz(cfg.DeployTarget)
-	if err != nil {
-		return nil, fmt.Errorf("creating artifact: %w", err)
-	}
-	if len(excluded) > 0 {
-		ui.Println(ui.Dim("  Excluded: " + strings.Join(excluded, ", ")))
-	}
-	ui.Info(fmt.Sprintf("Artifact size: %.2f MB", float64(len(artifact))/1024/1024))
-
 	client := deps.NewAPIClient(cfg.Token)
+	static := cfg.Runtime == "static"
+
+	// A static deploy to an egg that serves a Hatch site sends the changed
+	// files only (T-506). This is decided before any artifact is built: a
+	// site may be larger than an artifact can be.
+	if static && previewPR == 0 {
+		if slug := knownSlug(cfg.AppSlug); slug != "" {
+			if fields, done, err := deploySiteIfMigrated(client, cfg, slug); done {
+				return fields, err
+			}
+		}
+	}
+
+	// A static preview may be a site too: its artifact is built once the
+	// preview's kind is known (runPreviewDeploy). The deploy target is
+	// listed first, though: a target that cannot be deployed (.hatchignore
+	// unreadable or re-including env files, unreadable file) fails here, before
+	// the preview egg exists, as it did when the artifact was built first.
+	// What only a site refuses (empty list, names equal once normalized) is
+	// left to deploySite, for a preview that turns out to be a site: an
+	// artifact deploys such a target.
+	var artifact []byte
+	var manifest *sitedeploy.Manifest
+	if static && previewPR > 0 {
+		manifest, err = sitedeploy.Build(cfg.DeployTarget)
+		if err != nil {
+			if !sitedeploy.IsSiteOnly(err) {
+				return nil, fmt.Errorf("checking the deploy target: %w", err)
+			}
+			manifest = nil
+		}
+	}
+	if !static || previewPR == 0 {
+		artifact, err = buildArtifact(cfg.DeployTarget)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// Preview deploy (h-qtie8): resolve the PARENT egg, create/refresh the
 	// preview for the PR, and upload the artifact to the PREVIEW slug.
 	if previewPR > 0 {
-		return runPreviewDeploy(client, cfg, artifact, previewPR)
+		return runPreviewDeploy(client, cfg, artifact, manifest, previewPR)
 	}
 
 	// Resolve app
@@ -234,6 +262,124 @@ func deployArtifact(cfg ArtifactDeployConfig) (map[string]any, error) {
 	}
 
 	return fields, nil
+}
+
+// buildArtifact packs the deploy target into the tar.gz an artifact deploy
+// uploads, reporting what was left out.
+func buildArtifact(dir string) ([]byte, error) {
+	ui.Info("Creating artifact from " + dir)
+	artifact, excluded, err := createTarGz(dir)
+	if err != nil {
+		return nil, fmt.Errorf("creating artifact: %w", err)
+	}
+	if len(excluded) > 0 {
+		ui.Println(ui.Dim("  Excluded: " + strings.Join(excluded, ", ")))
+	}
+	if envFiles := envFilesExcluded(excluded); len(envFiles) > 0 {
+		ui.Warn("Env files are never sent in an artifact and were left out: " + strings.Join(envFiles, ", "))
+		ui.Info("Set the variables on the egg instead: hatch env set KEY=VALUE")
+	}
+	ui.Info(fmt.Sprintf("Artifact size: %.2f MB", float64(len(artifact))/1024/1024))
+	return artifact, nil
+}
+
+// knownSlug is the egg a deploy targets without creating one: --app, else
+// ./.hatch.toml. "" means a new egg (never a site yet) or an unreadable
+// .hatch.toml, which resolveApp reports.
+func knownSlug(appSlug string) string {
+	if appSlug != "" {
+		return appSlug
+	}
+	hc, err := readHatchConfig(".")
+	if err != nil || hc == nil {
+		return ""
+	}
+	return hc.Slug
+}
+
+// deploySiteIfMigrated publishes the deploy target as a site when the egg
+// already serves one. The signal is the egg's deployment history: hatch-api
+// records every site publication there as a "kind":"site" row (T-505), and an
+// API without sites has none. done is false when the egg is not a site, or
+// when the platform has sites switched off (404 sites_disabled): the caller
+// then deploys an artifact, unchanged.
+func deploySiteIfMigrated(client APIClient, cfg ArtifactDeployConfig, slug string) (map[string]any, bool, error) {
+	isSite, err := client.HasSite(slug)
+	if err != nil {
+		err = fmt.Errorf("checking whether egg %s serves a Hatch site: %w", slug, err)
+		return jsonError(slug, err), true, err
+	}
+	if !isSite {
+		return nil, false, nil
+	}
+	ui.Info(fmt.Sprintf("Deploying to existing egg: %s (Hatch site: changed files only)", slug))
+	fields, done, err := deploySite(client, cfg, slug, "", nil)
+	if done && err == nil && cfg.Domain != "" {
+		configureDomain(api.NewClient(cfg.Token), slug, cfg.Domain)
+	}
+	return fields, done, err
+}
+
+// deploySite runs the site contract on slug (sitedeploy.Publish). m is the
+// file list of the deploy target when the caller already built it (nil: built
+// here). done is false only when the platform has sites switched off.
+func deploySite(client APIClient, cfg ArtifactDeployConfig, slug, url string, m *sitedeploy.Manifest) (map[string]any, bool, error) {
+	if m == nil {
+		var err error
+		m, err = sitedeploy.Build(cfg.DeployTarget)
+		if err != nil {
+			err = fmt.Errorf("listing site files: %w", err)
+			return jsonError(slug, err), true, err
+		}
+	}
+	if len(m.Excluded) > 0 {
+		ui.Println(ui.Dim("  Excluded: " + strings.Join(m.Excluded, ", ")))
+	}
+	if envFiles := envFilesExcluded(m.Excluded); len(envFiles) > 0 {
+		ui.Warn("Env files are never deployed and were left out: " + strings.Join(envFiles, ", "))
+		ui.Info("Set the variables on the egg instead: hatch env set KEY=VALUE")
+	}
+	if len(m.Skipped) > 0 {
+		ui.Warn("Not published (symlinks leaving the deploy target, pointing at a directory or at a file left out, special files): " + strings.Join(m.Skipped, ", "))
+	}
+
+	sp := ui.NewSpinner("Publishing site...")
+	sp.Start()
+	res, err := sitedeploy.Publish(client, slug, m, func(line string) {
+		sp.Update("Publishing site: " + line + "...")
+	})
+	sp.Stop()
+	if errors.Is(err, sitedeploy.ErrSitesDisabled) {
+		ui.Info("Hatch sites are not enabled on this platform: deploying an artifact")
+		return nil, false, nil
+	}
+	if err != nil {
+		return jsonError(slug, err), true, err
+	}
+
+	if res.Publish.URL != "" {
+		url = res.Publish.URL
+	}
+	if url == "" {
+		url = fmt.Sprintf("https://%s.nest.gethatch.eu", slug)
+	}
+	url = strings.TrimSuffix(url, "/")
+	ui.Success(fmt.Sprintf("Site version %d is live: %d of %d files uploaded (%s sent)",
+		res.Publish.Version, res.UploadedFiles, len(m.Files), sitedeploy.FormatBytes(res.SentBytes)))
+	ui.Info(fmt.Sprintf("Egg URL: %s", url))
+	return map[string]any{
+		"slug":           slug,
+		"url":            url,
+		"status":         "live",
+		"waited":         false,
+		"kind":           "site",
+		"site_version":   res.Publish.Version,
+		"deployment_id":  res.Publish.DeploymentID,
+		"files":          len(m.Files),
+		"uploaded_files": res.UploadedFiles,
+		"uploaded_bytes": res.UploadedBytes,
+		"sent_bytes":     res.SentBytes,
+	}, true, nil
 }
 
 // deployResult is the outcome of the post-upload wait.
@@ -325,8 +471,10 @@ func parsePreviewRef(ref string) (int, error) {
 
 // runPreviewDeploy creates/refreshes the preview egg for (parent, PR) and
 // uploads the artifact to the preview slug. The parent comes from
-// --app/.hatch.toml — a preview never creates its parent.
-func runPreviewDeploy(client APIClient, cfg ArtifactDeployConfig, artifact []byte, pr int) (map[string]any, error) {
+// --app/.hatch.toml — a preview never creates its parent. A static preview
+// comes with manifest, the file list of the deploy target (already checked):
+// it is published as is when the preview is a site, else the artifact is built.
+func runPreviewDeploy(client APIClient, cfg ArtifactDeployConfig, artifact []byte, manifest *sitedeploy.Manifest, pr int) (map[string]any, error) {
 	parentSlug := cfg.AppSlug
 	if parentSlug == "" {
 		hatchConfig, err := readHatchConfig(".")
@@ -343,6 +491,25 @@ func runPreviewDeploy(client APIClient, cfg ArtifactDeployConfig, artifact []byt
 	preview, err := client.CreatePreview(parentSlug, pr)
 	if err != nil {
 		return nil, fmt.Errorf("creating preview: %w", err)
+	}
+
+	if cfg.Runtime == "static" {
+		// The preview of an egg that serves a Hatch site publishes a site
+		// (hatch-api T-505: the preview answer carries kind).
+		if preview.Kind == "site" {
+			if fields, done, err := deploySite(client, cfg, preview.Slug, preview.URL, manifest); done {
+				if fields != nil {
+					fields["pr_number"] = preview.PRNumber
+				}
+				return fields, err
+			}
+		}
+		artifact, err = buildArtifact(cfg.DeployTarget)
+		if err != nil {
+			fields := jsonError(preview.Slug, err)
+			fields["pr_number"] = preview.PRNumber
+			return fields, err
+		}
 	}
 
 	sp := ui.NewSpinner("Uploading artifact to preview...")
@@ -475,6 +642,21 @@ func checkSourceDirectory(dir, rt string) error {
 	return nil
 }
 
+// envFilesExcluded picks the sensitive env files (.env, .env.*, at any depth)
+// out of the excluded list returned by createTarGz.
+func envFilesExcluded(excluded []string) []string {
+	var out []string
+	for _, e := range excluded {
+		if strings.HasSuffix(e, "/") {
+			continue
+		}
+		if ignore.IsSensitiveEnvName(filepath.Base(e)) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // createTarGz creates a tar.gz archive of the given directory.
 // Uses .hatchignore patterns if present, otherwise applies built-in defaults.
 // Returns the archive bytes and a list of excluded file/folder names.
@@ -496,6 +678,16 @@ func createTarGz(dir string) ([]byte, []string, error) {
 		} else {
 			return nil, nil, fmt.Errorf("reading .hatchignore: %w", err)
 		}
+	}
+
+	// Env files never ship (h-vma4h). A negation would be silently overridden,
+	// so say so and stop instead of letting the user believe the file is sent.
+	if negations := matcher.EnvNegations(); len(negations) > 0 {
+		return nil, nil, fmt.Errorf(".hatchignore re-includes env files (%s), but env files are never sent in an artifact: "+
+			"they hold secrets and artifacts end up in the image registry.\n\n"+
+			"Remove those lines from .hatchignore. Set the variables on the egg instead: hatch env set KEY=VALUE\n"+
+			"Keep a template as .env.example or .env.sample, which are sent.",
+			strings.Join(negations, ", "))
 	}
 
 	var excluded []string
@@ -594,7 +786,7 @@ func createTarGz(dir string) ([]byte, []string, error) {
 		return nil, nil, err
 	}
 
-	if err := api.CheckArtifactSize(buf.Len()); err != nil {
+	if err := api.CheckArtifactSize(int64(buf.Len())); err != nil {
 		return nil, nil, err
 	}
 
